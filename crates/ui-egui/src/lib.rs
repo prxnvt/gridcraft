@@ -203,6 +203,13 @@ pub struct SheetApp {
     /// Set once the user has answered the unsaved-changes prompt (or automation quits): the next
     /// close request goes through.
     pub quit_confirmed: bool,
+    /// The host shows several windows in one process (desktop): `new_window` and Cmd+Q become
+    /// requests to the host instead of acting on this window alone.
+    pub multi_window: bool,
+    /// A new window is wanted (taken by the host when `multi_window`).
+    pub new_window_request: bool,
+    /// Cmd+Q: quit the whole app, asking about each window's unsaved changes (taken by the host).
+    pub quit_all_request: bool,
 }
 
 /// A pending "replace it?" question from a command (see [`confirm_text`]).
@@ -276,6 +283,9 @@ impl SheetApp {
             journal_seen,
             py_window: None,
             quit_confirmed: false,
+            multi_window: false,
+            new_window_request: false,
+            quit_all_request: false,
         }
     }
 
@@ -290,17 +300,29 @@ impl SheetApp {
         theme::apply(ctx, dark);
     }
 
-    /// Open another GridCraft window. Desktop builds start a new process; on the web the current
-    /// window just makes a new workbook.
+    /// Open another GridCraft window with a new workbook (the host opens it). With no workbook
+    /// open here, or without a multi-window host (web), the new workbook opens in this window.
     pub fn new_window(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.session.active().is_some()
-            && let Ok(exe) = std::env::current_exe()
-            && std::process::Command::new(exe).spawn().is_ok()
-        {
+        if self.multi_window && self.session.active().is_some() {
+            self.new_window_request = true;
             return;
         }
         self.run_or_alert("file.new", json!({}));
+    }
+
+    /// Unsaved changes a close would lose (and the user has not yet said to discard them).
+    pub fn has_unsaved(&self) -> bool {
+        !self.quit_confirmed && self.session.documents().iter().any(|d| d.is_dirty())
+    }
+
+    /// Show the Save / Don't Save / Cancel prompt for closing this window.
+    pub fn ask_before_closing(&mut self) {
+        self.open_dialog("quit", json!({}));
+    }
+
+    /// The Save / Don't Save / Cancel prompt is showing.
+    pub fn asking_before_closing(&self) -> bool {
+        self.dialog.as_ref().is_some_and(|d| d.name == "quit")
     }
 
     /// Saves every workbook with unsaved changes (asking for a file name where there is none).
@@ -883,7 +905,11 @@ impl SheetApp {
             }
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if self.multi_window {
+                self.quit_all_request = true;
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self

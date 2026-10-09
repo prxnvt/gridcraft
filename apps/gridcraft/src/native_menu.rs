@@ -249,69 +249,79 @@ impl NativeMenu {
         NativeMenu { _menu: menu, events: rx, theme_items }
     }
 
-    pub fn poll(&self, app: &mut SheetApp, ctx: &egui::Context) {
+    /// Menu items chosen since the last call (item ids). The host runs them in the front window
+    /// with [`run_item`], except Quit (`ui.quit`), which it handles across all windows.
+    pub fn take_events(&self) -> Vec<String> {
+        let mut ids = Vec::new();
         while let Ok(ev) = self.events.try_recv() {
-            let id = ev.id.as_ref().to_string();
-            // Text selection belongs to the inline editor, not the worksheet clipboard/undo.
-            if app.text_box_editor.is_some() {
-                let clipboard = match id.as_str() {
-                    "edit.copy" => Some(egui::ViewportCommand::RequestCopy),
-                    "edit.cut" => Some(egui::ViewportCommand::RequestCut),
-                    "edit.paste" => Some(egui::ViewportCommand::RequestPaste),
-                    _ => None,
-                };
-                if let Some(command) = clipboard {
-                    ctx.send_viewport_cmd(command);
-                    continue;
-                }
-                if id == "edit.undo" || id == "edit.redo" {
-                    ctx.input_mut(|i| {
-                        i.events.push(egui::Event::Key {
-                            key: egui::Key::Z,
-                            physical_key: None,
-                            pressed: true,
-                            repeat: false,
-                            modifiers: egui::Modifiers { command: true, mac_cmd: true, shift: id == "edit.redo", ..Default::default() },
-                        });
-                    });
-                    continue;
-                }
-            }
-            if select_theme(app, &id) {
-                continue;
-            }
-            if let Some(url) = id.strip_prefix("url:") {
-                if let Some(open) = &app.services.open_url {
-                    open(url);
-                }
-            } else if let Some(rest) = id.strip_prefix("dialog:") {
-                let (name, arg) = rest.split_once(':').unwrap_or((rest, ""));
-                let params: Value = match (name, arg) {
-                    ("saveCopy", fmt) => json!({"format": fmt}),
-                    ("find", "replace") => json!({"replace": true}),
-                    ("note", _) => json!({"threaded": false}),
-                    ("comment", _) => json!({"threaded": true}),
-                    ("about", tab) => json!({"tab": tab}),
-                    _ => json!({}),
-                };
-                let name = if name == "note" { "comment" } else { name };
-                app.open_dialog(name, params);
-            } else if id == "ui.quit" {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            } else if id == "file.new" {
-                app.new_window();
-            } else if id == "edit.copy" || id == "edit.cut" {
-                app.copy_to_clipboard(ctx, &id);
-            } else {
-                app.run_or_alert(&id, json!({}));
-            }
+            ids.push(ev.id.as_ref().to_string());
         }
+        ids
+    }
+
+    /// Tick the Display Theme item that matches the front window's preference.
+    pub fn sync(&self, app: &SheetApp) {
         for (mode, item) in &self.theme_items {
             let checked = app.ui.theme_mode() == *mode;
             if item.is_checked() != checked {
                 item.set_checked(checked);
             }
         }
+    }
+}
+
+/// Run a menu item in one window's app.
+pub fn run_item(app: &mut SheetApp, ctx: &egui::Context, id: &str) {
+    // Text selection belongs to the inline editor, not the worksheet clipboard/undo.
+    if app.text_box_editor.is_some() {
+        let clipboard = match id {
+            "edit.copy" => Some(egui::ViewportCommand::RequestCopy),
+            "edit.cut" => Some(egui::ViewportCommand::RequestCut),
+            "edit.paste" => Some(egui::ViewportCommand::RequestPaste),
+            _ => None,
+        };
+        if let Some(command) = clipboard {
+            ctx.send_viewport_cmd(command);
+            return;
+        }
+        if id == "edit.undo" || id == "edit.redo" {
+            ctx.input_mut(|i| {
+                i.events.push(egui::Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers { command: true, mac_cmd: true, shift: id == "edit.redo", ..Default::default() },
+                });
+            });
+            return;
+        }
+    }
+    if select_theme(app, id) {
+        return;
+    }
+    if let Some(url) = id.strip_prefix("url:") {
+        if let Some(open) = &app.services.open_url {
+            open(url);
+        }
+    } else if let Some(rest) = id.strip_prefix("dialog:") {
+        let (name, arg) = rest.split_once(':').unwrap_or((rest, ""));
+        let params: Value = match (name, arg) {
+            ("saveCopy", fmt) => json!({"format": fmt}),
+            ("find", "replace") => json!({"replace": true}),
+            ("note", _) => json!({"threaded": false}),
+            ("comment", _) => json!({"threaded": true}),
+            ("about", tab) => json!({"tab": tab}),
+            _ => json!({}),
+        };
+        let name = if name == "note" { "comment" } else { name };
+        app.open_dialog(name, params);
+    } else if id == "file.new" {
+        app.new_window();
+    } else if id == "edit.copy" || id == "edit.cut" {
+        app.copy_to_clipboard(ctx, id);
+    } else {
+        app.run_or_alert(id, json!({}));
     }
 }
 

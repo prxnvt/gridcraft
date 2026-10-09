@@ -16,41 +16,86 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod windows;
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// The app: the first window's workbooks, the other workbook windows, and (macOS) the native menu
+/// bar once installed.
+struct App {
+    root: SheetApp,
+    windows: windows::Windows,
+    #[cfg(target_os = "macos")]
+    menu: Option<native_menu::NativeMenu>,
+    /// Documents Finder, the Dock or `open -a` asked us to open, and quit requests (macOS).
+    #[cfg(target_os = "macos")]
+    apple_events: fmv_macos_events::Inbox,
+}
+
+impl App {
+    /// A new window with a new workbook (File › New, Cmd+N), with the settings of the window in front.
+    fn open_window(&mut self, ctx: &egui::Context) {
+        let front = self.windows.front(&mut self.root);
+        let (ui, prefs) = (front.ui.clone(), front.session.prefs.clone());
+        let mut session = Session::new();
+        session.prefs = prefs;
+        session.new_workbook();
+        let mut app = SheetApp::new(session, services());
+        app.ui = ui;
+        self.windows.open(ctx, app, window_builder());
+    }
+}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let (mut new_windows, mut quit) = self.windows.take_requests();
         #[cfg(target_os = "macos")]
         {
-            if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.1 = Some(native_menu::NativeMenu::install(ctx));
+            if self.menu.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
+                self.menu = Some(native_menu::NativeMenu::install(ctx));
             }
-            if let Some(m) = &self.1 {
-                m.poll(&mut self.0, ctx);
+            for id in self.menu.as_ref().map(native_menu::NativeMenu::take_events).unwrap_or_default() {
+                if id == "ui.quit" {
+                    quit = true;
+                } else {
+                    native_menu::run_item(self.windows.front(&mut self.root), ctx, &id);
+                }
             }
-            apple_events::poll(&self.2, &mut self.0, ctx);
+            if let Some(menu) = &self.menu {
+                menu.sync(self.windows.front(&mut self.root));
+            }
+            apple_events::poll(&self.apple_events, self.windows.front(&mut self.root), ctx);
         }
-        self.0.logic(ctx);
+        self.root.logic(ctx);
+        // Requests made by the menu run above or the root window this frame.
+        new_windows += usize::from(std::mem::take(&mut self.root.new_window_request));
+        quit |= std::mem::take(&mut self.root.quit_all_request);
+        for _ in 0..new_windows {
+            self.open_window(ctx);
+        }
+        if quit {
+            self.windows.quit();
+        }
+        self.windows.root_logic(ctx, &mut self.root);
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.0.raw_input_hook(raw);
+        self.root.raw_input_hook(raw);
         // Files dropped on the window open as workbooks.
         for f in std::mem::take(&mut raw.dropped_files) {
             if let Some(p) = f.path().to_str().map(str::to_string).filter(|p| !p.is_empty()) {
-                self.0.open_path(&p);
+                self.root.open_path(&p);
             }
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.0.ui(ui);
+        self.root.ui(ui);
+        let ctx = ui.ctx().clone();
+        self.windows.show(&ctx);
     }
     fn on_exit(&mut self) {
-        save_prefs(&self.0);
+        save_prefs(&self.root);
     }
 }
 
@@ -169,10 +214,31 @@ fn services() -> Services {
     }
 }
 
+/// Window and taskbar icon. Not on macOS: there the Dock shows the bundle's icon, and replacing it
+/// at run time makes it a different size from the pinned, not-running icon.
+#[cfg(not(target_os = "macos"))]
 fn icon() -> Option<egui::IconData> {
     let bytes = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.gridcraft.png");
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
+}
+
+/// A workbook window; on macOS without a title bar of its own (the app draws one).
+fn window_builder() -> egui::ViewportBuilder {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("GridCraft")
+        .with_inner_size([1440.0, 900.0])
+        .with_min_inner_size([640.0, 420.0])
+        .with_app_id("ai.storyteller.gridcraft")
+        .with_drag_and_drop(true);
+    if cfg!(target_os = "macos") {
+        viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Some(i) = icon() {
+        viewport = viewport.with_icon(i);
+    }
+    viewport
 }
 
 fn main() -> eframe::Result<()> {
@@ -261,19 +327,8 @@ fn main() -> eframe::Result<()> {
     app.after_engine(); // Show warnings from files opened on the command line.
     let control_port = control_port;
     load_prefs(&mut app);
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title("GridCraft")
-        .with_inner_size([1440.0, 900.0])
-        .with_min_inner_size([640.0, 420.0])
-        .with_app_id("ai.storyteller.gridcraft")
-        .with_drag_and_drop(true);
-    if cfg!(target_os = "macos") {
-        viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
-    }
-    if let Some(i) = icon() {
-        viewport = viewport.with_icon(i);
-    }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    app.multi_window = true;
+    let options = eframe::NativeOptions { viewport: window_builder(), ..Default::default() };
     // Before eframe creates the wgpu instance: default Windows to DirectX 12 only (see graphics.rs).
     #[cfg(target_os = "windows")]
     let options = {
@@ -298,13 +353,14 @@ fn main() -> eframe::Result<()> {
                     Err(e) => log::error!("control channel on port {port}: {e}"),
                 }
             }
-            Ok(Box::new(App(
-                app,
+            Ok(Box::new(App {
+                root: app,
+                windows: windows::Windows::default(),
                 #[cfg(target_os = "macos")]
-                None,
+                menu: None,
                 #[cfg(target_os = "macos")]
-                apple_events.connect(&cc.egui_ctx),
-            )))
+                apple_events: apple_events.connect(&cc.egui_ctx),
+            }))
         }),
     )
 }
