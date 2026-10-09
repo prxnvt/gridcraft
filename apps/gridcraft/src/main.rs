@@ -59,6 +59,9 @@ impl eframe::App for App {
             for id in self.menu.as_ref().map(native_menu::NativeMenu::take_events).unwrap_or_default() {
                 if id == "ui.quit" {
                     quit = true;
+                } else if id == "file.close" {
+                    // Cmd+W closes the window (asking to save), as in other Mac apps.
+                    self.windows.close_front(ctx);
                 } else {
                     native_menu::run_item(self.windows.front(&mut self.root), ctx, &id);
                 }

@@ -57,6 +57,12 @@ impl Windows {
         self.extras.push(Extra { id, app, builder, outer: None, closed: false });
     }
 
+    /// Close the window in front the way its close button does, so unsaved changes are asked about.
+    pub fn close_front(&self, ctx: &egui::Context) {
+        let id = self.focused.filter(|f| self.extras.iter().any(|e| e.id == *f && !e.closed)).unwrap_or(ViewportId::ROOT);
+        ctx.send_viewport_cmd_to(id, ViewportCommand::Close);
+    }
+
     /// Requests the windows made during the last frame: (new windows wanted, quit wanted).
     pub fn take_requests(&mut self) -> (usize, bool) {
         let mut new = 0;
