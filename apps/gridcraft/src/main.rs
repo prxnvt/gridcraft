@@ -233,6 +233,8 @@ fn window_builder() -> egui::ViewportBuilder {
         .with_drag_and_drop(true);
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+        // An empty icon stops eframe replacing the bundle's Dock icon with its default egui logo.
+        viewport = viewport.with_icon(egui::IconData::default());
     }
     #[cfg(not(target_os = "macos"))]
     if let Some(i) = icon() {
