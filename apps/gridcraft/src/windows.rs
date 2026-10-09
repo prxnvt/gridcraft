@@ -93,7 +93,10 @@ impl Windows {
                     ctx.send_viewport_cmd(ViewportCommand::OuterPosition(r.min));
                     ctx.send_viewport_cmd(ViewportCommand::InnerSize(r.size()));
                 }
+                // The control channel belongs to the app, not to a window: keep it.
+                let control = root.control_rx.take();
                 *root = e.app;
+                root.control_rx = control;
                 root.quit_confirmed = false;
                 self.focused = None;
             }
