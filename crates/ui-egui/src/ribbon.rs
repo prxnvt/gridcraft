@@ -85,7 +85,11 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ("Calculate Now", "formulas.calculateNow"),
                 ] {
                     if ui.button(label).clicked() {
-                        app.run_or_alert(id, json!({}));
+                        if id == "file.new" {
+                            app.new_window();
+                        } else {
+                            app.run_or_alert(id, json!({}));
+                        }
                     }
                 }
             });
@@ -2384,7 +2388,10 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::S if shift => Some(("file.saveAs", json!({}))),
         Key::S => Some(("file.save", json!({}))),
         Key::O => Some(("file.open", json!({}))),
-        Key::N => Some(("file.new", json!({}))),
+        Key::N => {
+            app.new_window();
+            None
+        }
         Key::W => Some(("file.close", json!({}))),
         Key::K => {
             app.open_dialog("insertLink", json!({}));

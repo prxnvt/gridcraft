@@ -200,6 +200,9 @@ pub struct SheetApp {
     pub(crate) journal_seen: usize,
     /// The Python editor window, when open (kept apart from `dialog`, so dialogs don't close it).
     pub py_window: Option<python_window::PyWindow>,
+    /// Set once the user has answered the unsaved-changes prompt (or automation quits): the next
+    /// close request goes through.
+    pub quit_confirmed: bool,
 }
 
 /// A pending "replace it?" question from a command (see [`confirm_text`]).
@@ -272,6 +275,7 @@ impl SheetApp {
             macros: macro_ui::MacroUi::default(),
             journal_seen,
             py_window: None,
+            quit_confirmed: false,
         }
     }
 
@@ -284,6 +288,53 @@ impl SheetApp {
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
         ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
+    }
+
+    /// Open another GridCraft window. Desktop builds start a new process; on the web the current
+    /// window just makes a new workbook.
+    pub fn new_window(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.active().is_some()
+            && let Ok(exe) = std::env::current_exe()
+            && std::process::Command::new(exe).spawn().is_ok()
+        {
+            return;
+        }
+        self.run_or_alert("file.new", json!({}));
+    }
+
+    /// Saves every workbook with unsaved changes (asking for a file name where there is none).
+    /// False if any of them is still unsaved afterwards (error or cancelled picker).
+    pub fn save_all(&mut self) -> bool {
+        let keep = self.session.active_index();
+        let mut all = true;
+        for i in 0..self.session.documents().len() {
+            if !self.session.documents()[i].is_dirty() {
+                continue;
+            }
+            self.session.set_active(i);
+            let mut params = json!({});
+            if self.session.documents()[i].path.is_none() {
+                let suggested = self.session.documents()[i].display_title();
+                let Some(path) = self.services.pick_save.as_ref().and_then(|pick| pick(&suggested)) else {
+                    all = false;
+                    continue;
+                };
+                let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
+                params = json!({"path": path});
+            }
+            if let Err(e) = self.session.run("file.save", params) {
+                self.message = Some(("GridCraft".into(), clean_error(&e)));
+            }
+            if self.session.documents().get(i).is_some_and(|d| d.is_dirty()) {
+                all = false;
+            }
+        }
+        if keep < self.session.documents().len() {
+            self.session.set_active(keep);
+        }
+        self.after_engine();
+        all
     }
 
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
@@ -824,6 +875,16 @@ impl SheetApp {
         python_ui::install_toast(self);
         // Formulas entered since the last frame, from any source, feed Recently Used.
         function_library::harvest(self);
+        // Closing the window (or Cmd+Q) with unsaved changes asks first.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && self.session.documents().iter().any(|d| d.is_dirty()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.dialog.as_ref().is_none_or(|d| d.name != "quit") {
+                self.open_dialog("quit", json!({}));
+            }
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services

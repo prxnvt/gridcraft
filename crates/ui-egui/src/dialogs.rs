@@ -634,6 +634,7 @@ impl Dialog {
             }
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
+            "quit" => Dialog::custom("quit", "Save Changes?", json!({})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
             "comments" => {
@@ -982,6 +983,35 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             };
                             app.run_or_alert(id, json!({"path": t}));
                         }
+                    }
+                }
+                "quit" => {
+                    let names: Vec<String> = app.session.documents().iter().filter(|x| x.is_dirty()).map(|x| x.display_title()).collect();
+                    if names.is_empty() {
+                        app.quit_confirmed = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        open = false;
+                    } else {
+                        let what = if names.len() == 1 { format!("\u{201c}{}\u{201d}", names[0]) } else { format!("{} workbooks", names.len()) };
+                        ui.label(egui::RichText::new(format!("Do you want to save the changes you made to {what}?")).strong());
+                        ui.label("Your changes will be lost if you don't save them.");
+                        ui.horizontal(|ui| {
+                            if ui.button("Don't Save").clicked() {
+                                app.quit_confirmed = true;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                open = false;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                open = false;
+                            }
+                            if ui.button("Save").clicked() {
+                                if app.save_all() {
+                                    app.quit_confirmed = true;
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+                                open = false;
+                            }
+                        });
                     }
                 }
                 "saveChanges" => {

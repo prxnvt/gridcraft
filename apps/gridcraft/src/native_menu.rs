@@ -200,6 +200,9 @@ impl NativeMenu {
         let menu = Menu::new();
         let app_menu = Submenu::new("GridCraft", true);
         let about = MenuItem::with_id("dialog:about", "About GridCraft", true, None);
+        // Not the predefined Quit: that terminates the process without a close request, so unsaved
+        // changes would never be asked about.
+        let quit = MenuItem::with_id("ui.quit", "Quit GridCraft", true, Accelerator::from_str("CMD+Q").ok());
         let _ = app_menu.append_items(&[
             &about,
             &PredefinedMenuItem::separator(),
@@ -209,7 +212,7 @@ impl NativeMenu {
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
+            &quit,
         ]);
         let _ = menu.append(&app_menu);
         let mut theme_items = Vec::new();
@@ -293,6 +296,10 @@ impl NativeMenu {
                 };
                 let name = if name == "note" { "comment" } else { name };
                 app.open_dialog(name, params);
+            } else if id == "ui.quit" {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else if id == "file.new" {
+                app.new_window();
             } else if id == "edit.copy" || id == "edit.cut" {
                 app.copy_to_clipboard(ctx, &id);
             } else {
