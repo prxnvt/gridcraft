@@ -46,8 +46,8 @@ pub fn descriptive_statistics(series: &[Series], o: &DescriptiveOptions) -> Resu
             return Err(input(format!("{} has no numbers.", s.label)));
         }
         let n = x.len() as f64;
-        out.text(0, col, &s.label, Look::HEAD.over().under());
-        out.text(0, col + 1, "", Look::PLAIN.over().under());
+        out.text(0, col, &s.label, Look::HEAD.over().under().across());
+        out.text(0, col + 1, "", Look::HEAD.over().under().across());
         let mut rows: Vec<(String, V)> = Vec::new();
         if o.summary {
             let mean = dist::mean(&x);

@@ -674,9 +674,29 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
             galley = p.layout_no_wrap(s, font.clone(), color);
             w = galley.size().x;
         }
+        // Center Across Selection: centred over this cell and the blank cells to its right that
+        // are also formatted Center Across Selection.
+        let mut across = *rect;
+        if halign == HAlign::CenterAcross && in_merge(c).is_none() {
+            let mut cc = c.col + 1;
+            while cc < MAX_COLS && cc <= c1 + 64 {
+                let n = CellRef::new(c.row, cc);
+                if !(sh.value(n).is_empty() && wb.styles.get(sh.style_id(n)).align.h == HAlign::CenterAcross) {
+                    break;
+                }
+                cc += 1;
+            }
+            across = Rect::from_min_max(rect.min, pos2(geo.x(sh, cc), rect.bottom()));
+        }
         // Overflow into empty neighbours for text (not upright text, whose width is its line height).
-        let mut clip = *rect;
-        if !numeric && !matches!(v, Value::Number(_)) && st.align.rotation.abs() != 90 && w > rect.width() - 2.0 * pad && in_merge(c).is_none() {
+        let mut clip = across;
+        if !numeric
+            && !matches!(v, Value::Number(_))
+            && st.align.rotation.abs() != 90
+            && w > across.width() - 2.0 * pad
+            && in_merge(c).is_none()
+            && halign != HAlign::CenterAcross
+        {
             let mut right = rect.right();
             let mut left = rect.left();
             if matches!(halign, HAlign::Left | HAlign::Center | HAlign::Justify) {
@@ -707,8 +727,17 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
                 }
             }
         }
+        if across.width() > rect.width() && lk.fill.is_none() {
+            // Paint over the gridlines inside the span.
+            p.rect_filled(
+                Rect::from_min_max(pos2(rect.right() - 1.0, across.top() + 0.5), pos2(across.right() - 1.0, across.bottom() - 1.0)),
+                0.0,
+                t.grid_bg,
+            );
+        }
         let x = match halign {
-            HAlign::Center | HAlign::CenterAcross | HAlign::Distributed => rect.center().x - w / 2.0,
+            HAlign::CenterAcross => across.center().x - w / 2.0,
+            HAlign::Center | HAlign::Distributed => rect.center().x - w / 2.0,
             HAlign::Right => rect.right() - pad - w - indent,
             _ => text_left + pad + indent,
         };

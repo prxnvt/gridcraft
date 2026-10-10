@@ -63,6 +63,8 @@ pub struct RStyle {
     pub bold: bool,
     pub italic: bool,
     pub center: bool,
+    /// Centre across selection (a heading over several columns).
+    pub across: bool,
     pub top: bool,
     pub bottom: bool,
     pub num_fmt: Option<String>,
@@ -249,6 +251,9 @@ fn style_id(cx: &mut Ctx, st: &RStyle) -> StyleId {
         s.font.italic = st.italic;
         if st.center {
             s.align.h = gridcraft_model::HAlign::Center;
+        }
+        if st.across {
+            s.align.h = gridcraft_model::HAlign::CenterAcross;
         }
         if st.top {
             s.borders.top = thin();

@@ -11,6 +11,7 @@ use crate::{Error, Result, input};
 
 pub mod descriptive;
 pub mod hypothesis;
+pub mod regression;
 
 pub(crate) use descriptive::correl as descriptive_correl;
 
@@ -50,6 +51,8 @@ pub struct Look {
     pub bold: bool,
     pub italic: bool,
     pub center: bool,
+    /// Centred across this and the following blank cells with the same flag.
+    pub across: bool,
     /// Thin border above / below.
     pub top: bool,
     pub bottom: bool,
@@ -57,14 +60,18 @@ pub struct Look {
 }
 
 impl Look {
-    pub const PLAIN: Look = Look { bold: false, italic: false, center: false, top: false, bottom: false, fmt: None };
+    pub const PLAIN: Look = Look { bold: false, italic: false, center: false, across: false, top: false, bottom: false, fmt: None };
     /// A heading in a results table: italic and centred.
-    pub const HEAD: Look = Look { bold: false, italic: true, center: true, top: false, bottom: false, fmt: None };
+    pub const HEAD: Look = Look { bold: false, italic: true, center: true, across: false, top: false, bottom: false, fmt: None };
     pub fn under(self) -> Look {
         Look { bottom: true, ..self }
     }
     pub fn over(self) -> Look {
         Look { top: true, ..self }
+    }
+    /// Centred across the cells to its right that share the flag (a heading over two columns).
+    pub fn across(self) -> Look {
+        Look { across: true, center: false, ..self }
     }
     pub fn fmt(self, f: &'static str) -> Look {
         Look { fmt: Some(f), ..self }

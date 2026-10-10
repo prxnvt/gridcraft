@@ -158,6 +158,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             z_test
         ),
+        cmd!(
+            "analysis.regression",
+            "Regression",
+            [],
+            None,
+            "{inputY (one column), inputX (up to 16 adjacent columns), labels?, constantIsZero?, confidence?: 95, residuals?, standardizedResiduals?, residualPlots?, lineFitPlots?, normalProbabilityPlots?, output?, overwrite?} → SUMMARY OUTPUT (regression statistics, ANOVA, coefficients with 95% and chosen-level bounds), optional RESIDUAL and PROBABILITY OUTPUT and scatter plots",
+            has_doc,
+            regression
+        ),
     ]
 }
 
@@ -363,12 +372,15 @@ pub(crate) fn to_report(out: Out) -> Report {
             bold: look.bold,
             italic: look.italic,
             center: look.center,
+            across: look.across,
             top: look.top,
             bottom: look.bottom,
             num_fmt: look.fmt.map(str::to_string),
         };
         let value = match v {
             V::Num(x) => RValue::Value(Value::Number(x)),
+            // Blank cells that only carry a border or alignment.
+            V::Text(t) if t.is_empty() => RValue::Value(Value::Empty),
             V::Text(t) => RValue::Value(Value::text(t)),
             V::Formula(f) => RValue::Formula(f),
             V::Error(e) => RValue::Value(Value::Error(e)),
@@ -503,6 +515,51 @@ fn z_test(s: &mut Session, p: &Json) -> Result<Json> {
     run_with_input(s, p, CMD, &input, |_| toolpak::hypothesis::z_test(&a, &b, diff, v1, v2, alpha))
 }
 
+/// Absolute reference (with sheet) to the cells of variable `k` of `input`.
+fn series_ref(s: &Session, input: &Input, k: usize) -> String {
+    let name = s.doc().ok().and_then(|d| d.wb.sheet(input.sheet).map(|sh| sh.name.clone())).unwrap_or_default();
+    let cells = input.cells.get(k).map(Vec::as_slice).unwrap_or(&[]);
+    let (Some(a), Some(b)) = (cells.first(), cells.last()) else { return String::new() };
+    let abs = |c: &CellRef| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1);
+    format!("{}!{}:{}", gridcraft_formula::quote_sheet(&name), abs(a), abs(b))
+}
+
+fn regression(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.regression";
+    let yin = read_one(s, p, "inputY", CMD, "Y")?;
+    let y_rows = yin.cells.first().is_some_and(|c| c.len() > 1 && c.iter().all(|x| x.row == c[0].row));
+    let mut q = p.clone();
+    if let Some(m) = q.as_object_mut() {
+        m.insert("groupedBy".into(), json!(if y_rows { "rows" } else { "columns" }));
+    }
+    let mut xin = read_input(s, &q, "inputX", CMD, false)?;
+    if !bool_param(p, "labels").unwrap_or(false) {
+        for (i, x) in xin.series.iter_mut().enumerate() {
+            x.label = format!("X Variable {}", i + 1);
+        }
+    }
+    let confidence = match p.get("confidence") {
+        None | Some(Json::Null) | Some(Json::Bool(_)) => 95.0,
+        _ => num_param(p, "confidence", 95.0, CMD)?,
+    };
+    let flag = |k: &str| bool_param(p, k).unwrap_or(false);
+    let o = toolpak::regression::RegressionOptions {
+        constant_is_zero: flag("constantIsZero"),
+        confidence,
+        residuals: flag("residuals"),
+        standardized_residuals: flag("standardizedResiduals"),
+        residual_plots: flag("residualPlots"),
+        line_fit_plots: flag("lineFitPlots"),
+        normal_probability_plots: flag("normalProbabilityPlots"),
+    };
+    let refs = toolpak::regression::InputRefs { y: series_ref(s, &yin, 0), x: (0..xin.series.len()).map(|k| series_ref(s, &xin, k)).collect() };
+    let y = yin.series.first().cloned().unwrap_or_else(|| Series::new("Y", vec![]));
+    let xs = std::mem::take(&mut xin.series);
+    let mut input = yin;
+    input.cells.extend(xin.cells);
+    run_with_input(s, p, CMD, &input, |_| toolpak::regression::regression(&y, &xs, &o, &refs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,6 +645,38 @@ mod tests {
         assert_eq!(val(&s, &name, "B3"), Value::from("Variable 1"));
         assert!(s.execute("analysis.zTest", json!({"input1": "Sheet1!E2:E6", "input2": "Sheet1!F2:F6"})).is_err(), "variances are required");
         assert!(s.execute("analysis.fTest", json!({"input1": "Sheet1!E2:F6", "input2": "Sheet1!F2:F6"})).is_err(), "one column each");
+    }
+
+    #[test]
+    fn regression_with_plots() {
+        let mut s = session();
+        s.execute(
+            "range.setValues",
+            json!({"range": "A1", "values": [["Ads", "Price", "Sales"], [1, 9, 3], [2, 8, 5], [3, 8, 7], [4, 6, 10], [5, 5, 11]]}),
+        )
+        .unwrap();
+        let r = s
+            .execute(
+                "analysis.regression",
+                json!({"inputY": "C1:C6", "inputX": "A1:B6", "labels": true, "residuals": true, "lineFitPlots": true, "normalProbabilityPlots": true, "output": {"newSheet": "Fit"}}),
+            )
+            .unwrap();
+        assert_eq!(r["sheet"], "Fit");
+        assert_eq!(val(&s, "Fit", "A1"), Value::from("SUMMARY OUTPUT"));
+        assert_eq!(val(&s, "Fit", "A18"), Value::from("Ads"));
+        assert_eq!(val(&s, "Fit", "A19"), Value::from("Price"));
+        assert_eq!(val(&s, "Fit", "A23"), Value::from("RESIDUAL OUTPUT"));
+        assert_eq!(val(&s, "Fit", "B25"), Value::from("Predicted Sales"));
+        let sh = s.doc().unwrap().wb.active().unwrap().clone();
+        assert_eq!(sh.charts.len(), 3, "two line fit plots and a normal probability plot");
+        assert_eq!(sh.charts[0].series[0].values, "Sheet1!$C$2:$C$6");
+        assert_eq!(sh.charts[0].series[0].categories.as_deref(), Some("Sheet1!$A$2:$A$6"));
+        assert_eq!(sh.charts[0].series[1].values, "Fit!$B$26:$B$30");
+        // Without labels the variables are named like Excel's.
+        s.execute("analysis.regression", json!({"inputY": "Sheet1!C2:C6", "inputX": "Sheet1!A2:A6", "output": "newSheet"})).unwrap();
+        let name = s.doc().unwrap().wb.active().unwrap().name.clone();
+        assert_eq!(val(&s, &name, "A18"), Value::from("X Variable 1"));
+        assert!(s.execute("analysis.regression", json!({"inputY": "Sheet1!C2:C6", "inputX": "Sheet1!A2:A4"})).is_err());
     }
 
     #[test]
