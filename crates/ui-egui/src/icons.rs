@@ -8,6 +8,27 @@ use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2, vec2};
 
 use crate::theme::{Cat, Tokens};
 
+/// The glyph on a Function Library book ([`Icon::FnBook`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FnGlyph {
+    /// Recently Used.
+    Star,
+    /// Financial.
+    Coins,
+    /// Logical.
+    Question,
+    /// Text.
+    Letter,
+    /// Date & Time.
+    Clock,
+    /// Lookup & Reference.
+    Magnifier,
+    /// Math & Trig.
+    Theta,
+    /// More Functions.
+    Dots,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
     Paste,
@@ -123,6 +144,28 @@ pub enum Icon {
     Sheet,
     Book,
     Folder,
+    /// A book with a coloured spine and a category glyph (Function Library).
+    FnBook(FnGlyph),
+    /// Python in cells: a "Py" tag (deliberately not the Python Software Foundation logo).
+    Python,
+    /// Reset (a runtime): a circular arrow.
+    Reset,
+    /// Diagnostics: a pulse line on a page.
+    Diagnostics,
+    /// A macro: a script page with a run arrow.
+    Macro,
+    /// Record a macro.
+    Record,
+    /// A code breakpoint.
+    Breakpoint,
+    /// An equation: a radical sign.
+    Equation,
+    /// A form button with a pointer.
+    Button,
+    /// A form slider (scroll bar).
+    Slider,
+    /// A form spin button.
+    Spin,
 }
 
 struct G<'a> {
@@ -138,6 +181,10 @@ impl G<'_> {
     fn line(&self, pts: &[(f32, f32)], c: Color32, w: f32) {
         let v: Vec<Pos2> = pts.iter().map(|(x, y)| self.pt(*x, *y)).collect();
         self.p.add(PathShape::line(v, PathStroke::new(w * self.s.clamp(1.0, 2.0), c)));
+    }
+    fn closed(&self, pts: &[(f32, f32)], c: Color32, w: f32) {
+        let v: Vec<Pos2> = pts.iter().map(|(x, y)| self.pt(*x, *y)).collect();
+        self.p.add(PathShape::closed_line(v, PathStroke::new(w * self.s.clamp(1.0, 2.0), c)));
     }
     fn stroke(&self, pts: &[(f32, f32)], c: Color32) {
         self.line(pts, c, 1.15);
@@ -217,8 +264,7 @@ impl Palette {
 /// Whether an icon has a part of its own for the accent colour (otherwise the accent recolours
 /// the whole icon).
 fn has_accent_part(icon: Icon) -> bool {
-    let _ = icon;
-    false
+    matches!(icon, Icon::FnBook(_) | Icon::Python | Icon::Diagnostics | Icon::Macro | Icon::Equation | Icon::Slider)
 }
 
 /// Draws `icon` into `rect` (square-ish), in colour `c`, with the current theme's palette.
@@ -697,6 +743,104 @@ pub fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette
         }
         Icon::Folder => {
             g.poly(&[(1.5, 4.0), (6.0, 4.0), (7.5, 5.5), (14.5, 5.5), (14.5, 13.0), (1.5, 13.0)], yellow);
+        }
+        Icon::FnBook(glyph) => {
+            let spine = pal.accent.unwrap_or(c);
+            g.rect(3.0, 1.5, 10.5, 13.0, Some(paper), Some(c));
+            g.rect(3.0, 1.5, 2.5, 13.0, Some(spine), None);
+            let (x, y) = (9.5, 7.8);
+            match glyph {
+                FnGlyph::Star => {
+                    let pts: Vec<(f32, f32)> = (0..10)
+                        .map(|i| {
+                            let a = std::f32::consts::PI * (i as f32 / 5.0 - 0.5);
+                            let rad = if i % 2 == 0 { 3.4 } else { 1.4 };
+                            (x + rad * a.cos(), y + rad * a.sin())
+                        })
+                        .collect();
+                    g.closed(&pts, spine, 1.0);
+                }
+                FnGlyph::Coins => {
+                    // A stack of coins.
+                    for k in 0..3 {
+                        let top = y + 1.6 - k as f32 * 2.3;
+                        g.p.rect_filled(Rect::from_min_max(g.pt(x - 2.8, top), g.pt(x + 2.8, top + 1.7)), 0.9 * g.s, spine);
+                    }
+                }
+                FnGlyph::Question => g.text(x, y, "?", 8.5, spine, true, false),
+                FnGlyph::Letter => g.text(x, y, "A", 8.0, spine, true, false),
+                FnGlyph::Clock => {
+                    g.circle(x, y, 3.2, None, Some(spine));
+                    g.stroke(&[(x, y - 2.0), (x, y), (x + 1.6, y + 0.9)], spine);
+                }
+                FnGlyph::Magnifier => {
+                    g.circle(x - 0.6, y - 0.6, 2.3, None, Some(spine));
+                    g.line(&[(x + 1.0, y + 1.0), (x + 3.0, y + 3.0)], spine, 1.5);
+                }
+                FnGlyph::Theta => g.text(x, y, "θ", 8.5, spine, false, false),
+                FnGlyph::Dots => {
+                    for dx in [-2.4, 0.0, 2.4] {
+                        g.circle(x + dx, y, 0.9, Some(spine), None);
+                    }
+                }
+            }
+        }
+        Icon::Python => {
+            let tag = pal.accent.unwrap_or(green);
+            g.p.rect_filled(Rect::from_min_max(g.pt(1.5, 3.5), g.pt(14.5, 12.5)), 2.5 * g.s, tag);
+            g.text(8.0, 8.0, "Py", 7.5, paper, true, false);
+        }
+        Icon::Reset => {
+            let pts: Vec<(f32, f32)> = (0..=12)
+                .map(|i| {
+                    let a = (-50.0 + i as f32 * 25.0).to_radians();
+                    (8.0 + 5.0 * a.cos(), 8.5 + 5.0 * a.sin())
+                })
+                .collect();
+            g.line(&pts, c, 1.2);
+            // The arrow head at the start of the arc, pointing back along it.
+            g.poly(&[(9.6, 1.6), (13.6, 3.6), (10.6, 6.0)], c);
+        }
+        Icon::Diagnostics => {
+            g.rect(2.0, 2.5, 12.0, 11.0, Some(paper), Some(c));
+            g.line(&[(3.0, 8.5), (5.5, 8.5), (7.0, 5.0), (8.8, 11.5), (10.3, 7.0), (11.2, 8.5), (13.0, 8.5)], pal.accent.unwrap_or(red), 1.3);
+        }
+        Icon::Macro => {
+            g.rect(2.5, 1.5, 9.0, 12.0, Some(paper), Some(c));
+            for y in [4.5, 7.0, 9.5] {
+                g.stroke(&[(4.5, y), (9.5, y)], light);
+            }
+            g.poly(&[(9.5, 8.5), (15.0, 11.75), (9.5, 15.0)], pal.accent.unwrap_or(green));
+        }
+        Icon::Record => {
+            g.circle(8.0, 8.0, 6.0, None, Some(c));
+            g.circle(8.0, 8.0, 3.5, Some(pal.recording), None);
+        }
+        Icon::Breakpoint => {
+            for y in [4.0, 8.0, 12.0] {
+                g.stroke(&[(7.5, y), (14.0, y)], light);
+            }
+            g.circle(3.8, 8.0, 2.6, Some(pal.breakpoint), None);
+        }
+        Icon::Equation => {
+            g.line(&[(1.5, 9.0), (3.5, 8.0), (5.5, 13.5), (8.5, 2.5), (14.5, 2.5)], c, 1.2);
+            g.text(11.0, 8.5, "x", 8.0, pal.accent.unwrap_or(blue), false, true);
+        }
+        Icon::Button => {
+            g.p.rect_filled(Rect::from_min_max(g.pt(1.5, 3.0), g.pt(14.5, 11.0)), 2.0 * g.s, paper);
+            g.p.rect_stroke(Rect::from_min_max(g.pt(1.5, 3.0), g.pt(14.5, 11.0)), 2.0 * g.s, Stroke::new(1.0, c), egui::StrokeKind::Inside);
+            g.poly(&[(9.0, 7.5), (9.0, 15.0), (13.5, 12.5)], c);
+        }
+        Icon::Slider => {
+            g.line(&[(2.0, 8.0), (14.0, 8.0)], light, 1.6);
+            g.line(&[(2.0, 8.0), (7.0, 8.0)], pal.accent.unwrap_or(blue), 1.6);
+            g.circle(7.0, 8.0, 2.4, Some(paper), Some(c));
+        }
+        Icon::Spin => {
+            g.rect(4.0, 1.5, 8.0, 13.0, Some(paper), Some(c));
+            g.stroke(&[(4.0, 8.0), (12.0, 8.0)], c);
+            g.poly(&[(8.0, 3.2), (10.5, 6.3), (5.5, 6.3)], c);
+            g.poly(&[(5.5, 9.7), (10.5, 9.7), (8.0, 12.8)], c);
         }
     }
 }

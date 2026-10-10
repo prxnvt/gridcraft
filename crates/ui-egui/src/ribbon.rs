@@ -169,8 +169,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         if resp.double_clicked() {
                             app.ui.ribbon_collapsed = !collapsed;
                         }
-                        if tab == "Home" && app.keytips.prefix() == Some("") {
-                            keytip(app, ui, "H", pos2(r.center().x, r.bottom() - 1.0));
+                        if app.keytips.prefix() == Some("")
+                            && let Some(key) = crate::keytips::tab_key(tab)
+                        {
+                            keytip(app, ui, key, pos2(r.center().x, r.bottom() - 1.0));
                         }
                     }
                 });
@@ -184,28 +186,108 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                        match app.ui.ribbon_tab.as_str() {
-                            "Home" => home(app, ui),
-                            "Insert" => insert(app, ui),
-                            "Draw" => draw(app, ui),
-                            "Page Layout" => page_layout(app, ui),
-                            "Formulas" => formulas(app, ui),
-                            "Data" => data(app, ui),
-                            "Review" => review(app, ui),
-                            "View" => view(app, ui),
-                            "Automate" => automate(app, ui),
-                            "Table Design" => table_design(app, ui),
-                            "Chart Design" => chart_design(app, ui),
-                            "PivotTable Analyze" => pivot_analyze(app, ui),
-                            _ => home(app, ui),
-                        }
+                let scroll = egui::ScrollArea::horizontal()
+                    .id_salt("ribbon_scroll")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                            match app.ui.ribbon_tab.as_str() {
+                                "Home" => home(app, ui),
+                                "Insert" => insert(app, ui),
+                                "Draw" => draw(app, ui),
+                                "Page Layout" => page_layout(app, ui),
+                                "Formulas" => formulas(app, ui),
+                                "Data" => data(app, ui),
+                                "Review" => review(app, ui),
+                                "View" => view(app, ui),
+                                "Automate" => automate(app, ui),
+                                "Table Design" => table_design(app, ui),
+                                "Chart Design" => chart_design(app, ui),
+                                "PivotTable Analyze" => pivot_analyze(app, ui),
+                                _ => home(app, ui),
+                            }
+                        });
                     });
-                });
+                scroll_arrows(ui, &t, scroll);
             });
         });
+}
+
+/// How much of the active tab's groups the ribbon card shows (for the scroll arrows and tests).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RibbonOverflow {
+    /// Width of all the tab's groups.
+    pub content: f32,
+    /// Width of the card's content area.
+    pub visible: f32,
+    /// How far the groups are scrolled.
+    pub offset: f32,
+    /// Height of the tallest group (a column of small buttons) and of the content area.
+    pub content_height: f32,
+    pub visible_height: f32,
+}
+
+impl RibbonOverflow {
+    pub fn id() -> egui::Id {
+        egui::Id::new("ribbon_overflow")
+    }
+
+    /// Last frame's overflow.
+    pub fn get(ctx: &egui::Context) -> RibbonOverflow {
+        ctx.data(|d| d.get_temp(Self::id())).unwrap_or_default()
+    }
+
+    pub fn overflows(&self) -> bool {
+        self.content > self.visible + 0.5
+    }
+}
+
+/// When the tab's groups are wider than the card, arrows at its edges scroll them (as does the
+/// mouse wheel over the card).
+fn scroll_arrows(ui: &mut Ui, t: &Tokens, mut scroll: egui::scroll_area::ScrollAreaOutput<()>) {
+    let inner = scroll.inner_rect;
+    let max = (scroll.content_size.x - inner.width()).max(0.0);
+    let overflow = RibbonOverflow {
+        content: scroll.content_size.x,
+        visible: inner.width(),
+        offset: scroll.state.offset.x,
+        content_height: scroll.content_size.y,
+        visible_height: inner.height(),
+    };
+    ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::id(), overflow));
+    if !overflow.overflows() {
+        return;
+    }
+    let step = (inner.width() * 0.6).max(60.0);
+    let mut target = None;
+    for (left, show) in [(true, overflow.offset > 0.5), (false, overflow.offset < max - 0.5)] {
+        if !show {
+            continue;
+        }
+        let r = if left {
+            Rect::from_min_size(inner.left_top(), vec2(18.0, inner.height()))
+        } else {
+            Rect::from_min_size(pos2(inner.right() - 18.0, inner.top()), vec2(18.0, inner.height()))
+        };
+        let resp = ui.interact(r, ui.id().with(("ribbon_scroll_arrow", left)), Sense::click());
+        let fill = if resp.hovered() { t.hover } else { t.ribbon };
+        ui.painter().rect_filled(r, 4.0, fill);
+        ui.painter().rect_stroke(r, 4.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
+        icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), if left { Icon::Left } else { Icon::Right }, t.text);
+        let resp = resp.on_hover_text(if left { "Scroll the ribbon left" } else { "Scroll the ribbon right" });
+        resp.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, if left { "Scroll ribbon left" } else { "Scroll ribbon right" })
+        });
+        if resp.clicked() {
+            target = Some(if left { overflow.offset - step } else { overflow.offset + step });
+        }
+    }
+    if let Some(x) = target {
+        scroll.state.offset.x = x.clamp(0.0, max);
+        scroll.state.store(ui.ctx(), scroll.id);
+        ui.ctx().request_repaint();
+    }
 }
 
 fn file_menu(app: &mut SheetApp, ui: &mut Ui) {
@@ -279,14 +361,34 @@ fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
 
 /// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
 fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
+    keytip_at(app, ui.ctx(), ui.clip_rect(), sequence, at);
+}
+
+fn keytip_at(app: &SheetApp, ctx: &egui::Context, clip: Rect, sequence: &str, at: egui::Pos2) {
     let Some(rest) = app.keytips.prefix().and_then(|prefix| sequence.strip_prefix(prefix)).filter(|s| !s.is_empty()) else { return };
-    let t = Tokens::get(ui.ctx());
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("ribbon_keytips"))).with_clip_rect(ui.clip_rect());
+    let t = Tokens::get(ctx);
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("ribbon_keytips"))).with_clip_rect(clip);
     let text = painter.layout_no_wrap(rest.into(), theme::ui_bold(10.5), t.text);
     let rect = Rect::from_center_size(at, text.size() + vec2(7.0, 3.0));
     painter.rect_filled(rect, 2.0, t.input_bg);
     painter.rect_stroke(rect, 2.0, Stroke::new(1.0, t.text_dim), StrokeKind::Inside);
     painter.galley(rect.min + vec2(3.5, 1.5), text, t.text);
+}
+
+/// A button's keytip: registers `sequence`, paints it under the button while keytips show that
+/// tab, and clicks the button (opening its menu, if it has one) when the sequence is typed.
+/// One line per button: `let r = kt(app, small_button(ui, ...), "MP");`.
+fn kt(app: &mut SheetApp, mut response: egui::Response, sequence: &str) -> egui::Response {
+    app.keytips.register(sequence);
+    // A button scrolled out of the card has no visible rect: no hint for it.
+    if app.keytips.prefix().is_some_and(|p| !p.is_empty()) && response.interact_rect.is_positive() {
+        let clip = response.interact_rect.expand2(vec2(24.0, 12.0));
+        keytip_at(app, &response.ctx, clip, sequence, response.rect.center_bottom());
+    }
+    if app.keytips.take_activation(sequence) {
+        response.flags |= egui::response::Flags::FAKE_PRIMARY_CLICKED;
+    }
+    response
 }
 
 fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json::Value)]) {
@@ -1094,14 +1196,14 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn insert(app: &mut SheetApp, ui: &mut Ui) {
-    if big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false).clicked() {
+    if kt(app, big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false), "NV").clicked() {
         act(app, "insert.pivotTable", json!({}));
     }
-    if big_button(ui, Icon::Table, "Table", "Table (⌘T)", false).clicked() {
+    if kt(app, big_button(ui, Icon::Table, "Table", "Table (⌘T)", false), "NT").clicked() {
         act(app, "insert.table", json!({}));
     }
     sep(ui);
-    let pic = big_button(ui, Icon::Picture, "Pictures", "Insert a picture", true);
+    let pic = kt(app, big_button(ui, Icon::Picture, "Pictures", "Insert a picture", true), "NP");
     pic.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Pictures"));
     egui::Popup::menu(&pic).show(|ui| {
         for (label, placement) in [("Place in Cell", "cell"), ("Place over Cells", "overCells")] {
@@ -1111,7 +1213,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    let shapes = big_button(ui, Icon::Shapes, "Shapes", "Shapes", true);
+    let shapes = kt(app, big_button(ui, Icon::Shapes, "Shapes", "Shapes", true), "NS");
     egui::Popup::menu(&shapes).show(|ui| {
         for (label, kind) in [
             ("Rectangle", "rectangle"),
@@ -1127,7 +1229,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    let icn = big_button(ui, Icon::Theme, "Icons", "Insert an icon", true);
+    let icn = kt(app, big_button(ui, Icon::Theme, "Icons", "Insert an icon", true), "NI");
     egui::Popup::menu(&icn).show(|ui| {
         ui.set_width(260.0);
         egui::Grid::new("icon_lib").show(ui, |ui| {
@@ -1148,16 +1250,16 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui);
-    if big_button(ui, Icon::Chart, "Recommended\nCharts", "Recommended Charts", false).clicked() {
+    if kt(app, big_button(ui, Icon::Chart, "Recommended\nCharts", "Recommended Charts", false), "NR").clicked() {
         act(app, "insert.recommendedCharts", json!({}));
     }
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
-            for (icon, tip, kind, subs) in [
+            for (icon, tip, key, subs) in [
                 (
                     Icon::ChartBar,
                     "Column or Bar",
-                    "column",
+                    "NB",
                     vec![
                         ("Clustered Column", "column", ""),
                         ("Stacked Column", "column", "stacked"),
@@ -1169,7 +1271,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 (
                     Icon::ChartLine,
                     "Line or Area",
-                    "line",
+                    "NN",
                     vec![
                         ("Line", "line", ""),
                         ("Line with Markers", "line", "markers"),
@@ -1178,10 +1280,9 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
                         ("Stacked Area", "area", "stacked"),
                     ],
                 ),
-                (Icon::ChartPie, "Pie or Doughnut", "pie", vec![("Pie", "pie", ""), ("Doughnut", "doughnut", "")]),
+                (Icon::ChartPie, "Pie or Doughnut", "NE", vec![("Pie", "pie", ""), ("Doughnut", "doughnut", "")]),
             ] {
-                let r = small_button(ui, icon, "", tip, true);
-                let _ = kind;
+                let r = kt(app, small_button(ui, icon, "", tip, true), key);
                 egui::Popup::menu(&r).show(|ui| {
                     for (label, k, s) in &subs {
                         if ui.button(*label).clicked() {
@@ -1192,16 +1293,18 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
         ui.horizontal(|ui| {
-            for (icon, tip, subs) in [
+            for (icon, tip, key, subs) in [
                 (
                     Icon::ChartScatter,
                     "Scatter or Bubble",
+                    "ND",
                     vec![("Scatter", "scatter", ""), ("Scatter with Lines", "scatter", "lines"), ("Bubble", "bubble", "")],
                 ),
-                (Icon::Chart, "Statistic", vec![("Histogram", "histogram", ""), ("Box & Whisker", "boxWhisker", "")]),
+                (Icon::Chart, "Statistic", "NA", vec![("Histogram", "histogram", ""), ("Box & Whisker", "boxWhisker", "")]),
                 (
                     Icon::Theme,
                     "Hierarchy & more",
+                    "NY",
                     vec![
                         ("Treemap", "treemap", ""),
                         ("Sunburst", "sunburst", ""),
@@ -1213,7 +1316,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
                     ],
                 ),
             ] {
-                let r = small_button(ui, icon, "", tip, true);
+                let r = kt(app, small_button(ui, icon, "", tip, true), key);
                 egui::Popup::menu(&r).show(|ui| {
                     for (label, k, s) in &subs {
                         if ui.button(*label).clicked() {
@@ -1225,7 +1328,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui);
-    let sp = big_button(ui, Icon::Sparkline, "Sparklines", "Sparklines", true);
+    let sp = kt(app, big_button(ui, Icon::Sparkline, "Sparklines", "Sparklines", true), "NK");
     egui::Popup::menu(&sp).show(|ui| {
         for (label, kind) in [("Line", "line"), ("Column", "column"), ("Win/Loss", "winLoss")] {
             if ui.button(label).clicked() {
@@ -1234,20 +1337,20 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
-    if big_button(ui, Icon::Link, "Link", "Insert Link (⌘K)", false).clicked() {
+    if kt(app, big_button(ui, Icon::Link, "Link", "Insert Link (⌘K)", false), "NL").clicked() {
         app.open_dialog("insertLink", json!({}));
     }
-    if big_button(ui, Icon::Comment, "Comment", "New Comment", false).clicked() {
+    if kt(app, big_button(ui, Icon::Comment, "Comment", "New Comment", false), "NM").clicked() {
         app.open_dialog("comment", json!({"threaded": true}));
     }
     sep(ui);
-    if big_button(ui, Icon::TextBox, "Text\nBox", "Text Box", false).clicked() {
+    if kt(app, big_button(ui, Icon::TextBox, "Text\nBox", "Text Box", false), "NX").clicked() {
         act(app, "insert.textBox", json!({}));
     }
-    if big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false).clicked() {
+    if kt(app, big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false), "NH").clicked() {
         app.open_dialog("headerFooter", json!({}));
     }
-    let sym = big_button(ui, Icon::Symbol, "Symbol", "Symbol", true);
+    let sym = kt(app, big_button(ui, Icon::Symbol, "Symbol", "Symbol", true), "NU");
     egui::Popup::menu(&sym).show(|ui| {
         ui.set_width(260.0);
         ui.horizontal_wrapped(|ui| {
@@ -1399,23 +1502,23 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn formulas(app: &mut SheetApp, ui: &mut Ui) {
-    if big_button(ui, Icon::Function, "Insert\nFunction", "Insert Function (⇧F3)", false).clicked() {
+    if kt(app, big_button(ui, Icon::Function, "Insert\nFunction", "Insert Function (⇧F3)", false), "MF").clicked() {
         app.open_dialog("insertFunction", json!({}));
     }
-    let s = big_button(ui, Icon::Sum, "AutoSum", "AutoSum", true);
+    let s = kt(app, big_button(ui, Icon::Sum, "AutoSum", "AutoSum", true), "MU");
     if s.clicked() {
         act(app, "formulas.autoSum", json!({}));
     }
-    for (label, cat) in [
-        ("Financial", "Financial"),
-        ("Logical", "Logical"),
-        ("Text", "Text"),
-        ("Date &\nTime", "DateTime"),
-        ("Lookup &\nReference", "Lookup"),
-        ("Math &\nTrig", "MathTrig"),
-        ("More\nFunctions", "Statistical"),
+    for (label, cat, key) in [
+        ("Financial", "Financial", "MI"),
+        ("Logical", "Logical", "ML"),
+        ("Text", "Text", "MT"),
+        ("Date &\nTime", "DateTime", "ME"),
+        ("Lookup &\nReference", "Lookup", "MO"),
+        ("Math &\nTrig", "MathTrig", "MG"),
+        ("More\nFunctions", "Statistical", "MQ"),
     ] {
-        let r = big_button(ui, Icon::Book, label, label, true);
+        let r = kt(app, big_button(ui, Icon::Book, label, label, true), key);
         egui::Popup::menu(&r).show(|ui| {
             ui.set_max_height(420.0);
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1437,16 +1540,19 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         });
     }
     sep(ui);
-    if big_button(ui, Icon::Name, "Name\nManager", "Name Manager", false).clicked() {
+    if kt(app, big_button(ui, Icon::Name, "Name\nManager", "Name Manager", false), "MN").clicked() {
         app.open_dialog("nameManager", json!({}));
     }
     ui.vertical(|ui| {
-        if small_button(ui, Icon::Name, "Define Name", "Define Name", false).clicked() {
+        if kt(app, small_button(ui, Icon::Name, "Define Name", "Define Name", false), "MM").clicked() {
             app.open_dialog("defineName", json!({}));
         }
-        let use_in = small_button(ui, Icon::Function, "Use in Formula", "Use in Formula", true);
+        let use_in = kt(app, small_button(ui, Icon::Function, "Use in Formula", "Use in Formula", true), "MS");
         egui::Popup::menu(&use_in).show(|ui| {
             let names: Vec<String> = app.session.active().map(|d| d.wb.names.iter().map(|n| n.name.clone()).collect()).unwrap_or_default();
+            if names.is_empty() {
+                ui.label(egui::RichText::new("No names defined").italics());
+            }
             for n in names {
                 if ui.button(&n).clicked() {
                     let cur = app.editor.as_ref().map(|e| e.text.clone()).unwrap_or_else(|| "=".into());
@@ -1454,42 +1560,43 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
                 }
             }
         });
-        if small_button(ui, Icon::Table, "Create from Selection", "Create from Selection", false).clicked() {
+        if kt(app, small_button(ui, Icon::Table, "Create from Selection", "Create from Selection", false), "MC").clicked() {
             act(app, "formulas.createFromSelection", json!({}));
         }
     });
     sep(ui);
+    // Formula Auditing: two columns of three rows (the card holds three 23 px rows), then Watch Window.
     ui.vertical(|ui| {
-        if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
+        if kt(app, small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false), "MP").clicked()
             && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
         {
             app.grid.trace = Some(r);
         }
-        if small_button(ui, Icon::Trace, "Trace Dependents", "Trace Dependents", false).clicked()
+        if kt(app, small_button(ui, Icon::Trace, "Trace Dependents", "Trace Dependents", false), "MD").clicked()
             && let Ok(r) = app.run("formulas.traceDependents", json!({}))
         {
             app.grid.trace = Some(r);
         }
-        if small_button(ui, Icon::Close, "Remove Arrows", "Remove Arrows", false).clicked() {
+        if kt(app, small_button(ui, Icon::Close, "Remove Arrows", "Remove Arrows", false), "MA").clicked() {
             app.grid.trace = None;
         }
     });
     ui.vertical(|ui| {
-        if small_button(ui, Icon::Fx, "Show Formulas", "Show Formulas (⌃`)", false).clicked() {
+        if kt(app, small_button(ui, Icon::Fx, "Show Formulas", "Show Formulas (⌃`)", false), "MH").clicked() {
             act(app, "formulas.showFormulas", json!({}));
         }
-        if small_button(ui, Icon::Validation, "Error Checking", "Error Checking", false).clicked() {
+        if kt(app, small_button(ui, Icon::Validation, "Error Checking", "Error Checking", false), "MK").clicked() {
             app.open_dialog("errorChecking", json!({}));
         }
-        if small_button(ui, Icon::Calc, "Evaluate Formula", "Evaluate Formula", false).clicked() {
+        if kt(app, small_button(ui, Icon::Calc, "Evaluate Formula", "Evaluate Formula", false), "MV").clicked() {
             app.open_dialog("evaluateFormula", json!({}));
         }
-        if small_button(ui, Icon::Search, "Watch Window", "Watch Window", false).clicked() {
-            app.grid.pane = Some("watch".into());
-        }
     });
+    if kt(app, big_button(ui, Icon::Search, "Watch\nWindow", "Watch Window", false), "MW").clicked() {
+        app.grid.pane = Some("watch".into());
+    }
     sep(ui);
-    let co = big_button(ui, Icon::Calc, "Calculation\nOptions", "Calculation Options", true);
+    let co = kt(app, big_button(ui, Icon::Calc, "Calculation\nOptions", "Calculation Options", true), "MX");
     egui::Popup::menu(&co).show(|ui| {
         menu_items(
             app,
@@ -1502,10 +1609,10 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         );
     });
     ui.vertical(|ui| {
-        if small_button(ui, Icon::Calc, "Calculate Now", "Calculate Now (F9)", false).clicked() {
+        if kt(app, small_button(ui, Icon::Calc, "Calculate Now", "Calculate Now (F9)", false), "MB").clicked() {
             act(app, "formulas.calculateNow", json!({}));
         }
-        if small_button(ui, Icon::Sheet, "Calculate Sheet", "Calculate Sheet (⇧F9)", false).clicked() {
+        if kt(app, small_button(ui, Icon::Sheet, "Calculate Sheet", "Calculate Sheet (⇧F9)", false), "MJ").clicked() {
             act(app, "formulas.calculateSheet", json!({}));
         }
     });
@@ -1722,16 +1829,16 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn automate(app: &mut SheetApp, ui: &mut Ui) {
-    if big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false).clicked() {
+    if kt(app, big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false), "YC").clicked() {
         app.open_dialog("commandSearch", json!({}));
     }
-    if big_button(ui, Icon::Script, "Agent\nControl", "How agents drive GridCraft (MCP / control channel)", false).clicked() {
+    if kt(app, big_button(ui, Icon::Script, "Agent\nControl", "How agents drive GridCraft (MCP / control channel)", false), "YA").clicked() {
         app.open_dialog("agents", json!({}));
     }
-    if big_button(ui, Icon::Script, "Action\nJournal", "Every command run in this session (replayable)", false).clicked() {
+    if kt(app, big_button(ui, Icon::Script, "Action\nJournal", "Every command run in this session (replayable)", false), "YJ").clicked() {
         app.open_dialog("journal", json!({}));
     }
-    if big_button(ui, Icon::Script, "About\nGridCraft", "Version, contributors and the AI models that helped", false).clicked() {
+    if kt(app, big_button(ui, Icon::Script, "About\nGridCraft", "Version, contributors and the AI models that helped", false), "YG").clicked() {
         app.open_dialog("about", json!({}));
     }
 }

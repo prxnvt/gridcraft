@@ -318,3 +318,66 @@ fn ordinary_typing_editor_shortcuts_and_altgr_remain_text_input() {
     assert_eq!(h.state().keytips.prefix(), None, "macOS Option must remain available for text composition");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "é");
 }
+
+#[test]
+fn tab_keys_switch_tabs_and_keep_keytips_on() {
+    let mut h = harness(blank());
+    for (k, tab) in [(Key::M, "Formulas"), (Key::N, "Insert"), (Key::Y, "Automate"), (Key::H, "Home")] {
+        sequence(&mut h, &[k], true);
+        assert_eq!(h.state().ui.ribbon_tab, tab);
+        assert_eq!(h.state().keytips.prefix(), Some(k.name()), "the tab's own keytips show next");
+        key(&mut h, Key::Escape);
+        key(&mut h, Key::Escape);
+        assert_eq!(h.state().keytips.prefix(), None);
+    }
+}
+
+/// Every button the Formulas tab paints registers a keytip.
+#[test]
+fn formulas_tab_buttons_all_have_keytips() {
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::M], true);
+    h.run_steps(2);
+    let registered = h.state().keytips.reachable().to_vec();
+    for seq in
+        ["MF", "MU", "MI", "ML", "MT", "ME", "MO", "MG", "MQ", "MN", "MM", "MS", "MC", "MP", "MD", "MA", "MH", "MK", "MV", "MW", "MX", "MB", "MJ"]
+    {
+        assert!(registered.iter().any(|s| s == seq), "{seq} is not registered: {registered:?}");
+    }
+    let mut unique = registered.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), registered.len(), "two buttons share a keytip: {registered:?}");
+}
+
+#[test]
+fn a_registered_keytip_clicks_its_button() {
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::M, Key::W], true);
+    assert_eq!(h.state().grid.pane.as_deref(), Some("watch"), "MW opens the Watch Window");
+    assert_eq!(h.state().keytips.prefix(), None);
+    // A menu button's keytip opens its menu.
+    sequence(&mut h, &[Key::M, Key::X], true);
+    h.get_by_label("Manual");
+    // A sequence of a tab that isn't showing does nothing.
+    key(&mut h, Key::Escape);
+    key(&mut h, Key::Escape);
+    key(&mut h, Key::Escape);
+    sequence(&mut h, &[Key::H], true);
+    letter(&mut h, Key::W, true);
+    assert!(h.state().editor.is_none());
+}
+
+#[test]
+fn insert_and_automate_buttons_have_keytips() {
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::N], true);
+    h.run_steps(2);
+    for seq in ["NV", "NT", "NP", "NS", "NI", "NR", "NB", "NN", "NE", "ND", "NA", "NY", "NK", "NL", "NM", "NX", "NH", "NU"] {
+        assert!(h.state().keytips.reachable().iter().any(|s| s == seq), "{seq}");
+    }
+    key(&mut h, Key::Escape);
+    key(&mut h, Key::Escape);
+    sequence(&mut h, &[Key::Y, Key::C], true);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("commandSearch"));
+}

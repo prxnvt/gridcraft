@@ -765,8 +765,8 @@ impl SheetApp {
         }
         for action in actions {
             match action {
-                keytips::Action::Home => {
-                    self.run_or_alert("ui.ribbonTab", json!({"tab": "Home"}));
+                keytips::Action::Tab(tab) => {
+                    self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
                     self.ui.ribbon_collapsed = false;
                 }
                 keytips::Action::Command(id) => self.run_or_alert(id, json!({})),
