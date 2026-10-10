@@ -388,3 +388,41 @@ fn confirm_question_reruns_the_command_on_ok() {
     assert!(h.state().confirm.is_none());
     assert_eq!(value(&h, "A1"), Value::Number(5.0));
 }
+
+/// Counts up a little each frame until it reaches 50.
+struct Ticker(u32);
+
+impl gridcraft_engine::job::Job for Ticker {
+    fn label(&self) -> String {
+        "Ticker".into()
+    }
+    fn step(&mut self, _s: &mut Session, _b: gridcraft_engine::job::Budget) -> gridcraft_engine::job::Step {
+        self.0 += 5;
+        if self.0 >= 50 {
+            gridcraft_engine::job::Step::Done(Ok(json!({"n": self.0})))
+        } else {
+            gridcraft_engine::job::Step::Continue(self.0.to_string())
+        }
+    }
+    fn stop(&mut self, _s: &mut Session) -> gridcraft_engine::Result<serde_json::Value> {
+        Ok(json!({"n": self.0}))
+    }
+}
+
+#[test]
+fn jobs_run_per_frame_and_escape_pauses_them() {
+    use gridcraft_engine::job::JobState;
+    let mut h = harness(blank());
+    h.state_mut().session.start_job(Box::new(Ticker(0))).unwrap();
+    h.run_steps(2);
+    assert!(matches!(h.state().session.job_state, JobState::Running { .. }));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(matches!(h.state().session.job_state, JobState::Paused { .. }), "{:?}", h.state().session.job_state);
+    h.run_steps(3);
+    assert!(matches!(h.state().session.job_state, JobState::Paused { .. }), "a paused job waits for an answer");
+    // The pause question's Continue (Enter) resumes it; it then runs to the end.
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(12);
+    assert!(h.state().session.job.is_none());
+    assert!(h.state().message.is_none());
+}

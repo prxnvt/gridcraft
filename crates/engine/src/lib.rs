@@ -8,10 +8,12 @@
 
 pub mod catalog;
 pub mod cf;
+pub mod clock;
 pub mod cmd;
 pub mod display;
 pub mod fill;
 pub mod io;
+pub mod job;
 pub mod pivot;
 pub mod report;
 pub mod sample;
@@ -204,6 +206,9 @@ pub struct Session {
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// Long-running work (Solver), advanced by the host a slice at a time.
+    pub job: Option<Box<dyn job::Job>>,
+    pub job_state: job::JobState,
 }
 
 impl Session {

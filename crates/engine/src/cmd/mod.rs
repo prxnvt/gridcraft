@@ -120,6 +120,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(spelling::specs());
         v.extend(pivot::specs());
         v.extend(whatif::specs());
+        v.extend(crate::job::specs());
         v.extend(print::specs());
         v
     })

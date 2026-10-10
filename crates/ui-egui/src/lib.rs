@@ -610,6 +610,7 @@ impl SheetApp {
         }
         self.effective_dark = ctx.theme() == egui::Theme::Dark;
         control::poll(self, ctx);
+        self.drive_job(ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
@@ -626,6 +627,23 @@ impl SheetApp {
         }
         if self.session.active().is_none() {
             self.session.new_workbook();
+        }
+    }
+
+    /// Advances a long-running job (Solver) a slice per frame; Esc pauses it.
+    fn drive_job(&mut self, ctx: &egui::Context) {
+        use gridcraft_engine::job::JobState;
+        if matches!(self.session.job_state, JobState::Running { .. }) {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.session.pause_job(json!({"reason": "user"}));
+            } else {
+                self.session.step_job(16.0);
+                self.after_engine();
+                ctx.request_repaint();
+            }
+        }
+        if let Some((label, Err(e))) = self.session.take_job_result() {
+            self.message = Some((label, clean_error(&e)));
         }
     }
 
@@ -667,6 +685,7 @@ impl SheetApp {
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::confirm_box(self, &ctx);
+        widgets::job_paused(self, &ctx);
         widgets::toast(self, &ctx);
         control::issue_screenshots(self, &ctx);
         control::collect_screenshots(self, &ctx);

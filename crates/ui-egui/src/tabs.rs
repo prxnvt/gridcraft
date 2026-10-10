@@ -199,6 +199,12 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Point => "Point",
                 };
                 ui.label(egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                if let gridcraft_engine::job::JobState::Running { label, progress } = &app.session.job_state {
+                    ui.add_space(12.0);
+                    ui.add(egui::Spinner::new().size(12.0).color(t.text_dim));
+                    let text = if progress.is_empty() { format!("{label}…") } else { format!("{label}: {progress}") };
+                    ui.label(egui::RichText::new(text).font(theme::ui_font(12.5)).color(t.text_dim));
+                }
                 if let Some(d) = app.session.active() {
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);

@@ -243,6 +243,38 @@ pub fn confirm_box(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// A paused long-running job: continue it or stop with the best result so far.
+pub fn job_paused(app: &mut SheetApp, ctx: &egui::Context) {
+    let gridcraft_engine::job::JobState::Paused { label, info } = app.session.job_state.clone() else { return };
+    // A job that pauses with a dialog of its own (Solver's Show Trial Solution) shows that.
+    if info.get("dialog").is_some() {
+        return;
+    }
+    let mut answer: Option<bool> = None;
+    egui::Modal::new(egui::Id::new("job_paused")).show(ctx, |ui| {
+        ui.set_width(360.0);
+        ui.label(egui::RichText::new(&label).strong());
+        ui.label(format!("{label} is paused. Continue, or stop and keep the best result found so far?"));
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(" Stop ").clicked() {
+                answer = Some(false);
+            }
+            if ui.button(" Continue ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                answer = Some(true);
+            }
+        });
+    });
+    match answer {
+        Some(true) => app.session.resume_job(),
+        Some(false) => {
+            app.session.stop_job();
+            app.after_engine();
+        }
+        None => {}
+    }
+}
+
 pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((msg, at)) = app.toast.clone() else { return };
     if crate::now_ms() - at > 2500.0 {
