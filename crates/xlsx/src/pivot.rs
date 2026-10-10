@@ -18,8 +18,8 @@ use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{
-    BASE_NEXT, BASE_PREVIOUS, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotSubtotals, PivotTable,
-    PivotValue, Workbook,
+    BASE_NEXT, BASE_PREVIOUS, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotManualGroup, PivotNamedGroup, PivotNumberGroup,
+    PivotShowAs, PivotSort, PivotSubtotals, PivotTable, PivotValue, Workbook,
 };
 
 use crate::IoError;
@@ -144,8 +144,24 @@ fn group_by_name(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "quarters",
         PivotDateGroup::Months => "months",
         PivotDateGroup::Days => "days",
+        PivotDateGroup::Hours => "hours",
+        PivotDateGroup::Minutes => "minutes",
+        PivotDateGroup::Seconds => "seconds",
         PivotDateGroup::None => "range",
     }
+}
+
+fn group_from_name(s: &str) -> Option<PivotDateGroup> {
+    Some(match s {
+        "years" => PivotDateGroup::Years,
+        "quarters" => PivotDateGroup::Quarters,
+        "months" => PivotDateGroup::Months,
+        "days" => PivotDateGroup::Days,
+        "hours" => PivotDateGroup::Hours,
+        "minutes" => PivotDateGroup::Minutes,
+        "seconds" => PivotDateGroup::Seconds,
+        _ => return None,
+    })
 }
 
 fn group_caption(g: PivotDateGroup) -> &'static str {
@@ -154,8 +170,19 @@ fn group_caption(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "Quarters",
         PivotDateGroup::Months => "Months",
         PivotDateGroup::Days => "Days",
+        PivotDateGroup::Hours => "Hours",
+        PivotDateGroup::Minutes => "Minutes",
+        PivotDateGroup::Seconds => "Seconds",
         PivotDateGroup::None => "Group",
     }
+}
+
+/// The "a-b" caption of the number range starting at `lo` (as the engine labels it).
+fn range_caption(start: f64, by: f64, lo: f64) -> String {
+    let t = |x: f64| number_to_text((x * 1e9).round() / 1e9);
+    let whole = start.fract() == 0.0 && by.fract() == 0.0 && by >= 1.0;
+    let hi = if whole { lo + by - 1.0 } else { lo + by };
+    format!("{}-{}", t(lo), t(hi))
 }
 
 /// `2024-03-05T00:00:00` for a date serial.
@@ -251,6 +278,14 @@ struct Group {
     end: f64,
     /// Group item captions, including the `<start` and `>end` items.
     items: Vec<String>,
+    /// Days per group (days grouping) or the number range step.
+    interval: f64,
+    /// A number range grouping (`groupBy="range"`).
+    number: bool,
+    /// The bounds were set by the user (`autoStart` / `autoEnd` off).
+    fixed: bool,
+    /// Manual grouping: for each base shared item, its group item.
+    discrete: Option<Vec<u32>>,
 }
 
 struct CField {
@@ -266,6 +301,10 @@ struct CField {
 }
 
 impl CField {
+    /// Grouped by date parts (its values are dates).
+    fn date_grouped(&self) -> bool {
+        self.group.as_ref().is_some_and(|g| !g.number && g.discrete.is_none())
+    }
     /// Item captions the PivotTable's `<item x>` indices refer to.
     fn item_labels(&self) -> Vec<String> {
         match &self.group {
@@ -551,34 +590,84 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             && datetime_from_serial(wb.date_system, s.min).is_some()
             && datetime_from_serial(wb.date_system, s.max).is_some()
     };
-    // (base column field, groupings fine → coarse)
-    let mut groupings: Vec<(usize, Vec<PivotDateGroup>)> = Vec::new();
+    // Number ranges group the base field in place.
+    for pf in &axis {
+        let (Some(ng), Some(b)) = (pf.number_group, find(&fields, &pf.source_col)) else { continue };
+        if let Some(f) = fields.get_mut(b)
+            && f.group.is_none()
+            && f.stats.number
+            && !f.stats.text
+        {
+            f.group = Some(Group {
+                by: PivotDateGroup::None,
+                base: b,
+                par: None,
+                start: ng.start,
+                end: ng.end,
+                items: range_items(ng.start, ng.end, ng.by),
+                interval: ng.by,
+                number: true,
+                fixed: true,
+                discrete: None,
+            });
+        }
+    }
+    // (base column field, groupings fine → coarse, day interval, fixed start, fixed end)
+    let mut groupings: Vec<(usize, Vec<PivotDateGroup>, u32, Option<f64>, Option<f64>)> = Vec::new();
     for pf in &axis {
         let Some(b) = find(&fields, &pf.source_col) else { continue };
-        if pf.date_group == PivotDateGroup::None || !fields.get(b).is_some_and(groupable) {
+        if pf.date_group == PivotDateGroup::None || pf.number_group.is_some() || !fields.get(b).is_some_and(groupable) {
             continue;
         }
-        match groupings.iter_mut().find(|(x, _)| *x == b) {
-            Some((_, v)) => {
-                if !v.contains(&pf.date_group) {
-                    v.push(pf.date_group);
+        match groupings.iter_mut().find(|g| g.0 == b) {
+            Some(g) => {
+                if !g.1.contains(&pf.date_group) {
+                    g.1.push(pf.date_group);
                 }
+                if pf.date_group == PivotDateGroup::Days && pf.group_days > 1 {
+                    g.2 = pf.group_days;
+                }
+                g.3 = g.3.or(pf.group_start);
+                g.4 = g.4.or(pf.group_end);
             }
-            None => groupings.push((b, vec![pf.date_group])),
+            None => groupings.push((
+                b,
+                vec![pf.date_group],
+                if pf.date_group == PivotDateGroup::Days { pf.group_days } else { 0 },
+                pf.group_start,
+                pf.group_end,
+            )),
         }
     }
     let fineness = |g: &PivotDateGroup| match g {
-        PivotDateGroup::Days => 0,
-        PivotDateGroup::Months => 1,
-        PivotDateGroup::Quarters => 2,
-        PivotDateGroup::Years => 3,
-        PivotDateGroup::None => 4,
+        PivotDateGroup::Seconds => 0,
+        PivotDateGroup::Minutes => 1,
+        PivotDateGroup::Hours => 2,
+        PivotDateGroup::Days => 3,
+        PivotDateGroup::Months => 4,
+        PivotDateGroup::Quarters => 5,
+        PivotDateGroup::Years => 6,
+        PivotDateGroup::None => 7,
     };
-    for (b, list) in groupings.iter_mut() {
+    for (b, list, interval, fixed_start, fixed_end) in groupings.iter_mut() {
         list.sort_by_key(fineness);
         let (min, max) = fields.get(*b).map(|f| (f.stats.min, f.stats.max)).unwrap_or((0.0, 0.0));
-        let (start, end) = (min.floor(), max.floor() + 1.0);
-        let make = |by: PivotDateGroup| Group { by, base: *b, par: None, start, end, items: group_items(wb.date_system, by, start, end) };
+        let start = fixed_start.unwrap_or(min.floor());
+        let end = fixed_end.unwrap_or(max.floor() + 1.0);
+        let fixed = fixed_start.is_some() || fixed_end.is_some();
+        let interval = *interval;
+        let make = |by: PivotDateGroup| Group {
+            by,
+            base: *b,
+            par: None,
+            start,
+            end,
+            items: group_items(wb.date_system, by, start, end, if by == PivotDateGroup::Days { interval } else { 0 }),
+            interval: if by == PivotDateGroup::Days { interval.max(1) as f64 } else { 1.0 },
+            number: false,
+            fixed,
+            discrete: None,
+        };
         let mut prev = *b;
         for (k, by) in list.iter().enumerate() {
             if k == 0 {
@@ -610,10 +699,18 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             prev = new;
         }
     }
+    // Manual groups need their base field's shared items.
+    for mg in &pt.manual_groups {
+        if let Some(b) = find(&fields, &mg.base)
+            && let Some(f) = fields.get_mut(b)
+        {
+            f.itemized = true;
+        }
+    }
     for pf in &axis {
         let Some(b) = find(&fields, &pf.source_col) else { continue };
-        let grouped = fields.iter().any(|f| f.group.as_ref().is_some_and(|g| g.base == b && g.by == pf.date_group));
-        if !(grouped && pf.date_group != PivotDateGroup::None)
+        let grouped = fields.iter().any(|f| f.group.as_ref().is_some_and(|g| g.base == b && (g.number || g.by == pf.date_group)));
+        if !(grouped && (pf.date_group != PivotDateGroup::None || pf.number_group.is_some()))
             && let Some(f) = fields.get_mut(b)
             && f.group.is_none()
         {
@@ -649,6 +746,47 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             }
         }
     }
+    // Manual group fields: each base item maps to its group, or to an item of its own.
+    for mg in &pt.manual_groups {
+        let Some(b) = find(&fields, &mg.base) else { continue };
+        if fields.iter().any(|f| same(&f.name, &mg.name)) {
+            continue;
+        }
+        let base_labels: Vec<String> = fields.get(b).map(|f| f.items.iter().map(label).collect()).unwrap_or_default();
+        let mut items: Vec<String> = Vec::new();
+        let mut map: Vec<u32> = Vec::with_capacity(base_labels.len());
+        for l in &base_labels {
+            let name = mg.groups.iter().find(|g| g.items.iter().any(|i| same(i, l))).map(|g| g.name.clone()).unwrap_or_else(|| l.clone());
+            let at = match items.iter().position(|x| same(x, &name)) {
+                Some(p) => p,
+                None => {
+                    items.push(name);
+                    items.len() - 1
+                }
+            };
+            map.push(at as u32);
+        }
+        fields.push(CField {
+            name: mg.name.clone(),
+            col: None,
+            stats: Stats::default(),
+            items: vec![],
+            index: HashMap::new(),
+            itemized: false,
+            group: Some(Group {
+                by: PivotDateGroup::None,
+                base: b,
+                par: None,
+                start: 0.0,
+                end: 0.0,
+                items,
+                interval: 0.0,
+                number: false,
+                fixed: false,
+                discrete: Some(map),
+            }),
+        });
+    }
     // Records snapshot.
     let db_fields = fields.iter().filter(|f| f.col.is_some()).count() as u64;
     let records = if (rows.len() as u64).saturating_mul(db_fields) <= MAX_RECORD_CELLS {
@@ -666,7 +804,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
                         None => s.push_str(&item_xml(&v, wb.date_system, false)),
                     }
                 } else {
-                    s.push_str(&item_xml(&v, wb.date_system, f.group.is_some()));
+                    s.push_str(&item_xml(&v, wb.date_system, f.date_grouped()));
                 }
             }
             s.push_str("</r>");
@@ -678,7 +816,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     Some(Cache { fields, source_xml, records })
 }
 
-fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec<String> {
+fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64, interval: u32) -> Vec<String> {
     let mut v = vec![format!("<{}", mdy(sys, start))];
     match by {
         PivotDateGroup::Years => {
@@ -690,6 +828,18 @@ fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec
         }
         PivotDateGroup::Quarters => v.extend((1..=4).map(|q| format!("Qtr{q}"))),
         PivotDateGroup::Months => v.extend(MONTHS.iter().map(|m| m.to_string())),
+        PivotDateGroup::Hours => v.extend((0..24).map(|h| format!("{} {}", if h % 12 == 0 { 12 } else { h % 12 }, if h < 12 { "AM" } else { "PM" }))),
+        PivotDateGroup::Minutes | PivotDateGroup::Seconds => v.extend((0..60).map(|m| format!(":{m:02}"))),
+        PivotDateGroup::Days if interval > 1 => {
+            let step = interval as f64;
+            let mut lo = start.floor();
+            let mut n = 0;
+            while lo < end && n < 100_000 {
+                v.push(format!("{} - {}", mdy(sys, lo), mdy(sys, lo + step - 1.0)));
+                lo += step;
+                n += 1;
+            }
+        }
         PivotDateGroup::Days | PivotDateGroup::None => {
             const DAYS: [u32; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
             for (m, n) in MONTHS.iter().zip(DAYS) {
@@ -700,6 +850,22 @@ fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec
         }
     }
     v.push(format!(">{}", mdy(sys, end)));
+    v
+}
+
+/// Group items of a number range grouping: `<start`, the ranges, `>end`.
+fn range_items(start: f64, end: f64, by: f64) -> Vec<String> {
+    let t = |x: f64| number_to_text((x * 1e9).round() / 1e9);
+    let by = if by > 0.0 && by.is_finite() { by } else { 1.0 };
+    let mut v = vec![format!("<{}", t(start))];
+    let mut lo = start;
+    let mut n = 0;
+    while lo <= end && n < 100_000 {
+        v.push(range_caption(start, by, lo));
+        lo += by;
+        n += 1;
+    }
+    v.push(format!(">{}", t(end)));
     v
 }
 
@@ -732,7 +898,7 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
     let _ = write!(s, "<cacheSource type=\"worksheet\">{}</cacheSource>", c.source_xml);
     let _ = write!(s, "<cacheFields count=\"{}\">", c.fields.len());
     for f in &c.fields {
-        let fmt = if f.group.is_some() { 14 } else { 0 };
+        let fmt = if f.date_grouped() { 14 } else { 0 };
         let _ = write!(s, "<cacheField name=\"{}\" numFmtId=\"{fmt}\"", esc_attr(&f.name));
         if f.col.is_none() {
             s.push_str(" databaseField=\"0\"");
@@ -791,11 +957,40 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
                 let _ = write!(s, " par=\"{p}\"");
             }
             let _ = write!(s, " base=\"{}\">", g.base);
-            let _ = write!(s, "<rangePr groupBy=\"{}\"", group_by_name(g.by));
-            if let (Some(a), Some(b)) = (iso(sys, g.start), iso(sys, g.end)) {
-                let _ = write!(s, " startDate=\"{a}\" endDate=\"{b}\"");
+            match &g.discrete {
+                Some(map) => {
+                    let _ = write!(s, "<discretePr count=\"{}\">", map.len());
+                    for v in map {
+                        let _ = write!(s, "<x v=\"{v}\"/>");
+                    }
+                    s.push_str("</discretePr>");
+                }
+                None => {
+                    let _ = write!(s, "<rangePr");
+                    if g.fixed {
+                        s.push_str(" autoStart=\"0\" autoEnd=\"0\"");
+                    }
+                    let _ = write!(s, " groupBy=\"{}\"", group_by_name(g.by));
+                    if g.number {
+                        let _ = write!(
+                            s,
+                            " startNum=\"{}\" endNum=\"{}\" groupInterval=\"{}\"",
+                            crate::xml::num(g.start),
+                            crate::xml::num(g.end),
+                            crate::xml::num(g.interval)
+                        );
+                    } else {
+                        if let (Some(a), Some(b)) = (iso(sys, g.start), iso(sys, g.end)) {
+                            let _ = write!(s, " startDate=\"{a}\" endDate=\"{b}\"");
+                        }
+                        if g.interval > 1.0 {
+                            let _ = write!(s, " groupInterval=\"{}\"", crate::xml::num(g.interval));
+                        }
+                    }
+                    s.push_str("/>");
+                }
             }
-            let _ = write!(s, "/><groupItems count=\"{}\">", g.items.len());
+            let _ = write!(s, "<groupItems count=\"{}\">", g.items.len());
             for it in &g.items {
                 let _ = write!(s, "<s v=\"{}\"/>", esc_attr(it));
             }
@@ -809,7 +1004,13 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
 
 /// Where each of `pt`'s axis fields (rows, then columns) is among the cache fields.
 fn axis_map_for(fields: &[CField], pt: &PivotTable) -> Vec<Option<usize>> {
-    let find = |name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    // Source columns, else manual group fields.
+    let find = |name: &str| {
+        fields
+            .iter()
+            .position(|f| f.col.is_some() && same(&f.name, name))
+            .or_else(|| fields.iter().position(|f| f.group.as_ref().is_some_and(|g| g.discrete.is_some()) && same(&f.name, name)))
+    };
     pt.rows
         .iter()
         .chain(pt.columns.iter())
@@ -962,7 +1163,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
             PivotLayout::Outline => s.push_str(" compact=\"0\""),
             PivotLayout::Tabular => s.push_str(" compact=\"0\" outline=\"0\""),
         }
-        if f.group.is_some() {
+        if f.date_grouped() {
             s.push_str(" numFmtId=\"14\"");
         }
         let filter = hidden.get(&i).copied();
@@ -1189,17 +1390,55 @@ struct FieldIn {
     database: bool,
     /// Shared item captions.
     items: Vec<String>,
-    /// (base field, grouping, group item captions); grouping `None` = unsupported grouping.
-    group: Option<(Option<usize>, Option<PivotDateGroup>, Vec<String>)>,
+    group: Option<GroupIn>,
     formula: bool,
+}
+
+/// A cache field's `fieldGroup`.
+#[derive(Clone, Debug, Default)]
+struct GroupIn {
+    base: Option<usize>,
+    /// Date part; `None` with neither `range` nor `discrete` = a grouping we don't know.
+    by: Option<PivotDateGroup>,
+    items: Vec<String>,
+    /// Number range: (start, end, step).
+    range: Option<(f64, f64, f64)>,
+    days: u32,
+    /// User-set bounds (autoStart / autoEnd off), as date serials.
+    start: Option<f64>,
+    end: Option<f64>,
+    /// Manual grouping: base shared item → group item.
+    discrete: Option<Vec<u32>>,
 }
 
 impl FieldIn {
     fn labels(&self) -> &[String] {
         match &self.group {
-            Some((_, _, items)) if !items.is_empty() => items,
+            Some(g) if !g.items.is_empty() => &g.items,
             _ => &self.items,
         }
+    }
+}
+
+/// What a cache field means for a PivotTable field.
+#[derive(Clone, Debug, Default)]
+struct FieldRef {
+    name: String,
+    date: PivotDateGroup,
+    days: u32,
+    start: Option<f64>,
+    end: Option<f64>,
+    number: Option<PivotNumberGroup>,
+    manual: Option<PivotManualGroup>,
+}
+
+impl FieldRef {
+    fn apply(&self, f: &mut PivotField) {
+        f.date_group = self.date;
+        f.group_days = self.days;
+        f.group_start = self.start;
+        f.group_end = self.end;
+        f.number_group = self.number;
     }
 }
 
@@ -1283,15 +1522,35 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
             let items = f.child("sharedItems").map(|si| si.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
             let group = f.child("fieldGroup").map(|g| {
                 let base = g.attr_u32("base").map(|b| b as usize);
-                let by = match g.child("rangePr").map(|r| r.attr("groupBy").unwrap_or("range")) {
-                    Some("years") => Some(PivotDateGroup::Years),
-                    Some("quarters") => Some(PivotDateGroup::Quarters),
-                    Some("months") => Some(PivotDateGroup::Months),
-                    Some("days") => Some(PivotDateGroup::Days),
-                    _ => None,
-                };
-                let gi = g.child("groupItems").map(|gi| gi.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
-                (base, by, gi)
+                let items = g.child("groupItems").map(|gi| gi.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
+                let mut gin = GroupIn { base, items, ..GroupIn::default() };
+                if let Some(rp) = g.child("rangePr") {
+                    let fixed = !rp.flag("autoStart", true) || !rp.flag("autoEnd", true);
+                    let interval = rp.attr("groupInterval").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                    match rp.attr("groupBy").unwrap_or("range") {
+                        "range" => {
+                            let n = |k: &str| rp.attr(k).and_then(|v| v.parse::<f64>().ok());
+                            if let (Some(a), Some(b)) = (n("startNum"), n("endNum")) {
+                                gin.range = Some((a, b, interval));
+                            }
+                        }
+                        other => {
+                            gin.by = group_from_name(other);
+                            let date = |k: &str| rp.attr(k).and_then(|v| crate::sheet_read::parse_iso_datetime(v, sys));
+                            if fixed {
+                                gin.start = date("startDate");
+                                gin.end = date("endDate");
+                            }
+                            if gin.by == Some(PivotDateGroup::Days) && interval > 1.0 {
+                                gin.days = interval as u32;
+                            }
+                        }
+                    }
+                }
+                if let Some(dp) = g.child("discretePr") {
+                    gin.discrete = Some(dp.children.iter().filter_map(|x| x.attr_u32("v")).collect());
+                }
+                gin
             });
             fields.push(FieldIn {
                 name: f.attr("name").unwrap_or("").to_string(),
@@ -1353,30 +1612,46 @@ fn items_of(e: &El) -> Vec<&El> {
 }
 
 /// (source column name, date grouping) of a cache field used on an axis.
-fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, PivotDateGroup)> {
+fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<FieldRef> {
     let f = cache.fields.get(i)?;
     if f.formula {
         cx.warn("calculated PivotTable fields are not supported");
         return None;
     }
-    match &f.group {
-        Some((base, by, _)) => {
-            let by = match by {
-                Some(b) => *b,
-                None => {
-                    cx.warn(format!("PivotTable grouping of \"{}\" is not supported; the field is ungrouped", f.name));
-                    PivotDateGroup::None
-                }
-            };
-            let base_name = if f.database { f.name.clone() } else { base.and_then(|b| cache.fields.get(b))?.name.clone() };
-            Some((base_name, by))
-        }
-        None if !f.database => {
+    let Some(g) = &f.group else {
+        if !f.database {
             cx.warn(format!("PivotTable field \"{}\" (grouped items) is not supported", f.name));
-            None
+            return None;
         }
-        None => Some((f.name.clone(), PivotDateGroup::None)),
+        return Some(FieldRef { name: f.name.clone(), ..FieldRef::default() });
+    };
+    let base = g.base.and_then(|b| cache.fields.get(b));
+    // Manual groups: a field of its own whose items group the base field's items.
+    if let Some(map) = &g.discrete {
+        let base = base?;
+        let mut groups: Vec<PivotNamedGroup> = Vec::new();
+        for (k, gi) in map.iter().enumerate() {
+            let (Some(item), Some(group)) = (base.items.get(k), g.items.get(*gi as usize)) else { continue };
+            if same(item, group) {
+                continue;
+            }
+            match groups.iter_mut().find(|x| same(&x.name, group)) {
+                Some(x) => x.items.push(item.clone()),
+                None => groups.push(PivotNamedGroup { name: group.clone(), items: vec![item.clone()] }),
+            }
+        }
+        let manual = PivotManualGroup { name: f.name.clone(), base: base.name.clone(), groups };
+        return Some(FieldRef { name: f.name.clone(), manual: Some(manual), ..FieldRef::default() });
     }
+    let name = if f.database { f.name.clone() } else { base?.name.clone() };
+    if let Some((start, end, by)) = g.range {
+        return Some(FieldRef { name, number: Some(PivotNumberGroup { start, end, by }), ..FieldRef::default() });
+    }
+    let Some(date) = g.by else {
+        cx.warn(format!("PivotTable grouping of \"{}\" is not supported; the field is ungrouped", f.name));
+        return Some(FieldRef { name, ..FieldRef::default() });
+    };
+    Some(FieldRef { name, date, days: g.days, start: g.start, end: g.end, ..FieldRef::default() })
 }
 
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
@@ -1472,9 +1747,11 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 continue;
             }
             let i = i as usize;
-            let Some((name, group)) = field_ref(cx, cache, i) else { continue };
+            let Some(fr) = field_ref(cx, cache, i) else { continue };
+            let name = fr.name.clone();
             let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
-            let mut f = PivotField { source_col: name.clone(), date_group: group, sort: PivotSort::None, ..PivotField::default() };
+            let mut f = PivotField { source_col: name.clone(), sort: PivotSort::None, ..PivotField::default() };
+            fr.apply(&mut f);
             if let Some(e) = pf(i) {
                 f.caption = e.attr("name").map(str::to_string).filter(|c| !c.is_empty());
                 f.show_empty = e.flag("showAll", true);
@@ -1526,7 +1803,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     let mut page_filters = Vec::new();
     for p in &pages {
         let Some(i) = p.attr_i64("fld").filter(|i| *i >= 0).map(|i| i as usize) else { continue };
-        let Some((name, _)) = field_ref(cx, cache, i) else { continue };
+        let Some(name) = field_ref(cx, cache, i).map(|r| r.name) else { continue };
         let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
         let selected = if let Some(k) = p.attr_u32("item") {
             labels.get(k as usize).map(|l| vec![l.clone()])
@@ -1602,7 +1879,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             let (mut base_field, mut base_item) = (None, None);
             if show_as.needs_base_field()
                 && let Some(bf) = d.attr_u32("baseField").map(|b| b as usize)
-                && let Some((name, _)) = field_ref(cx, cache, bf)
+                && let Some(name) = field_ref(cx, cache, bf).map(|r| r.name)
             {
                 base_field = Some(name);
                 if show_as.needs_base_item() {
@@ -1623,6 +1900,22 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         }
     }
 
+    // Manual group fields used by the PivotTable.
+    let used: Vec<usize> = row_x
+        .iter()
+        .chain(col_x.iter())
+        .filter(|i| **i >= 0)
+        .map(|i| *i as usize)
+        .chain(pages.iter().filter_map(|p| p.attr_u32("fld").map(|v| v as usize)))
+        .collect();
+    for i in used {
+        if cache.fields.get(i).and_then(|f| f.group.as_ref()).is_some_and(|g| g.discrete.is_some())
+            && let Some(mg) = field_ref(cx, cache, i).and_then(|r| r.manual)
+            && !pt.manual_groups.iter().any(|m| same(&m.name, &mg.name))
+        {
+            pt.manual_groups.push(mg);
+        }
+    }
     // With subtotals off for the whole PivotTable, a field without subtotals is just following it.
     if !pt.subtotals {
         for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {

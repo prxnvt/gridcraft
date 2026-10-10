@@ -89,9 +89,27 @@ pub fn specs() -> Vec<CommandSpec> {
             "Group Field",
             ["PivotTable Analyze", "Group"],
             None,
-            "{pivot?, field, by: years|quarters|months|days|none, replace?}",
+            "{pivot?, field, by: years|quarters|months|days|hours|minutes|seconds|none | [several date levels] | range (numbers), start?, end? (number or date; default the data's own), interval? (number range step, default 10), days? (days per group, with by: days), replace?} (Group Field: applies to every PivotTable on the same source)",
             has_doc,
             group
+        ),
+        cmd!(
+            "pivot.groupSelection",
+            "Group Selection",
+            ["PivotTable Analyze", "Group"],
+            None,
+            "{pivot?, field, items: [\"East\", \"West\"], name?: \"Coast\", replace?} groups items into a new field (Region2) whose items are the groups and the other items",
+            has_doc,
+            group_selection
+        ),
+        cmd!(
+            "pivot.ungroup",
+            "Ungroup",
+            ["PivotTable Analyze", "Group"],
+            None,
+            "{pivot?, field, group?, replace?} removes a manual group (or the whole group field), or a field's date or number grouping",
+            has_doc,
+            ungroup
         ),
         cmd!(
             "pivot.collapse",
@@ -342,6 +360,9 @@ fn group_name(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "quarters",
         PivotDateGroup::Months => "months",
         PivotDateGroup::Days => "days",
+        PivotDateGroup::Hours => "hours",
+        PivotDateGroup::Minutes => "minutes",
+        PivotDateGroup::Seconds => "seconds",
     }
 }
 
@@ -485,7 +506,7 @@ fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, &pv::Source
     let replace = bool_param(p, "replace").unwrap_or(false);
     edit(s, |cx| {
         let pt = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| other("There's no such PivotTable."))?;
-        let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
+        let src = pv::read_pivot_source(&cx.wb, &pt, si).map_err(other)?;
         let mut new = pt.clone();
         let mut out = f(&mut new, &src, &cx.wb)?;
         if let Some(slot) = cx.sheet_mut(si)?.pivots.get_mut(pi) {
@@ -739,7 +760,7 @@ fn fields(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let pt = d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
     let mut out = pivot_json(&d.wb, si, pt);
-    let src = pv::read_source(&d.wb, &pt.source, si);
+    let src = pv::read_pivot_source(&d.wb, pt, si);
     let list: Vec<Json> = match &src {
         Ok(src) => src
             .headers
@@ -763,7 +784,7 @@ fn fields(s: &mut Session, p: &Json) -> Result<Json> {
                     "name": h,
                     "numeric": src.numeric.get(c).copied().unwrap_or(false),
                     "date": src.dates.get(c).copied().unwrap_or(false),
-                    "samples": pv::distinct_labels(&d.wb, src, c, PivotDateGroup::None, 5),
+                    "samples": pv::distinct_labels(&d.wb, src, c, &pv::Grouping::default(), 5),
                     "areas": areas,
                 })
             })
@@ -1069,39 +1090,261 @@ fn group_param(v: Option<&str>) -> Option<PivotDateGroup> {
         "quarters" | "quarter" => PivotDateGroup::Quarters,
         "months" | "month" => PivotDateGroup::Months,
         "days" | "day" => PivotDateGroup::Days,
+        "hours" | "hour" => PivotDateGroup::Hours,
+        "minutes" | "minute" => PivotDateGroup::Minutes,
+        "seconds" | "second" => PivotDateGroup::Seconds,
         "none" | "ungroup" => PivotDateGroup::None,
         _ => return None,
     })
 }
 
+/// Coarsest first.
+fn coarseness(g: PivotDateGroup) -> u8 {
+    match g {
+        PivotDateGroup::Years => 0,
+        PivotDateGroup::Quarters => 1,
+        PivotDateGroup::Months => 2,
+        PivotDateGroup::Days => 3,
+        PivotDateGroup::Hours => 4,
+        PivotDateGroup::Minutes => 5,
+        PivotDateGroup::Seconds => 6,
+        PivotDateGroup::None => 7,
+    }
+}
+
+/// A grouping to apply to a field.
+#[derive(Clone, Debug, PartialEq)]
+struct GroupSpec {
+    /// Date levels, coarsest first; `[None]` ungroups.
+    levels: Vec<PivotDateGroup>,
+    days: u32,
+    start: Option<f64>,
+    end: Option<f64>,
+    number: Option<PivotNumberGroup>,
+}
+
+/// Replaces `field`'s entries in the rows or columns with one per level (coarsest first).
+fn apply_grouping(pt: &mut PivotTable, field: &str, g: &GroupSpec) -> bool {
+    let mut found = false;
+    for area in [&mut pt.rows, &mut pt.columns] {
+        let Some(pos) = area.iter().position(|f| f.source_col.eq_ignore_ascii_case(field)) else { continue };
+        found = true;
+        let template = area.get(pos).cloned().unwrap_or_default();
+        area.retain(|f| !f.source_col.eq_ignore_ascii_case(field));
+        let base = PivotField {
+            date_group: PivotDateGroup::None,
+            group_days: 0,
+            group_start: g.start,
+            group_end: g.end,
+            number_group: g.number,
+            collapsed_items: vec![],
+            ..template
+        };
+        let made: Vec<PivotField> = if g.number.is_some() {
+            vec![base]
+        } else {
+            g.levels
+                .iter()
+                .map(|l| PivotField { date_group: *l, group_days: if *l == PivotDateGroup::Days { g.days } else { 0 }, ..base.clone() })
+                .collect()
+        };
+        for (k, f) in made.into_iter().enumerate() {
+            area.insert((pos + k).min(area.len()), f);
+        }
+    }
+    // The field's items change: filters on it start over.
+    for f in pt.filters.iter_mut() {
+        if f.source_col.eq_ignore_ascii_case(field) {
+            f.selected = None;
+        }
+    }
+    found
+}
+
+/// A number or date parameter (a serial, or text like `1/1/2026`).
+fn bound_param(wb: &Workbook, p: &Json, key: &str, cmd: &str) -> Result<Option<f64>> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::Number(n)) => Ok(n.as_f64()),
+        Some(Json::String(t)) if t.trim().is_empty() => Ok(None),
+        Some(Json::String(t)) => match gridcraft_core::parse::parse_input(t, wb.date_system).value {
+            gridcraft_core::Value::Number(n) => Ok(Some(n)),
+            _ => Err(bad(cmd, format!("`{key}` must be a number or a date"))),
+        },
+        Some(_) => Err(bad(cmd, format!("`{key}` must be a number or a date"))),
+    }
+}
+
 fn group(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.group";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
-    let raw = str_param(p, "by").unwrap_or("months");
-    let by = group_param(Some(raw)).ok_or_else(|| bad(C, format!("unknown grouping `{raw}` (years|quarters|months|days|none)")))?;
-    update(s, p, |pt, src, _| {
-        if by != PivotDateGroup::None {
-            let c = src.col(&field).ok_or_else(|| bad(C, format!("no field `{field}` in the source data")))?;
-            if !src.numeric.get(c).copied().unwrap_or(false) {
-                return Err(other("Cannot group that selection."));
+    let wb = s.doc()?.wb.clone();
+    let start = bound_param(&wb, p, "start", C)?;
+    let end = bound_param(&wb, p, "end", C)?;
+    let interval = p.get("interval").or_else(|| p.get("step")).and_then(Json::as_f64);
+    let by = p.get("by").cloned().unwrap_or(json!("months"));
+    let numeric_range = by.as_str().is_some_and(|b| matches!(b.to_ascii_lowercase().as_str(), "range" | "numbers" | "number"));
+    let mut levels: Vec<PivotDateGroup> = match &by {
+        Json::String(_) if numeric_range => vec![],
+        Json::String(b) => vec![group_param(Some(b)).ok_or_else(|| bad(C, format!("unknown grouping `{b}`")))?],
+        Json::Array(list) => {
+            let mut v = Vec::new();
+            for x in list {
+                let b = x.as_str().unwrap_or("");
+                let g = group_param(Some(b)).filter(|g| *g != PivotDateGroup::None).ok_or_else(|| bad(C, format!("unknown grouping `{b}`")))?;
+                if !v.contains(&g) {
+                    v.push(g);
+                }
             }
+            v
         }
-        let f = axis_field(C, pt, &field)?;
-        f.date_group = by;
-        f.collapsed_items.clear();
+        _ => return Err(bad(C, "`by` is a grouping or a list of date levels")),
+    };
+    levels.sort_by_key(|g| coarseness(*g));
+    let days = p.get("days").and_then(Json::as_u64).unwrap_or(0).min(32_767) as u32;
+    if days > 1 && levels != [PivotDateGroup::Days] {
+        return Err(other("A number of days applies when grouping by Days alone."));
+    }
+    let ungroup = levels == [PivotDateGroup::None];
+    let (si, pi) = find_pivot(s, p)?;
+    // Numbers group into ranges; automatic bounds are the data's smallest and largest values.
+    let pt0 = s.doc()?.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| other("There's no such PivotTable."))?;
+    let src = pv::read_pivot_source(&wb, &pt0, si).map_err(other)?;
+    let c = src.col(&field).ok_or_else(|| bad(C, format!("no field `{field}` in the source data")))?;
+    if !ungroup && !src.numeric.get(c).copied().unwrap_or(false) {
+        return Err(other("Cannot group that selection."));
+    }
+    let number = if numeric_range {
+        let nums: Vec<f64> = src.rows.iter().filter_map(|r| r.get(c).and_then(gridcraft_core::Value::as_f64)).collect();
+        let lo = start.unwrap_or_else(|| nums.iter().copied().fold(f64::INFINITY, f64::min));
+        let hi = end.unwrap_or_else(|| nums.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+        let step = interval.unwrap_or(10.0);
+        if !(step > 0.0 && step.is_finite()) || !lo.is_finite() || !hi.is_finite() || hi < lo {
+            return Err(other("Enter a starting number below the ending number, and a positive By."));
+        }
+        if (hi - lo) / step > 100_000.0 {
+            return Err(other("That makes too many groups."));
+        }
+        Some(PivotNumberGroup { start: lo, end: hi, by: step })
+    } else {
+        None
+    };
+    let spec = GroupSpec {
+        levels: if numeric_range || ungroup { vec![PivotDateGroup::None] } else { levels },
+        days,
+        start: if numeric_range || ungroup { None } else { start },
+        end: if numeric_range || ungroup { None } else { end },
+        number,
+    };
+    let sp = spec.clone();
+    let f2 = field.clone();
+    update(s, p, move |pt, _, _| {
+        if !apply_grouping(pt, &f2, &sp) {
+            return Err(bad(C, format!("`{f2}` isn't a row or column field")));
+        }
         Ok(json!({}))
     })?;
     // Grouping belongs to the cache: every PivotTable on the same source groups the field too.
-    let (si, pi) = find_pivot(s, p)?;
     let (names, errors) = update_sharing(s, si, pi, bool_param(p, "replace").unwrap_or(false), |pt| {
-        for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
-            if f.source_col.eq_ignore_ascii_case(&field) {
-                f.date_group = by;
-                f.collapsed_items.clear();
-            }
-        }
+        apply_grouping(pt, &field, &spec);
     })?;
     Ok(json!({"alsoGrouped": names, "errors": errors}))
+}
+
+/// The manual group fields of `pt` keep in step on every PivotTable sharing its cache.
+fn share_manual_groups(s: &mut Session, si: usize, pi: usize, replace: bool) -> Result<(Vec<String>, Vec<Json>)> {
+    let groups = s.doc()?.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).map(|p| p.manual_groups.clone()).unwrap_or_default();
+    update_sharing(s, si, pi, replace, move |pt| pt.manual_groups = groups.clone())
+}
+
+fn group_selection(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.groupSelection";
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
+    let items: Vec<String> =
+        p.get("items").and_then(Json::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    if items.is_empty() {
+        return Err(other("Select the items to group."));
+    }
+    if items.len() > 100_000 {
+        return Err(bad(C, "too many items"));
+    }
+    let name = str_param(p, "name").map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+    let (si, pi) = find_pivot(s, p)?;
+    let out = update(s, p, |pt, src, _| {
+        if src.col(&field).is_none() || pt.manual_groups.iter().any(|m| m.name.eq_ignore_ascii_case(&field)) {
+            return Err(bad(C, format!("`{field}` isn't a source field")));
+        }
+        if !in_axes(pt, &field) {
+            return Err(other("Group Selection works on a row or column field."));
+        }
+        let idx = match pt.manual_groups.iter().position(|m| m.base.eq_ignore_ascii_case(&field)) {
+            Some(i) => i,
+            None => {
+                // Excel names the new field after its base: Region2, Region3…
+                let fname = (2..1000)
+                    .map(|k| format!("{field}{k}"))
+                    .find(|n| src.col(n).is_none() && !pt.manual_groups.iter().any(|m| m.name.eq_ignore_ascii_case(n)))
+                    .unwrap_or_else(|| format!("{field}2"));
+                pt.manual_groups.push(PivotManualGroup { name: fname, base: field.clone(), groups: vec![] });
+                pt.manual_groups.len() - 1
+            }
+        };
+        let Some(mg) = pt.manual_groups.get_mut(idx) else { return Err(other("There's no such group.")) };
+        // Items move out of any group they were in.
+        for g in mg.groups.iter_mut() {
+            g.items.retain(|i| !items.iter().any(|x| x.eq_ignore_ascii_case(i)));
+        }
+        mg.groups.retain(|g| !g.items.is_empty());
+        let gname = name.clone().unwrap_or_else(|| {
+            (1..).map(|k| format!("Group{k}")).find(|n| !mg.groups.iter().any(|g| g.name.eq_ignore_ascii_case(n))).unwrap_or_else(|| "Group1".into())
+        });
+        if mg.groups.iter().any(|g| g.name.eq_ignore_ascii_case(&gname)) {
+            return Err(other("A group with that name already exists."));
+        }
+        mg.groups.push(PivotNamedGroup { name: gname.clone(), items: items.clone() });
+        let fname = mg.name.clone();
+        // The new field goes on the same axis, just outside its base.
+        if !in_axes(pt, &fname) {
+            for area in [&mut pt.rows, &mut pt.columns] {
+                if let Some(pos) = area.iter().position(|f| f.source_col.eq_ignore_ascii_case(&field)) {
+                    area.insert(pos, PivotField { source_col: fname.clone(), sort: PivotSort::Asc, ..PivotField::default() });
+                    break;
+                }
+            }
+        }
+        Ok(json!({"field": fname, "group": gname}))
+    })?;
+    share_manual_groups(s, si, pi, bool_param(p, "replace").unwrap_or(false))?;
+    Ok(out)
+}
+
+fn ungroup(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.ungroup";
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
+    let which = str_param(p, "group").map(str::to_string);
+    let (si, pi) = find_pivot(s, p)?;
+    let manual =
+        s.doc()?.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).is_some_and(|pt| pt.manual_groups.iter().any(|m| m.name.eq_ignore_ascii_case(&field)));
+    if !manual {
+        return group(s, &with(p, "by", json!("none")));
+    }
+    let out = update(s, p, |pt, _, _| {
+        let Some(i) = pt.manual_groups.iter().position(|m| m.name.eq_ignore_ascii_case(&field)) else { return Err(other("There's no such group.")) };
+        if let (Some(g), Some(mg)) = (&which, pt.manual_groups.get_mut(i)) {
+            mg.groups.retain(|x| !x.name.eq_ignore_ascii_case(g));
+        }
+        let empty = pt.manual_groups.get(i).is_none_or(|m| m.groups.is_empty());
+        if which.is_none() || empty {
+            pt.manual_groups.remove(i);
+            let f = |x: &PivotField| !x.source_col.eq_ignore_ascii_case(&field);
+            pt.rows.retain(f);
+            pt.columns.retain(f);
+            pt.filters.retain(|x| !x.source_col.eq_ignore_ascii_case(&field));
+        }
+        Ok(json!({}))
+    })?;
+    share_manual_groups(s, si, pi, bool_param(p, "replace").unwrap_or(false))?;
+    Ok(out)
 }
 
 fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1115,9 +1358,9 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
             Some(v) => v.clone(),
             None => {
                 let f = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(&field));
-                let g = f.map(|f| f.date_group).unwrap_or_default();
+                let g = f.map(pv::Grouping::of).unwrap_or_default();
                 match src.col(&field) {
-                    Some(c) => pv::distinct_labels(wb, src, c, g, 100_000),
+                    Some(c) => pv::distinct_labels(wb, src, c, &g, 100_000),
                     None => vec![],
                 }
             }
@@ -1417,7 +1660,7 @@ fn delete(s: &mut Session, p: &Json) -> Result<Json> {
 fn suggestions(wb: &Workbook, src: &pv::Source) -> Vec<Json> {
     let n = src.headers.len();
     let h = |i: usize| src.headers.get(i).cloned().unwrap_or_default();
-    let distinct = |i: usize| pv::distinct_labels(wb, src, i, PivotDateGroup::None, 1001).len();
+    let distinct = |i: usize| pv::distinct_labels(wb, src, i, &pv::Grouping::default(), 1001).len();
     let records = src.rows.len().max(1);
     let is_num = |i: usize| src.numeric.get(i).copied().unwrap_or(false);
     let is_date = |i: usize| src.dates.get(i).copied().unwrap_or(false);
@@ -1515,6 +1758,7 @@ mod tests {
     use serde_json::json;
 
     use crate::Session;
+    use gridcraft_model::PivotDateGroup;
 
     /// Region, Product, Date, Units, Sales — 12 records over 2026.
     fn sales() -> Session {
@@ -1738,6 +1982,74 @@ mod tests {
         let got = pt(&s);
         assert_eq!(got.rows, want.rows);
         assert_eq!(got.options, want.options);
+    }
+
+    #[test]
+    fn grouping_numbers_dates_and_selections() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Units"], "values": ["Sales"]})).unwrap();
+        // Units in fives: 0-4 (2, 4, 3, 1), 5-9, 10-14.
+        s.execute("pivot.group", json!({"field": "Units", "by": "range", "start": 0, "end": 14, "interval": 5})).unwrap();
+        assert_eq!(text(&s, "A4"), "0-4");
+        assert_eq!(val(&s, "B4"), Value::Number(150.0));
+        assert_eq!(text(&s, "A5"), "5-9");
+        assert_eq!(val(&s, "B5"), Value::Number(465.0));
+        assert_eq!(text(&s, "A6"), "10-14");
+        assert_eq!(val(&s, "B6"), Value::Number(220.0));
+        // Values above the end fall into ">end".
+        s.execute("pivot.group", json!({"field": "Units", "by": "range", "start": 0, "end": 9, "interval": 5})).unwrap();
+        assert_eq!(text(&s, "A6"), ">9");
+        s.execute("pivot.ungroup", json!({"field": "Units"})).unwrap();
+        assert_eq!(text(&s, "A4"), "1");
+        assert!(s.execute("pivot.group", json!({"field": "Units", "by": "range", "interval": 0})).is_err());
+        // Dates on two levels, coarsest first.
+        s.execute("pivot.removeField", json!({"field": "Units"})).unwrap();
+        s.execute("pivot.addField", json!({"field": "Date", "area": "rows"})).unwrap();
+        s.execute("pivot.group", json!({"field": "Date", "by": ["quarters", "years"]})).unwrap();
+        let p1 = pt(&s);
+        assert_eq!(p1.rows.iter().map(|f| f.date_group).collect::<Vec<_>>(), vec![PivotDateGroup::Years, PivotDateGroup::Quarters]);
+        assert_eq!(text(&s, "A4"), "2026");
+        assert_eq!(text(&s, "A5"), "Qtr1");
+        // Seven-day spans from New Year's Day.
+        s.execute("pivot.group", json!({"field": "Date", "by": "days", "days": 7, "start": "1/1/2026"})).unwrap();
+        assert_eq!(text(&s, "A4"), "1/15/2026 - 1/21/2026");
+        assert!(s.execute("pivot.group", json!({"field": "Date", "by": ["months", "days"], "days": 7})).is_err());
+        assert!(s.execute("pivot.group", json!({"field": "Region", "by": "months"})).is_err(), "text can't be grouped by date");
+        // Manual groups make a Region2 field outside Region.
+        s.execute("pivot.removeField", json!({"field": "Date"})).unwrap();
+        s.execute("pivot.addField", json!({"field": "Region", "area": "rows"})).unwrap();
+        let r = s.execute("pivot.groupSelection", json!({"field": "Region", "items": ["East", "West"], "name": "Coast"})).unwrap();
+        assert_eq!(r["field"], "Region2");
+        let p1 = pt(&s);
+        assert_eq!(p1.rows[0].source_col, "Region2");
+        let coast = find_row(&s, "Coast").expect("group item");
+        assert_eq!(val(&s, &CellRef::new(coast, 1).a1()), Value::Number(700.0));
+        assert!(find_row(&s, "North").is_some(), "ungrouped items stay as they are");
+        // Through xlsx.
+        let want = pt(&s);
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "g.xlsx", "base64": b64})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        let got = pt(&s);
+        assert_eq!(got.manual_groups, want.manual_groups);
+        assert_eq!(got.rows.iter().map(|f| f.source_col.clone()).collect::<Vec<_>>(), vec!["Region2", "Region"]);
+        // Ungrouping the group removes the field.
+        s.execute("pivot.ungroup", json!({"field": "Region2"})).unwrap();
+        assert!(pt(&s).manual_groups.is_empty());
+        assert_eq!(pt(&s).rows.len(), 1);
+    }
+
+    #[test]
+    fn grouping_round_trips_through_xlsx() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Units", "Date"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.group", json!({"field": "Units", "by": "range", "start": 0, "end": 14, "interval": 5})).unwrap();
+        s.execute("pivot.group", json!({"field": "Date", "by": "days", "days": 7, "start": "1/1/2026", "end": "12/31/2026"})).unwrap();
+        let want = pt(&s);
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "g.xlsx", "base64": b64})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        assert_eq!(pt(&s).rows, want.rows);
     }
 
     #[test]

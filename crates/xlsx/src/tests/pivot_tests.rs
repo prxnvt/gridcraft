@@ -108,6 +108,7 @@ fn workbook() -> Workbook {
         show_headers: false,
         last_range: Some(rr("A2:H12")),
         options: PivotOptions::default(),
+        manual_groups: vec![],
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -179,6 +180,7 @@ fn workbook() -> Workbook {
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
         options: PivotOptions::default(),
+        manual_groups: vec![],
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -460,7 +462,8 @@ fn hostile_pivot_parts_warn_not_panic() {
     assert_eq!(pt.rows[0].sort, PivotSort::Desc);
     assert!(pt.values.iter().any(|v| v.func == PivotFunc::Sum && v.source_col == "V"));
     assert!(report.warnings.iter().any(|w| w.contains("bogus")), "{:?}", report.warnings);
-    assert!(report.warnings.iter().any(|w| w.contains("grouping")), "{:?}", report.warnings);
+    // Number range grouping is read now, so it brings no warning.
+    assert!(!report.warnings.iter().any(|w| w.contains("grouping")), "{:?}", report.warnings);
     // Index and % of Parent Total are read now.
     assert!(pt.values.iter().any(|v| v.show_as == PivotShowAs::Index), "{:?}", pt.values);
     assert!(pt.values.iter().any(|v| v.show_as == PivotShowAs::PercentOfParentTotal), "{:?}", pt.values);

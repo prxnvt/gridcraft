@@ -217,6 +217,28 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
     Ok(Source { sheet: si, range: r, headers, formats, numeric, dates, rows })
 }
 
+/// The source as a PivotTable sees it: the list plus its manual group fields.
+pub fn read_pivot_source(wb: &Workbook, pt: &PivotTable, default_sheet: usize) -> Result<Source, String> {
+    let mut src = read_source(wb, &pt.source, default_sheet)?;
+    for mg in &pt.manual_groups {
+        let Some(c) = src.col(&mg.base) else { continue };
+        if src.col(&mg.name).is_some() {
+            continue;
+        }
+        let fmt = src.formats.get(c).cloned().unwrap_or_else(|| "General".into());
+        src.headers.push(mg.name.clone());
+        src.formats.push("General".into());
+        src.numeric.push(false);
+        src.dates.push(false);
+        for row in src.rows.iter_mut() {
+            let label = item_label(wb, row.get(c).unwrap_or(&Value::Empty), &Grouping::default(), &fmt);
+            let v = mg.groups.iter().find(|g| g.items.iter().any(|i| i.eq_ignore_ascii_case(&label))).map(|g| g.name.clone()).unwrap_or(label);
+            row.push(Value::text(v));
+        }
+    }
+    Ok(src)
+}
+
 // ---------------------------------------------------------------- items
 
 #[derive(Clone, Debug)]
@@ -241,8 +263,44 @@ fn cmp_items(a: &Item, b: &Item) -> Ordering {
     a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| a.text.cmp(&b.text))
 }
 
-/// (identity key, item) for a source value under a field's date grouping.
-fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> (String, Item) {
+/// How a field's values become items: as they are, by date part (with an optional day span and
+/// bounds), or by number range.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Grouping {
+    pub date: PivotDateGroup,
+    pub days: u32,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub number: Option<PivotNumberGroup>,
+}
+
+impl Grouping {
+    pub fn of(f: &PivotField) -> Grouping {
+        Grouping { date: f.date_group, days: f.group_days, start: f.group_start, end: f.group_end, number: f.number_group }
+    }
+}
+
+fn date_text(wb: &Workbook, serial: f64) -> String {
+    crate::display::format(&Value::Number(serial), "m/d/yyyy", wb).text
+}
+
+fn num_text(x: f64) -> String {
+    gridcraft_core::number_to_text((x * 1e9).round() / 1e9)
+}
+
+/// The "a-b" label of the number range containing `n`.
+fn range_item(g: &PivotNumberGroup, n: f64) -> (String, f64) {
+    let by = if g.by > 0.0 && g.by.is_finite() { g.by } else { 1.0 };
+    let k = ((n - g.start) / by).floor();
+    let lo = g.start + k * by;
+    // Whole-number ranges read 0-9, 10-19; others 0-0.5, 0.5-1.
+    let whole = g.start.fract() == 0.0 && by.fract() == 0.0 && by >= 1.0;
+    let hi = if whole { lo + by - 1.0 } else { lo + by };
+    (format!("{}-{}", num_text(lo), num_text(hi)), lo)
+}
+
+/// (identity key, item) for a source value under a field's grouping.
+fn make_item(wb: &Workbook, v: &Value, g: &Grouping, fmt: &str, first: usize) -> (String, Item) {
     let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item {
         text: label.to_lowercase(),
         value,
@@ -252,26 +310,62 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
         first,
         formatted,
     };
+    let text_item = |label: String, num: f64, key: String| (key, it(Value::text(label.as_str()), label, 0, num, false));
     match v {
         Value::Empty => ("b".into(), it(Value::text("(blank)"), "(blank)".into(), 4, 0.0, false)),
         Value::Number(n) => {
-            if group != PivotDateGroup::None
-                && let Some(dt) = datetime_from_serial(wb.date_system, *n)
+            let n = *n;
+            if let Some(ng) = &g.number {
+                if n < ng.start {
+                    return text_item(format!("<{}", num_text(ng.start)), f64::MIN, "lt".into());
+                }
+                if n > ng.end {
+                    return text_item(format!(">{}", num_text(ng.end)), f64::MAX, "gt".into());
+                }
+                let (label, lo) = range_item(ng, n);
+                return text_item(label, lo, format!("r{}", lo.to_bits()));
+            }
+            if g.date != PivotDateGroup::None
+                && let Some(dt) = datetime_from_serial(wb.date_system, n)
             {
+                if let Some(s0) = g.start
+                    && n < s0
+                {
+                    return text_item(format!("<{}", date_text(wb, s0)), f64::MIN, "lt".into());
+                }
+                // Ending at is a date shown as is; days after it fall into ">end".
+                if let Some(e0) = g.end
+                    && n.floor() > e0
+                {
+                    return text_item(format!(">{}", date_text(wb, e0)), f64::MAX, "gt".into());
+                }
                 let mon = MONTHS.get(dt.month.saturating_sub(1) as usize).copied().unwrap_or("Jan");
-                let (label, key) = match group {
+                let (label, key) = match g.date {
                     PivotDateGroup::Years => (dt.year.to_string(), dt.year as f64),
                     PivotDateGroup::Quarters => {
                         let q = (dt.month.saturating_sub(1)) / 3 + 1;
                         (format!("Qtr{q}"), q as f64)
                     }
                     PivotDateGroup::Months => (mon.to_string(), dt.month as f64),
+                    PivotDateGroup::Days if g.days > 1 => {
+                        // Spans of N days from the starting date.
+                        let base = g.start.unwrap_or(0.0).floor();
+                        let k = ((n.floor() - base) / g.days as f64).floor();
+                        let lo = base + k * g.days as f64;
+                        (format!("{} - {}", date_text(wb, lo), date_text(wb, lo + g.days as f64 - 1.0)), lo)
+                    }
+                    PivotDateGroup::Hours => {
+                        let h = dt.hour;
+                        (format!("{} {}", if h % 12 == 0 { 12 } else { h % 12 }, if h < 12 { "AM" } else { "PM" }), h as f64)
+                    }
+                    PivotDateGroup::Minutes => (format!(":{:02}", dt.minute), dt.minute as f64),
+                    PivotDateGroup::Seconds => (format!(":{:02}", dt.second), dt.second as f64),
                     _ => (format!("{}-{mon}", dt.day), (dt.month * 100 + dt.day) as f64),
                 };
                 return (format!("g{key}"), it(Value::text(label.as_str()), label, 0, key, false));
             }
             let label = crate::display::format(v, fmt, wb).text;
-            (format!("n{}", n.to_bits()), it(v.clone(), label, 0, *n, true))
+            (format!("n{}", n.to_bits()), it(v.clone(), label, 0, n, true))
         }
         Value::Text(t) => (format!("t{}", t.to_lowercase()), it(v.clone(), t.to_string(), 1, 0.0, false)),
         Value::Bool(b) => {
@@ -279,12 +373,12 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
             (format!("l{l}"), it(Value::Bool(*b), l.into(), 2, *b as u8 as f64, false))
         }
         Value::Error(e) => (format!("e{}", e.as_str()), it(v.clone(), e.as_str().into(), 3, 0.0, false)),
-        Value::Array(_) => make_item(wb, &v.scalar(), group, fmt, first),
+        Value::Array(_) => make_item(wb, &v.scalar(), g, fmt, first),
     }
 }
 
 impl FieldItems {
-    fn intern(&mut self, wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> u32 {
+    fn intern(&mut self, wb: &Workbook, v: &Value, group: &Grouping, fmt: &str, first: usize) -> u32 {
         let (key, item) = make_item(wb, v, group, fmt, first);
         if let Some(i) = self.index.get(&key) {
             return *i;
@@ -302,13 +396,13 @@ impl FieldItems {
     }
 }
 
-/// The label of a source value under a date grouping (for filters and field lists).
-pub fn item_label(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str) -> String {
+/// The label of a source value under a grouping (for filters and field lists).
+pub fn item_label(wb: &Workbook, v: &Value, group: &Grouping, fmt: &str) -> String {
     make_item(wb, v, group, fmt, 0).1.label
 }
 
 /// Distinct item labels of a source column, sorted like the field list shows them.
-pub fn distinct_labels(wb: &Workbook, src: &Source, col: usize, group: PivotDateGroup, limit: usize) -> Vec<String> {
+pub fn distinct_labels(wb: &Workbook, src: &Source, col: usize, group: &Grouping, limit: usize) -> Vec<String> {
     let mut fi = FieldItems::default();
     let fmt = src.formats.get(col).map(String::as_str).unwrap_or("General");
     for (i, r) in src.rows.iter().enumerate() {
@@ -770,7 +864,7 @@ type AggMap = HashMap<(Vec<u32>, Vec<u32>), Vec<Acc>>;
 
 /// Computes a PivotTable report from the workbook.
 pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Output, String> {
-    let src = read_source(wb, &pt.source, pivot_sheet)?;
+    let src = read_pivot_source(wb, pt, pivot_sheet)?;
     let fmt_of = |c: usize| src.formats.get(c).cloned().unwrap_or_else(|| "General".into());
     let rows: Vec<(usize, &PivotField)> = pt.rows.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
     let cols: Vec<(usize, &PivotField)> = pt.columns.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
@@ -781,20 +875,21 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     if vals.len() > MAX_VALUE_FIELDS {
         return Err(format!("A PivotTable can have at most {MAX_VALUE_FIELDS} value fields."));
     }
-    let axis_group = |name: &str| -> Option<PivotDateGroup> {
-        pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(name)).map(|f| f.date_group)
+    let axis_group = |name: &str| -> Option<Grouping> {
+        pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(name)).map(Grouping::of)
     };
     // (column, filter, grouping used for labels, shown as a report filter)
-    let filters: Vec<(usize, &PivotFilter, PivotDateGroup, bool)> = pt
+    let filters: Vec<(usize, &PivotFilter, Grouping, bool)> = pt
         .filters
         .iter()
         .filter_map(|f| {
             let c = src.col(&f.source_col)?;
             let g = axis_group(&f.source_col);
-            Some((c, f, g.unwrap_or_default(), g.is_none()))
+            let report = g.is_none();
+            Some((c, f, g.unwrap_or_default(), report))
         })
         .collect();
-    let shown_filters: Vec<&(usize, &PivotFilter, PivotDateGroup, bool)> = filters.iter().filter(|f| f.3).collect();
+    let shown_filters: Vec<&(usize, &PivotFilter, Grouping, bool)> = filters.iter().filter(|f| f.3).collect();
 
     let k = vals.len();
     let empty = rows.is_empty() && cols.is_empty() && vals.is_empty();
@@ -820,18 +915,18 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             let v = rec.get(*c).unwrap_or(&Value::Empty);
             let own = pt.filters.iter().find(|x| x.source_col.eq_ignore_ascii_case(&f.source_col)).and_then(|x| x.selected.as_ref());
             if let Some(sel) = own {
-                let label = item_label(wb, v, f.date_group, fmt);
+                let label = item_label(wb, v, &Grouping::of(f), fmt);
                 if !sel.iter().any(|x| x.eq_ignore_ascii_case(&label)) {
                     continue;
                 }
             }
-            fi.intern(wb, v, f.date_group, fmt, ri);
+            fi.intern(wb, v, &Grouping::of(f), fmt, ri);
         }
     }
     'rec: for (ri, rec) in src.rows.iter().enumerate() {
         for ((c, f, g, _), fmt) in filters.iter().zip(filter_fmts.iter()) {
             if let Some(sel) = &f.selected {
-                let label = item_label(wb, rec.get(*c).unwrap_or(&Value::Empty), *g, fmt);
+                let label = item_label(wb, rec.get(*c).unwrap_or(&Value::Empty), g, fmt);
                 if !sel.iter().any(|s| s.eq_ignore_ascii_case(&label)) {
                     continue 'rec;
                 }
@@ -842,11 +937,11 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         }
         let mut rp = Vec::with_capacity(rows.len());
         for (((c, f), fi), fmt) in rows.iter().zip(row_items.iter_mut()).zip(row_fmts.iter()) {
-            rp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), f.date_group, fmt, ri));
+            rp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), &Grouping::of(f), fmt, ri));
         }
         let mut cp = Vec::with_capacity(cols.len());
         for (((c, f), fi), fmt) in cols.iter().zip(col_items.iter_mut()).zip(col_fmts.iter()) {
-            cp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), f.date_group, fmt, ri));
+            cp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), &Grouping::of(f), fmt, ri));
         }
         for a in 0..=rp.len() {
             for b in 0..=cp.len() {

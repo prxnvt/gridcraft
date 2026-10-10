@@ -688,6 +688,35 @@ pub enum PivotDateGroup {
     Quarters,
     Months,
     Days,
+    Hours,
+    Minutes,
+    Seconds,
+}
+
+/// Grouping of a number field into ranges (Group › By).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PivotNumberGroup {
+    pub start: f64,
+    pub end: f64,
+    pub by: f64,
+}
+
+/// One manual group: a name and the items in it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotNamedGroup {
+    pub name: String,
+    pub items: Vec<String>,
+}
+
+/// A field made by grouping selected items of `base` (Group Selection): its items are the
+/// group names, and the ungrouped items as they are. Named like Excel's ("Region2").
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotManualGroup {
+    pub name: String,
+    pub base: String,
+    pub groups: Vec<PivotNamedGroup>,
 }
 
 /// A row or column field's subtotals (Field Settings › Subtotals).
@@ -722,6 +751,12 @@ pub struct PivotField {
     pub show_empty: bool,
     /// Insert a page break after each item (printing).
     pub page_break: bool,
+    /// Days grouping: number of days per group (0 or 1 = each day).
+    pub group_days: u32,
+    /// Grouping bounds (Starting at / Ending at); values outside fall into "<start" / ">end".
+    pub group_start: Option<f64>,
+    pub group_end: Option<f64>,
+    pub number_group: Option<PivotNumberGroup>,
 }
 
 impl PivotField {
@@ -958,6 +993,8 @@ pub struct PivotTable {
     /// Area written by the last refresh.
     pub last_range: Option<RangeRef>,
     pub options: PivotOptions,
+    /// Fields made by grouping selected items.
+    pub manual_groups: Vec<PivotManualGroup>,
 }
 
 impl Default for PivotTable {
@@ -980,6 +1017,7 @@ impl Default for PivotTable {
             show_headers: true,
             last_range: None,
             options: PivotOptions::default(),
+            manual_groups: vec![],
         }
     }
 }
