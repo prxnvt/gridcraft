@@ -59,7 +59,40 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             descriptive_statistics
         ),
+        cmd!(
+            "analysis.rankAndPercentile",
+            "Rank and Percentile",
+            [],
+            None,
+            "{input, groupedBy?, labels?, output?, overwrite?} → per variable: Point (position), value, Rank (1 = largest) and Percent (percent rank), largest first",
+            has_doc,
+            |s, p| simple(s, p, "analysis.rankAndPercentile", false, toolpak::descriptive::rank_and_percentile)
+        ),
+        cmd!(
+            "analysis.correlation",
+            "Correlation",
+            [],
+            None,
+            "{input, groupedBy?, labels?, output?, overwrite?} → lower-triangular matrix of Pearson correlations between the variables",
+            has_doc,
+            |s, p| simple(s, p, "analysis.correlation", false, toolpak::descriptive::correlation)
+        ),
+        cmd!(
+            "analysis.covariance",
+            "Covariance",
+            [],
+            None,
+            "{input, groupedBy?, labels?, output?, overwrite?} → lower-triangular matrix of population covariances (variances on the diagonal)",
+            has_doc,
+            |s, p| simple(s, p, "analysis.covariance", false, toolpak::descriptive::covariance)
+        ),
     ]
+}
+
+/// A tool that only needs the input variables.
+fn simple(s: &mut Session, p: &Json, cmd: &str, spaced: bool, tool: fn(&[Series]) -> gridcraft_analysis::Result<Out>) -> Result<Json> {
+    let input = read_input(s, p, "input", cmd, spaced)?;
+    run_with_input(s, p, cmd, &input, |_| tool(&input.series))
 }
 
 fn tool_list(_s: &mut Session, _p: &Json) -> Result<Json> {
@@ -303,6 +336,22 @@ mod tests {
         assert_eq!(r["tools"].as_array().unwrap().len(), 19);
         assert_eq!(r["tools"][5]["name"], "Descriptive Statistics");
         assert_eq!(r["tools"][5]["available"], true);
+    }
+
+    #[test]
+    fn rank_correlation_and_covariance() {
+        let mut s = session();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["X", "Y"], [1, 2], [2, 4], [3, 5], [4, 9]]})).unwrap();
+        s.execute("analysis.correlation", json!({"input": "A1:B5", "labels": true, "output": "D1"})).unwrap();
+        assert_eq!(val(&s, "Sheet1", "E1"), Value::from("X"));
+        assert_eq!(val(&s, "Sheet1", "D3"), Value::from("Y"));
+        assert!((val(&s, "Sheet1", "E3").as_f64().unwrap() - 0.964_763_821_237_732).abs() < 1e-12);
+        s.execute("analysis.covariance", json!({"input": "A1:B5", "labels": true, "output": "D6"})).unwrap();
+        assert_eq!(val(&s, "Sheet1", "E8"), Value::Number(2.75));
+        s.execute("analysis.rankAndPercentile", json!({"input": "B2:B5", "output": "D10"})).unwrap();
+        assert_eq!(val(&s, "Sheet1", "E10"), Value::from("Column1"));
+        assert_eq!(val(&s, "Sheet1", "D11"), Value::Number(4.0));
+        assert_eq!(val(&s, "Sheet1", "E11"), Value::Number(9.0));
     }
 
     #[test]
