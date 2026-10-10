@@ -1248,6 +1248,43 @@ mod tests {
     }
 
     #[test]
+    fn data_tables_round_trip_through_xlsx() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "B1", "values": [[0.05], [1000]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D3", "values": [[100], [200]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "E2", "input": "=B2*(1+B1)"})).unwrap();
+        s.execute("data.dataTable", json!({"range": "D2:E4", "columnInput": "B2"})).unwrap();
+        s.execute("cell.set", json!({"cell": "G1", "input": "=B2*B1"})).unwrap();
+        s.execute("range.setValues", json!({"range": "H1", "values": [[1, 2]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "G2", "values": [[10], [20]]})).unwrap();
+        s.execute("data.dataTable", json!({"range": "G1:I3", "rowInput": "B1", "columnInput": "B2"})).unwrap();
+        s.execute("cell.set", json!({"cell": "K2", "input": "=B1*3"})).unwrap();
+        s.execute("range.setValues", json!({"range": "L1", "values": [[1, 2]]})).unwrap();
+        s.execute("data.dataTable", json!({"range": "K1:M2", "rowInput": "B1"})).unwrap();
+        let wb = s.doc().unwrap().wb.clone();
+        let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+        let xml = String::from_utf8_lossy(&gridcraft_xlsx::read_part(&bytes, "xl/worksheets/sheet1.xml").unwrap().unwrap()).to_string();
+        assert!(xml.contains(r#"<f t="dataTable" ref="E3:E4" dt2D="0" dtr="0" r1="B2"/>"#), "{xml}");
+        assert!(xml.contains(r#"<f t="dataTable" ref="H2:I3" dt2D="1" dtr="0" r1="B1" r2="B2"/>"#), "{xml}");
+        assert!(xml.contains(r#"<f t="dataTable" ref="L2:M2" dt2D="0" dtr="1" r1="B1"/>"#), "{xml}");
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "dt.xlsx", "base64": b64})).unwrap();
+        // Read back in cell order.
+        let key = |t: &gridcraft_model::DataTable| (t.range.start.row, t.range.start.col);
+        let mut tables = s.doc().unwrap().wb.active().unwrap().data_tables.clone();
+        let mut want = wb.active().unwrap().data_tables.clone();
+        tables.sort_by_key(key);
+        want.sort_by_key(key);
+        assert_eq!(tables, want);
+        assert!((n(&s, "E3") - 105.0).abs() < 1e-9);
+        assert_eq!(n(&s, "I3"), 40.0);
+        // Still live after reopening.
+        s.execute("cell.set", json!({"cell": "B1", "input": "1"})).unwrap();
+        assert_eq!(n(&s, "E4"), 400.0);
+        assert_eq!(n(&s, "M2"), 6.0);
+    }
+
+    #[test]
     fn data_tables_are_live_and_guarded() {
         let mut s = s();
         s.execute("range.setValues", json!({"range": "B1", "values": [[0.05], [1000]]})).unwrap();

@@ -75,6 +75,12 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
 }
 
 /// Writes a workbook as an `.xlsx` package.
+/// One part of an xlsx package (`"xl/worksheets/sheet1.xml"`), or `None` when absent; for
+/// inspecting what was written.
+pub fn read_part(bytes: &[u8], part: &str) -> Result<Option<Vec<u8>>, IoError> {
+    package::Package::open(bytes)?.read(part)
+}
+
 pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
     write::write_xlsx(wb)
 }

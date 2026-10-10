@@ -1,6 +1,6 @@
 //! Writing worksheet parts and the parts they own (tables, comments, drawings, charts).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
@@ -255,6 +255,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     keys.extend(sheet.cell_pictures.keys().copied());
     keys.extend(extra.keys().copied());
     keys.extend(overrides.keys().copied());
+    // Each data table's `<f t="dataTable">` sits on the first result cell.
+    let table_at: HashMap<CellRef, &gridcraft_model::DataTable> = sheet.data_tables.iter().filter_map(|t| t.body().map(|b| (b.start, t))).collect();
+    keys.extend(table_at.keys().copied());
     let mut rows: BTreeMap<u32, Vec<CellRef>> = BTreeMap::new();
     for k in keys {
         rows.entry(k.row).or_default().push(k);
@@ -293,11 +296,16 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let cell = sheet.cells.get(*c);
             let ov = overrides.get(c);
             let ex = extra.get(c);
-            let array = dynamic.get(c).copied().or_else(|| {
-                let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
-            });
-            write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
+            match table_at.get(c) {
+                Some(t) => write_table_cell(&mut s, *c, cell, t, &sid, out),
+                None => {
+                    let array = dynamic.get(c).copied().or_else(|| {
+                        let f = cell?.formula.as_ref()?;
+                        (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
+                    });
+                    write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
+                }
+            }
         }
         s.push_str("</row>");
     }
@@ -650,6 +658,61 @@ fn write_cell(
             let _ = write!(s, " t=\"e\"><v>{}</v></c>", e.as_str());
         }
     }
+}
+
+/// The first result cell of a data table: its cached value plus the `dataTable` formula that
+/// describes the whole table.
+fn write_table_cell(
+    s: &mut String,
+    c: CellRef,
+    cell: Option<&Cell>,
+    t: &gridcraft_model::DataTable,
+    sid: &dyn Fn(gridcraft_model::StyleId) -> u32,
+    out: &mut Out,
+) {
+    let style = cell.map(|x| sid(x.style)).unwrap_or(0);
+    let _ = write!(s, "<c r=\"{}\"", c.a1());
+    if style != 0 {
+        let _ = write!(s, " s=\"{style}\"");
+    }
+    let value = cell.map(|x| x.value.scalar()).unwrap_or(Value::Empty);
+    let t_attr = match &value {
+        Value::Text(_) => " t=\"str\"",
+        Value::Bool(_) => " t=\"b\"",
+        Value::Error(_) => " t=\"e\"",
+        _ => "",
+    };
+    s.push_str(t_attr);
+    let body = t.body().unwrap_or(RangeRef::cell(c));
+    let (dt2d, dtr, r1, r2) = match (t.row_input, t.col_input) {
+        (Some(r), Some(col)) => (true, false, Some(r), Some(col)),
+        (Some(r), None) => (false, true, Some(r), None),
+        (None, col) => (false, false, col, None),
+    };
+    let _ = write!(s, "><f t=\"dataTable\" ref=\"{}\" dt2D=\"{}\" dtr=\"{}\"", body.a1(), u8::from(dt2d), u8::from(dtr));
+    if let Some(r) = r1 {
+        let _ = write!(s, " r1=\"{}\"", r.a1());
+    }
+    if let Some(r) = r2 {
+        let _ = write!(s, " r2=\"{}\"", r.a1());
+    }
+    s.push_str("/>");
+    match &value {
+        Value::Number(n) => {
+            let _ = write!(s, "<v>{}</v>", num(*n));
+        }
+        Value::Text(x) => {
+            let _ = write!(s, "<v>{}</v>", esc(&encode_xstring(x)));
+        }
+        Value::Bool(b) => {
+            let _ = write!(s, "<v>{}</v>", *b as u8);
+        }
+        Value::Error(e) => {
+            let _ = write!(s, "<v>{}</v>", e.as_str());
+        }
+        _ => out.needs_calc = true,
+    }
+    s.push_str("</c>");
 }
 
 fn cfvo_xml(v: &CfValueKind) -> String {

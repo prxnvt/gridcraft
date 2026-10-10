@@ -32,6 +32,8 @@ struct RowState {
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
     dynamic: Vec<RangeRef>,
+    /// What-If data tables found on `<f t="dataTable">` cells.
+    data_tables: Vec<gridcraft_model::DataTable>,
     dropped: u64,
     rows: u64,
 }
@@ -57,6 +59,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
+    sheet.data_tables = std::mem::take(&mut st.data_tables);
     drop(bytes);
 
     let mut fit_to_page = false;
@@ -425,7 +428,30 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
             Some(fm)
         }
         "dataTable" => {
-            cx.warn("what-if data tables are not supported; kept their values");
+            // `ref` is the results area; the edges are the row above and the column to its left.
+            // Two-variable: r1 = row input, r2 = column input. One-variable: r1 is the input,
+            // a row input when `dtr` is set.
+            let body = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
+            let (Some(r0), Some(c0)) = (body.start.row.checked_sub(1), body.start.col.checked_sub(1)) else {
+                cx.warn("a data table has no room for its edges; kept its values");
+                return None;
+            };
+            let cell = |k: &str| f.attr(k).and_then(CellRef::parse);
+            let (row_input, col_input) = if f.attr_bool("dt2D").unwrap_or(false) {
+                (cell("r1"), cell("r2"))
+            } else if f.attr_bool("dtr").unwrap_or(false) {
+                (cell("r1"), None)
+            } else {
+                (None, cell("r1"))
+            };
+            let range = RangeRef::new(CellRef::new(r0, c0), body.end);
+            if row_input.is_none() && col_input.is_none() {
+                cx.warn("a data table's input cell was deleted; kept its values");
+            } else if body.count() > 100_000 {
+                cx.warn("a data table is too large to recalculate; kept its values");
+            } else if !st.data_tables.iter().any(|t| t.range == range) {
+                st.data_tables.push(gridcraft_model::DataTable { range, row_input, col_input });
+            }
             None
         }
         _ => {
