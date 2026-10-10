@@ -357,3 +357,34 @@ fn ref_edit_takes_the_grid_selection_and_restores_it() {
     let d = h.state().session.active().map(|d| (d.wb.active_sheet, d.selection.a1()));
     assert_eq!(d, Some((0, "B2".to_string())));
 }
+
+#[test]
+fn confirm_question_reruns_the_command_on_ok() {
+    assert_eq!(
+        gridcraft_ui_egui::confirm_text("invalid parameters for `x`: confirm: Replace it? (run again with `overwrite: true`)").as_deref(),
+        Some("Replace it?")
+    );
+    assert_eq!(gridcraft_ui_egui::confirm_text("no workbook open"), None);
+    let mut h = harness(blank());
+    h.state_mut().confirm = Some(gridcraft_ui_egui::Confirm {
+        title: "Test".into(),
+        text: "Replace it?".into(),
+        command: "cell.set".into(),
+        params: json!({"cell": "A1", "input": "5"}),
+    });
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().confirm.is_none());
+    assert_eq!(value(&h, "A1"), Value::Number(5.0));
+    // Cancel leaves things alone.
+    h.state_mut().confirm = Some(gridcraft_ui_egui::Confirm {
+        title: "Test".into(),
+        text: "Replace it?".into(),
+        command: "cell.set".into(),
+        params: json!({"cell": "A1", "input": "6"}),
+    });
+    h.run_steps(2);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().confirm.is_none());
+    assert_eq!(value(&h, "A1"), Value::Number(5.0));
+}

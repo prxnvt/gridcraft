@@ -199,6 +199,50 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// A command's "replace it?" question: OK runs the command again with `overwrite: true`.
+pub fn confirm_box(app: &mut SheetApp, ctx: &egui::Context) {
+    if app.message.is_some() {
+        return;
+    }
+    let Some(q) = app.confirm.clone() else { return };
+    let mut answer: Option<bool> = None;
+    egui::Modal::new(egui::Id::new("confirm_box")).show(ctx, |ui| {
+        ui.set_width(380.0);
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
+            ui.painter().circle_filled(r.center(), 16.0, Color32::from_rgb(0xF2, 0xC3, 0x2E));
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, "?", theme::ui_bold(20.0), Color32::WHITE);
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(&q.title).strong());
+                ui.add(egui::Label::new(&q.text).wrap());
+            });
+        });
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(" Cancel ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                answer = Some(false);
+            }
+            if ui.button("   OK   ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                answer = Some(true);
+            }
+        });
+    });
+    match answer {
+        Some(true) => {
+            app.confirm = None;
+            let mut params = q.params.clone();
+            if let Some(m) = params.as_object_mut() {
+                m.insert("overwrite".into(), serde_json::json!(true));
+            }
+            if let Err(e) = app.run(&q.command, params) {
+                app.message = Some((q.title.clone(), crate::clean_error(&e)));
+            }
+        }
+        Some(false) => app.confirm = None,
+        None => {}
+    }
+}
+
 pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((msg, at)) = app.toast.clone() else { return };
     if crate::now_ms() - at > 2500.0 {

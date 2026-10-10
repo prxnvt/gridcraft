@@ -13,6 +13,7 @@ pub mod display;
 pub mod fill;
 pub mod io;
 pub mod pivot;
+pub mod report;
 pub mod sample;
 pub mod selection;
 pub mod tables;
@@ -45,6 +46,9 @@ pub enum EngineError {
     NoDocument,
     #[error("{0}")]
     Other(String),
+    /// The command would replace something; run it again with `overwrite: true` to go ahead.
+    #[error("confirm: {0} (run again with `overwrite: true`)")]
+    Confirm(String),
     #[error("internal error in `{0}` (the workbook was kept as it was): {1}")]
     Internal(String, String),
 }

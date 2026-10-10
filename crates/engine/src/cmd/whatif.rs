@@ -10,11 +10,12 @@ use std::collections::{HashMap, HashSet};
 
 use gridcraft_calc::Calc;
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, Cell, DefinedName, Sheet, StyleId, Workbook};
+use gridcraft_model::{CalcMode, Cell, DefinedName, StyleId, Workbook};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
 use super::*;
+use crate::report::{self, OutputKind, RStyle, Report, Target};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -567,58 +568,49 @@ fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
         .find(|n| d.wb.sheet_index(n).is_none())
         .unwrap_or_else(|| "Scenario Summary".into());
     let names: Vec<String> = scenarios.iter().map(|x| x.name.clone()).collect();
-    let new_index = edit(s, |cx| {
-        let bold = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.font.bold = true);
-        let mut sheet = Sheet::new(name.clone());
-        let put = |sheet: &mut Sheet, row: u32, col: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style });
-        };
-        put(&mut sheet, 1, 1, Value::text("Scenario Summary"), bold);
-        put(&mut sheet, 2, 2, Value::text("Current Values:"), bold);
-        for (k, n) in names.iter().enumerate() {
-            put(&mut sheet, 2, 3 + k as u32, Value::text(n.as_str()), bold);
+    let bold = RStyle { bold: true, ..RStyle::default() };
+    let fmt = |f: &gridcraft_model::NumFmt| RStyle { num_fmt: Some(f.0.to_string()), ..RStyle::default() };
+    let abs = |c: &CellRef| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1);
+    let mut rep = Report::new();
+    rep.text(1, 1, "Scenario Summary", bold.clone());
+    rep.text(2, 2, "Current Values:", bold.clone());
+    for (k, n) in names.iter().enumerate() {
+        rep.text(2, 3 + k as u32, n, bold.clone());
+    }
+    rep.text(3, 1, "Changing Cells:", bold.clone());
+    let mut row = 4u32;
+    for (i, c) in changing.iter().enumerate() {
+        let st = fmt(&changing_fmts.get(i).cloned().unwrap_or_default());
+        rep.text(row, 1, &abs(c), RStyle::default());
+        let cur = current.get(i).cloned().unwrap_or_default();
+        rep.put(row, 2, cur.clone(), st.clone());
+        for (k, m) in per.iter().enumerate() {
+            rep.put(row, 3 + k as u32, m.get(c).cloned().unwrap_or_else(|| cur.clone()), st.clone());
         }
-        put(&mut sheet, 3, 1, Value::text("Changing Cells:"), bold);
-        let mut row = 4u32;
-        for (i, c) in changing.iter().enumerate() {
-            let fmt = changing_fmts.get(i).cloned().unwrap_or_default();
-            let st = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.num_fmt = fmt);
-            put(&mut sheet, row, 1, Value::text(format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1)), StyleId::DEFAULT);
-            let cur = current.get(i).cloned().unwrap_or_default();
-            put(&mut sheet, row, 2, cur.clone(), st);
-            for (k, m) in per.iter().enumerate() {
-                put(&mut sheet, row, 3 + k as u32, m.get(c).cloned().unwrap_or_else(|| cur.clone()), st);
+        row += 1;
+    }
+    if !results.is_empty() {
+        rep.text(row, 1, "Result Cells:", bold.clone());
+        row += 1;
+        for (i, c) in results.iter().enumerate() {
+            let st = fmt(&result_fmts.get(i).cloned().unwrap_or_default());
+            rep.text(row, 1, &abs(c), RStyle::default());
+            rep.put(row, 2, current_results.get(i).cloned().unwrap_or_default(), st.clone());
+            for (k, r) in scenario_results.iter().enumerate() {
+                rep.put(row, 3 + k as u32, r.get(i).cloned().unwrap_or_default(), st.clone());
             }
             row += 1;
         }
-        if !results.is_empty() {
-            put(&mut sheet, row, 1, Value::text("Result Cells:"), bold);
-            row += 1;
-            for (i, c) in results.iter().enumerate() {
-                let fmt = result_fmts.get(i).cloned().unwrap_or_default();
-                let st = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.num_fmt = fmt);
-                put(&mut sheet, row, 1, Value::text(format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1)), StyleId::DEFAULT);
-                put(&mut sheet, row, 2, current_results.get(i).cloned().unwrap_or_default(), st);
-                for (k, r) in scenario_results.iter().enumerate() {
-                    put(&mut sheet, row, 3 + k as u32, r.get(i).cloned().unwrap_or_default(), st);
-                }
-                row += 1;
-            }
-        }
-        put(
-            &mut sheet,
-            row + 1,
-            1,
-            Value::text("Notes: Current Values column represents values of changing cells at time Scenario Summary Report was created."),
-            StyleId::DEFAULT,
-        );
-        sheet.cols.insert(1, gridcraft_model::LineInfo { size: Some(110.0), ..Default::default() });
-        sheet.cols.insert(2, gridcraft_model::LineInfo { size: Some(100.0), ..Default::default() });
-        cx.wb.sheets.push(std::sync::Arc::new(sheet));
-        cx.structural = true;
-        Ok(cx.wb.sheets.len() - 1)
-    })?;
-    s.doc_mut()?.wb_switch_sheet(new_index);
+    }
+    rep.text(
+        row + 1,
+        1,
+        "Notes: Current Values column represents values of changing cells at time Scenario Summary Report was created.",
+        RStyle::default(),
+    );
+    rep.col_widths = vec![(1, 110.0), (2, 100.0)];
+    let target = Target { kind: OutputKind::NewSheet { name: name.clone() }, origin: CellRef::new(0, 0) };
+    report::write(s, &target, rep, false)?;
     Ok(json!({"sheet": name, "scenarios": names.len(), "changingCells": changing.len(), "resultCells": results.len()}))
 }
 
@@ -1238,7 +1230,9 @@ mod tests {
         // Result row: current, Base, Best.
         assert_eq!(n(&s, "'Scenario Summary'!C8"), 200.0);
         assert_eq!(n(&s, "'Scenario Summary'!E8"), 300.0);
-        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        // Like Excel, the summary sheet goes before the sheet it summarises.
+        assert_eq!(s.doc().unwrap().wb.sheet_index("Scenario Summary"), Some(0));
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
         s.execute("data.scenarioDelete", json!({"name": "Best"})).unwrap();
         assert_eq!(s.execute("data.scenarioManager", json!({})).unwrap()["scenarios"].as_array().unwrap().len(), 1);
         s.execute("data.scenarioDelete", json!({"name": "Base"})).unwrap();

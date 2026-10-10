@@ -381,7 +381,7 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(out)
 }
 
-fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+pub(crate) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.protected_structure {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }

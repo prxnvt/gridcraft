@@ -162,6 +162,33 @@ pub struct SheetApp {
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
     pub started: f64,
+    /// A command asked before replacing something; OK re-runs it with `overwrite: true`.
+    pub confirm: Option<Confirm>,
+}
+
+/// A pending "replace it?" question from a command (see [`confirm_text`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Confirm {
+    pub title: String,
+    pub text: String,
+    pub command: String,
+    pub params: Json,
+}
+
+/// What [`SheetApp::run_confirming`] did.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outcome {
+    Done(Json),
+    /// The command asked a question (shown now; OK re-runs it).
+    Asked,
+    /// It failed; the error is shown.
+    Failed,
+}
+
+/// The question in a command's "needs confirmation" error, if it is one.
+pub fn confirm_text(e: &str) -> Option<String> {
+    let rest = e.split_once("confirm: ")?.1;
+    Some(rest.split_once(" (run again with").map(|(q, _)| q).unwrap_or(rest).to_string())
 }
 
 impl SheetApp {
@@ -194,6 +221,7 @@ impl SheetApp {
             shots: control::Shots::default(),
             selected_chart: None,
             started: now_ms(),
+            confirm: None,
         }
     }
 
@@ -278,11 +306,25 @@ impl SheetApp {
 
     /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
-        if let Err(e) = self.run(id, params) {
-            if e.contains("is not available right now") {
-                self.toast = Some((e, now_ms()));
-            } else {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
+        let _ = self.run_confirming("GridCraft", id, params);
+    }
+
+    /// Runs a command; errors become a message box, and a "replace it?" error becomes a
+    /// question whose OK runs the command again with `overwrite: true`.
+    pub fn run_confirming(&mut self, title: &str, id: &str, params: Json) -> Outcome {
+        match self.run(id, params.clone()) {
+            Ok(v) => Outcome::Done(v),
+            Err(e) => {
+                if let Some(text) = confirm_text(&e) {
+                    self.confirm = Some(Confirm { title: title.into(), text, command: id.into(), params });
+                    return Outcome::Asked;
+                }
+                if e.contains("is not available right now") {
+                    self.toast = Some((e, now_ms()));
+                } else {
+                    self.message = Some((title.into(), clean_error(&e)));
+                }
+                Outcome::Failed
             }
         }
     }
@@ -624,6 +666,7 @@ impl SheetApp {
         });
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
+        widgets::confirm_box(self, &ctx);
         widgets::toast(self, &ctx);
         control::issue_screenshots(self, &ctx);
         control::collect_screenshots(self, &ctx);
