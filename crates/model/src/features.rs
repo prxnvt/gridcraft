@@ -690,6 +690,17 @@ pub enum PivotDateGroup {
     Days,
 }
 
+/// A row or column field's subtotals (Field Settings › Subtotals).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PivotSubtotals {
+    /// One subtotal per value field with its own function (when the PivotTable shows subtotals).
+    #[default]
+    Automatic,
+    None,
+    /// One subtotal line per function.
+    Custom(Vec<PivotFunc>),
+}
+
 /// A field placed in the Rows or Columns area.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -700,6 +711,109 @@ pub struct PivotField {
     pub date_group: PivotDateGroup,
     /// Item labels whose detail is hidden (collapsed).
     pub collapsed_items: Vec<String>,
+    /// Custom name shown in headers (Field Settings › Custom Name).
+    pub caption: Option<String>,
+    pub subtotals: PivotSubtotals,
+    /// Repeat the item labels on every row (outline and tabular forms).
+    pub repeat_labels: bool,
+    /// Insert a blank line after each item.
+    pub blank_line: bool,
+    /// Show items that have no data under every parent.
+    pub show_empty: bool,
+    /// Insert a page break after each item (printing).
+    pub page_break: bool,
+}
+
+impl PivotField {
+    /// The name shown in headers.
+    pub fn shown_name(&self) -> &str {
+        self.caption.as_deref().filter(|c| !c.is_empty()).unwrap_or(&self.source_col)
+    }
+}
+
+/// PivotTable Options (and the Design tab's style options).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PivotOptions {
+    /// Layout & Format.
+    pub merge_labels: bool,
+    /// Compact form indent, in characters.
+    pub indent: u8,
+    /// Report filters: over, then down (else down, then over).
+    pub filters_over_then_down: bool,
+    /// Report filter fields per column (row); 0 = all in one.
+    pub filters_per_column: u32,
+    pub error_text: Option<String>,
+    pub empty_text: Option<String>,
+    pub autofit: bool,
+    pub preserve_formatting: bool,
+    /// Totals & Filters.
+    pub multiple_filters: bool,
+    pub custom_list_sort: bool,
+    /// Display.
+    pub expand_buttons: bool,
+    pub contextual_tooltips: bool,
+    pub classic_layout: bool,
+    pub show_values_row: bool,
+    pub empty_rows: bool,
+    pub empty_columns: bool,
+    pub field_list_az: bool,
+    pub row_header_caption: Option<String>,
+    pub column_header_caption: Option<String>,
+    /// Printing.
+    pub print_buttons: bool,
+    pub repeat_row_labels: bool,
+    pub print_titles: bool,
+    /// Data.
+    pub save_data: bool,
+    pub enable_drilldown: bool,
+    pub refresh_on_open: bool,
+    /// Alt Text.
+    pub alt_title: String,
+    pub alt_description: String,
+    /// Design › PivotTable Style Options.
+    pub row_headers: bool,
+    pub column_headers: bool,
+    pub banded_rows: bool,
+    pub banded_columns: bool,
+}
+
+impl Default for PivotOptions {
+    fn default() -> Self {
+        PivotOptions {
+            merge_labels: false,
+            indent: 1,
+            filters_over_then_down: false,
+            filters_per_column: 0,
+            error_text: None,
+            empty_text: None,
+            autofit: true,
+            preserve_formatting: true,
+            multiple_filters: false,
+            custom_list_sort: true,
+            expand_buttons: true,
+            contextual_tooltips: true,
+            classic_layout: false,
+            show_values_row: true,
+            empty_rows: false,
+            empty_columns: false,
+            field_list_az: false,
+            row_header_caption: None,
+            column_header_caption: None,
+            print_buttons: false,
+            repeat_row_labels: true,
+            print_titles: false,
+            save_data: true,
+            enable_drilldown: true,
+            refresh_on_open: false,
+            alt_title: String::new(),
+            alt_description: String::new(),
+            row_headers: true,
+            column_headers: true,
+            banded_rows: false,
+            banded_columns: false,
+        }
+    }
 }
 
 /// Summarize-values-by function.
@@ -843,6 +957,7 @@ pub struct PivotTable {
     pub show_headers: bool,
     /// Area written by the last refresh.
     pub last_range: Option<RangeRef>,
+    pub options: PivotOptions,
 }
 
 impl Default for PivotTable {
@@ -864,6 +979,7 @@ impl Default for PivotTable {
             style: "PivotStyleLight16".into(),
             show_headers: true,
             last_range: None,
+            options: PivotOptions::default(),
         }
     }
 }

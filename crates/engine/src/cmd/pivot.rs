@@ -129,7 +129,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Report Layout",
             ["PivotTable Design", "Layout"],
             None,
-            "{pivot?, layout: compact|outline|tabular}",
+            "{pivot?, layout?: compact|outline|tabular, repeat?: bool (Repeat All Item Labels / Do Not Repeat Item Labels)}",
             has_doc,
             layout
         ),
@@ -141,6 +141,42 @@ pub fn specs() -> Vec<CommandSpec> {
             "{pivot?, style: \"PivotStyleMedium9\"}",
             has_doc,
             layout
+        ),
+        cmd!(
+            "pivot.fieldSettings",
+            "Field Settings",
+            ["PivotTable Analyze", "Active Field"],
+            None,
+            "{pivot?, field, caption?: name | null, subtotals?: automatic|none|[sum, count, average, max, min, product, countNumbers, stdDev, stdDevP, var, varP], repeatLabels?, blankLine?, showEmpty?, pageBreak?, replace?} (Field Settings for a row or column field)",
+            has_doc,
+            field_settings
+        ),
+        cmd!(
+            "pivot.options",
+            "PivotTable Options",
+            ["PivotTable Analyze", "PivotTable"],
+            None,
+            "{pivot?, name?, mergeLabels?, indent?, filtersOverThenDown?, filtersPerColumn?, errorText?: text|null, emptyText?: text|null, autofit?, preserveFormatting?, multipleFilters?, customListSort?, expandButtons?, contextualTooltips?, classicLayout?, showValuesRow?, emptyRows?, emptyColumns?, fieldListAz?, rowHeaderCaption?, columnHeaderCaption?, printButtons?, repeatRowLabels?, printTitles?, saveData?, enableDrilldown?, refreshOnOpen?, altTitle?, altDescription?, grandTotalsRows?, grandTotalsCols?, showHeaders?, replace?}",
+            has_doc,
+            options
+        ),
+        cmd!(
+            "pivot.styleOptions",
+            "PivotTable Style Options",
+            ["PivotTable Design", "PivotTable Style Options"],
+            None,
+            "{pivot?, rowHeaders?, columnHeaders?, bandedRows?, bandedColumns?}",
+            has_doc,
+            options
+        ),
+        cmd!(
+            "pivot.blankRows",
+            "Blank Rows",
+            ["PivotTable Design", "Layout"],
+            None,
+            "{pivot?, insert: bool} a blank line after each item of every row field but the innermost",
+            has_doc,
+            blank_rows
         ),
         cmd!("pivot.refresh", "Refresh", ["PivotTable Analyze", "Data"], Some("Alt+F5"), "{pivot?, replace?}", has_doc, refresh),
         cmd!(
@@ -661,9 +697,9 @@ fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "anchor": pt.anchor.a1(),
         "range": pt.last_range.map(|r| r.a1()),
         "source": pt.source,
-        "rows": pt.rows.iter().map(|f| json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group_name(f.date_group), "collapsed": f.collapsed_items})).collect::<Vec<_>>(),
-        "columns": pt.columns.iter().map(|f| json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group_name(f.date_group), "collapsed": f.collapsed_items})).collect::<Vec<_>>(),
-        "values": pt.values.iter().map(|v| json!({"field": v.source_col, "func": func_name(v.func), "name": v.name, "showAs": show_as_name(v.show_as), "numberFormat": v.number_format})).collect::<Vec<_>>(),
+        "rows": pt.rows.iter().map(field_json).collect::<Vec<_>>(),
+        "columns": pt.columns.iter().map(field_json).collect::<Vec<_>>(),
+        "values": pt.values.iter().map(|v| json!({"field": v.source_col, "func": func_name(v.func), "name": v.name, "showAs": show_as_name(v.show_as), "baseField": v.base_field, "baseItem": v.base_item, "numberFormat": v.number_format})).collect::<Vec<_>>(),
         "filters": pt.filters.iter().map(|f| json!({"field": f.source_col, "selected": f.selected, "report": !in_axes(pt, &f.source_col)})).collect::<Vec<_>>(),
         "layout": layout_name(pt.layout),
         "grandTotalsRows": pt.grand_totals_rows,
@@ -671,6 +707,30 @@ fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "subtotals": if !pt.subtotals { "none" } else if pt.subtotals_top { "top" } else { "bottom" },
         "style": pt.style,
         "showHeaders": pt.show_headers,
+        "options": serde_json::to_value(&pt.options).unwrap_or(Json::Null),
+    })
+}
+
+fn subtotals_json(st: &PivotSubtotals) -> Json {
+    match st {
+        PivotSubtotals::Automatic => json!("automatic"),
+        PivotSubtotals::None => json!("none"),
+        PivotSubtotals::Custom(list) => json!(list.iter().map(|f| func_name(*f)).collect::<Vec<_>>()),
+    }
+}
+
+fn field_json(f: &PivotField) -> Json {
+    json!({
+        "field": f.source_col,
+        "caption": f.caption,
+        "sort": sort_name(f.sort),
+        "group": group_name(f.date_group),
+        "collapsed": f.collapsed_items,
+        "subtotals": subtotals_json(&f.subtotals),
+        "repeatLabels": f.repeat_labels,
+        "blankLine": f.blank_line,
+        "showEmpty": f.show_empty,
+        "pageBreak": f.page_break,
     })
 }
 
@@ -1104,6 +1164,7 @@ fn layout(s: &mut Session, p: &Json) -> Result<Json> {
     let gr = bool_param(p, "grandTotalsRows");
     let gc = bool_param(p, "grandTotalsCols");
     let hd = bool_param(p, "showHeaders");
+    let repeat = bool_param(p, "repeat");
     update(s, p, |pt, _, _| {
         if let Some(l) = lay {
             pt.layout = l;
@@ -1115,6 +1176,15 @@ fn layout(s: &mut Session, p: &Json) -> Result<Json> {
             pt.subtotals = on;
             if let Some(t) = top {
                 pt.subtotals_top = t;
+            }
+            // Design › Subtotals applies to every field.
+            for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+                f.subtotals = if on { PivotSubtotals::Automatic } else { PivotSubtotals::None };
+            }
+        }
+        if let Some(r) = repeat {
+            for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+                f.repeat_labels = r;
             }
         }
         if let Some(st) = &style {
@@ -1130,6 +1200,107 @@ fn layout(s: &mut Session, p: &Json) -> Result<Json> {
             pt.show_headers = v;
         }
         Ok(json!({"layout": layout_name(pt.layout)}))
+    })
+}
+
+fn field_settings(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.fieldSettings";
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
+    let subtotals = match p.get("subtotals") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(t)) => Some(match t.to_ascii_lowercase().as_str() {
+            "automatic" | "auto" => PivotSubtotals::Automatic,
+            "none" => PivotSubtotals::None,
+            o => return Err(bad(C, format!("unknown subtotals `{o}`"))),
+        }),
+        Some(Json::Array(list)) => {
+            let mut funcs = Vec::new();
+            for f in list {
+                let name = f.as_str().unwrap_or("");
+                let func = func_param(Some(name)).ok_or_else(|| bad(C, format!("unknown function `{name}`")))?;
+                if !funcs.contains(&func) {
+                    funcs.push(func);
+                }
+            }
+            Some(if funcs.is_empty() { PivotSubtotals::None } else { PivotSubtotals::Custom(funcs) })
+        }
+        Some(_) => return Err(bad(C, "`subtotals` is automatic, none or a list of functions")),
+    };
+    update(s, p, |pt, _, _| {
+        let f = axis_field(C, pt, &field)?;
+        match p.get("caption") {
+            Some(Json::String(t)) if !t.trim().is_empty() => f.caption = Some(t.trim().to_string()),
+            Some(Json::String(_)) | Some(Json::Null) => f.caption = None,
+            _ => {}
+        }
+        if let Some(st) = subtotals.clone() {
+            f.subtotals = st;
+        }
+        for (key, slot) in [
+            ("repeatLabels", &mut f.repeat_labels),
+            ("blankLine", &mut f.blank_line),
+            ("showEmpty", &mut f.show_empty),
+            ("pageBreak", &mut f.page_break),
+        ] {
+            if let Some(b) = bool_param(p, key) {
+                *slot = b;
+            }
+        }
+        Ok(field_json(f))
+    })
+}
+
+fn options(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.options";
+    let name = str_param(p, "name").map(|n| n.trim().to_string());
+    if name.as_ref().is_some_and(|n| n.is_empty() || n.len() > 255) {
+        return Err(other("The PivotTable name isn't valid."));
+    }
+    if let Some(n) = &name {
+        let (si, pi) = find_pivot(s, p)?;
+        let wb = &s.doc()?.wb;
+        let clash = wb
+            .sheets
+            .iter()
+            .enumerate()
+            .any(|(i, sh)| sh.pivots.iter().enumerate().any(|(j, x)| (i, j) != (si, pi) && x.name.eq_ignore_ascii_case(n)));
+        if clash {
+            return Err(other("A PivotTable with that name already exists."));
+        }
+    }
+    update(s, p, |pt, _, _| {
+        let mut cur = serde_json::to_value(&pt.options).map_err(|e| other(e.to_string()))?;
+        if let (Some(dst), Some(src)) = (cur.as_object_mut(), p.as_object()) {
+            for (k, v) in src {
+                if dst.contains_key(k) {
+                    dst.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        pt.options = serde_json::from_value(cur).map_err(|e| bad(C, format!("bad option: {e}")))?;
+        pt.options.indent = pt.options.indent.min(127);
+        for (key, slot) in
+            [("grandTotalsRows", &mut pt.grand_totals_rows), ("grandTotalsCols", &mut pt.grand_totals_cols), ("showHeaders", &mut pt.show_headers)]
+        {
+            if let Some(b) = bool_param(p, key) {
+                *slot = b;
+            }
+        }
+        if let Some(n) = &name {
+            pt.name = n.clone();
+        }
+        Ok(serde_json::to_value(&pt.options).unwrap_or(Json::Null))
+    })
+}
+
+fn blank_rows(s: &mut Session, p: &Json) -> Result<Json> {
+    let on = bool_param(p, "insert").unwrap_or(true);
+    update(s, p, |pt, _, _| {
+        let n = pt.rows.len();
+        for (i, f) in pt.rows.iter_mut().enumerate() {
+            f.blank_line = on && i + 1 < n;
+        }
+        Ok(json!({"insert": on}))
     })
 }
 
@@ -1491,6 +1662,82 @@ mod tests {
         s.execute("file.open", json!({"name": "p.xlsx", "base64": b64})).unwrap();
         s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
         assert_eq!(pt(&s).values, want);
+    }
+
+    #[test]
+    fn field_settings_and_options() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();
+        // Custom subtotals: two lines per region, named after their functions.
+        s.execute("pivot.fieldSettings", json!({"field": "Region", "subtotals": ["sum", "count"]})).unwrap();
+        let sum_row = find_row(&s, "East Sum").expect("custom subtotal line");
+        assert_eq!(val(&s, &CellRef::new(sum_row, 1).a1()), Value::Number(415.0));
+        let count_row = find_row(&s, "East Count").expect("second custom subtotal");
+        assert_eq!(val(&s, &CellRef::new(count_row, 1).a1()), Value::Number(5.0));
+        // Caption shows in the header in outline form.
+        s.execute("pivot.fieldSettings", json!({"field": "Region", "caption": "Area", "subtotals": "none"})).unwrap();
+        s.execute("pivot.reportLayout", json!({"layout": "tabular"})).unwrap();
+        assert_eq!(text(&s, "A3"), "Area");
+        // Repeat item labels: every Product row of East says East.
+        s.execute("pivot.reportLayout", json!({"repeat": true})).unwrap();
+        let east: Vec<u32> = (3..12).filter(|r| text(&s, &CellRef::new(*r, 0).a1()) == "East").collect();
+        assert_eq!(east.len(), 3, "East repeated on its three products");
+        s.execute("pivot.reportLayout", json!({"repeat": false})).unwrap();
+        let east: Vec<u32> = (3..12).filter(|r| text(&s, &CellRef::new(*r, 0).a1()) == "East").collect();
+        assert_eq!(east.len(), 1);
+        // Blank rows after each region.
+        s.execute("pivot.blankRows", json!({"insert": true})).unwrap();
+        let p1 = pt(&s);
+        assert!(p1.rows[0].blank_line && !p1.rows[1].blank_line);
+        let first_north = find_row(&s, "North").unwrap();
+        assert_eq!(text(&s, &CellRef::new(first_north - 1, 0).a1()), "", "a blank line before North");
+        s.execute("pivot.blankRows", json!({"insert": false})).unwrap();
+        // Items with no data: a report filter on Units drops North's only Pears record (2 units).
+        // Filtering Product itself would hide Pears everywhere, even with no-data items shown.
+        s.execute("pivot.filter", json!({"field": "Units", "selected": ["1", "3", "4", "5", "6", "7", "8", "9", "10", "12"]})).unwrap();
+        let north = find_row(&s, "North").unwrap();
+        assert_ne!(text(&s, &CellRef::new(north + 2, 1).a1()), "Pears");
+        s.execute("pivot.fieldSettings", json!({"field": "Product", "showEmpty": true})).unwrap();
+        let north = find_row(&s, "North").unwrap();
+        let shown: Vec<String> = (north..north + 3).map(|r| text(&s, &CellRef::new(r, 1).a1())).collect();
+        assert_eq!(shown, vec!["Apples", "Pears", "Plums"], "Pears shows under North with no data");
+        // Empty cells show a text.
+        s.execute("pivot.options", json!({"emptyText": "-"})).unwrap();
+        assert_eq!(text(&s, &CellRef::new(north + 1, 2).a1()), "-");
+        // Merge and center labels; banded rows.
+        s.execute("pivot.fieldSettings", json!({"field": "Product", "showEmpty": false})).unwrap();
+        s.execute("pivot.options", json!({"mergeLabels": true})).unwrap();
+        let merges = s.doc().unwrap().wb.active().unwrap().merges.clone();
+        assert!(merges.iter().any(|m| m.start.col == 0 && m.height() == 2), "{merges:?}");
+        s.execute("pivot.styleOptions", json!({"bandedRows": true})).unwrap();
+        assert!(pt(&s).options.banded_rows);
+        s.execute("pivot.options", json!({"mergeLabels": false})).unwrap();
+        assert!(s.doc().unwrap().wb.active().unwrap().merges.is_empty(), "merges go with the option");
+        // Report filter area: two filters over, then down → side by side.
+        s.execute("pivot.addField", json!({"field": "Date", "area": "filters"})).unwrap();
+        s.execute("pivot.options", json!({"filtersOverThenDown": true})).unwrap();
+        let r = pt(&s).last_range.unwrap();
+        let top = r.start;
+        assert_eq!(text(&s, &top.a1()), "Units");
+        assert_eq!(text(&s, &CellRef::new(top.row, top.col + 3).a1()), "Date");
+        s.execute("pivot.options", json!({"filtersOverThenDown": false})).unwrap();
+        let top = pt(&s).last_range.unwrap().start;
+        assert_eq!(text(&s, &CellRef::new(top.row + 1, top.col).a1()), "Date");
+        s.execute("pivot.removeField", json!({"field": "Date", "area": "filters"})).unwrap();
+        assert!(s.execute("pivot.options", json!({"name": ""})).is_err());
+        s.execute("pivot.options", json!({"name": "Sales Report"})).unwrap();
+        assert_eq!(pt(&s).name, "Sales Report");
+        assert!(s.execute("pivot.fieldSettings", json!({"field": "Region", "subtotals": ["bogus"]})).is_err());
+        // Through xlsx.
+        s.execute("pivot.fieldSettings", json!({"field": "Region", "subtotals": ["average"], "repeatLabels": true, "blankLine": true})).unwrap();
+        s.execute("pivot.options", json!({"errorText": "n/a", "emptyText": "0", "indent": 3, "altTitle": "Sales"})).unwrap();
+        let want = pt(&s);
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "p.xlsx", "base64": b64})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        let got = pt(&s);
+        assert_eq!(got.rows, want.rows);
+        assert_eq!(got.options, want.options);
     }
 
     #[test]

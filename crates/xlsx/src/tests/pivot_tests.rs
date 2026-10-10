@@ -107,6 +107,7 @@ fn workbook() -> Workbook {
         style: "PivotStyleMedium9".into(),
         show_headers: false,
         last_range: Some(rr("A2:H12")),
+        options: PivotOptions::default(),
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -116,8 +117,14 @@ fn workbook() -> Workbook {
         source: "SalesTbl".into(),
         anchor: at("K4"),
         rows: vec![
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::None, collapsed_items: vec!["2024".into()] },
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, collapsed_items: vec![] },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Years,
+                sort: PivotSort::None,
+                collapsed_items: vec!["2024".into()],
+                ..PivotField::default()
+            },
+            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, ..PivotField::default() },
         ],
         columns: vec![PivotField { sort: PivotSort::Desc, ..field("Product") }],
         values: vec![
@@ -171,6 +178,7 @@ fn workbook() -> Workbook {
         style: "PivotStyleDark3".into(),
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
+        options: PivotOptions::default(),
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {

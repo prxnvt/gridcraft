@@ -18,8 +18,8 @@ use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{
-    BASE_NEXT, BASE_PREVIOUS, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue,
-    Workbook,
+    BASE_NEXT, BASE_PREVIOUS, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotSubtotals, PivotTable,
+    PivotValue, Workbook,
 };
 
 use crate::IoError;
@@ -42,6 +42,32 @@ const MAX_FIELDS: usize = 16_384;
 /// The `x14:dataField` extension (Excel 2010 show-values-as additions such as rank).
 const EXT_X14_DATA_FIELD: &str = "{E15A36E0-9728-4e99-A89B-3F7291B0FE68}";
 const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+/// The `x14:pivotField` extension (repeat item labels).
+const EXT_X14_PIVOT_FIELD: &str = "{2946ED86-A175-432a-8AC1-64E0C546D7DE}";
+/// The `x14:pivotTableDefinition` extension (alt text, hidden Values row).
+const EXT_X14_PIVOT_TABLE: &str = "{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}";
+
+/// A custom subtotal's item type, which also names its pivotField flag (`sumSubtotal`).
+fn subtotal_type(f: PivotFunc) -> &'static str {
+    match f {
+        PivotFunc::Sum => "sum",
+        PivotFunc::Count => "countA",
+        PivotFunc::Average => "avg",
+        PivotFunc::Max => "max",
+        PivotFunc::Min => "min",
+        PivotFunc::Product => "product",
+        PivotFunc::CountNumbers => "count",
+        PivotFunc::StdDev => "stdDev",
+        PivotFunc::StdDevP => "stdDevP",
+        PivotFunc::Var => "var",
+        PivotFunc::VarP => "varP",
+    }
+}
+
+/// The x14 extension element `name` inside an `extLst`.
+fn x14_ext<'a>(e: &'a El, name: &str) -> Option<&'a El> {
+    e.child("extLst")?.kids("ext").find_map(|x| x.child(name))
+}
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -834,9 +860,49 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
     let compact = pt.layout == PivotLayout::Compact;
     let name = if pt.name.trim().is_empty() { format!("PivotTable{}", idx + 1) } else { pt.name.clone() };
     let mut s = format!(
-        "{XML_DECL}<pivotTableDefinition xmlns=\"{NS_MAIN}\" name=\"{}\" cacheId=\"{cache_id}\" applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"Values\" updatedVersion=\"6\" minRefreshableVersion=\"3\" useAutoFormatting=\"1\" itemPrintTitles=\"1\" createdVersion=\"6\" indent=\"0\"",
+        "{XML_DECL}<pivotTableDefinition xmlns=\"{NS_MAIN}\" name=\"{}\" cacheId=\"{cache_id}\" applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"Values\" updatedVersion=\"6\" minRefreshableVersion=\"3\" createdVersion=\"6\"",
         esc_attr(&name)
     );
+    // PivotTable Options.
+    let o = &pt.options;
+    let flag = |s: &mut String, attr: &str, on: bool, default: bool| {
+        if on != default {
+            let _ = write!(s, " {attr}=\"{}\"", u8::from(on));
+        }
+    };
+    if o.indent != 1 {
+        let _ = write!(s, " indent=\"{}\"", o.indent);
+    }
+    flag(&mut s, "useAutoFormatting", o.autofit, false);
+    flag(&mut s, "itemPrintTitles", o.repeat_row_labels, false);
+    flag(&mut s, "fieldPrintTitles", o.print_titles, false);
+    flag(&mut s, "printDrill", o.print_buttons, false);
+    flag(&mut s, "mergeItem", o.merge_labels, false);
+    flag(&mut s, "pageOverThenDown", o.filters_over_then_down, false);
+    if o.filters_per_column > 0 {
+        let _ = write!(s, " pageWrap=\"{}\"", o.filters_per_column);
+    }
+    if let Some(t) = &o.error_text {
+        let _ = write!(s, " showError=\"1\" errorCaption=\"{}\"", esc_attr(t));
+    }
+    if let Some(t) = &o.empty_text {
+        let _ = write!(s, " missingCaption=\"{}\"", esc_attr(t));
+    }
+    flag(&mut s, "preserveFormatting", o.preserve_formatting, true);
+    flag(&mut s, "customListSort", o.custom_list_sort, true);
+    flag(&mut s, "showDrill", o.expand_buttons, true);
+    flag(&mut s, "showDataTips", o.contextual_tooltips, true);
+    flag(&mut s, "gridDropZones", o.classic_layout, false);
+    flag(&mut s, "showEmptyRow", o.empty_rows, false);
+    flag(&mut s, "showEmptyCol", o.empty_columns, false);
+    flag(&mut s, "fieldListSortAscending", o.field_list_az, false);
+    flag(&mut s, "enableDrill", o.enable_drilldown, true);
+    if let Some(t) = &o.row_header_caption {
+        let _ = write!(s, " rowHeaderCaption=\"{}\"", esc_attr(t));
+    }
+    if let Some(t) = &o.column_header_caption {
+        let _ = write!(s, " colHeaderCaption=\"{}\"", esc_attr(t));
+    }
     match pt.layout {
         PivotLayout::Compact => s.push_str(" outline=\"1\" outlineData=\"1\""),
         PivotLayout::Outline => s.push_str(" compact=\"0\" compactData=\"0\" outline=\"1\" outlineData=\"1\""),
@@ -851,7 +917,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
     if !pt.grand_totals_cols {
         s.push_str(" colGrandTotals=\"0\"");
     }
-    s.push_str(" multipleFieldFilters=\"0\">");
+    let _ = write!(s, " multipleFieldFilters=\"{}\">", u8::from(o.multiple_filters));
 
     // Location: the body (report filters sit above it).
     let a = pt.anchor;
@@ -913,7 +979,17 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
         if is_page && hide.iter().any(|h| *h) {
             s.push_str(" multipleItemSelectionAllowed=\"1\"");
         }
-        s.push_str(" showAll=\"0\"");
+        let af_settings = axis_field(i);
+        if let Some(c) = af_settings.and_then(|f| f.caption.as_deref()) {
+            let _ = write!(s, " name=\"{}\"", esc_attr(c));
+        }
+        let _ = write!(s, " showAll=\"{}\"", u8::from(af_settings.is_some_and(|f| f.show_empty)));
+        if af_settings.is_some_and(|f| f.blank_line) {
+            s.push_str(" insertBlankRow=\"1\"");
+        }
+        if af_settings.is_some_and(|f| f.page_break) {
+            s.push_str(" insertPageBreak=\"1\"");
+        }
         if let Some(af) = axis_field(i) {
             match af.sort {
                 PivotSort::Asc => s.push_str(" sortType=\"ascending\""),
@@ -921,15 +997,27 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
                 PivotSort::None => {}
             }
         }
-        if !pt.subtotals {
+        // Subtotals: the field's own setting (Automatic follows the PivotTable).
+        let subs: Vec<PivotFunc> = match af_settings.map(|f| &f.subtotals) {
+            Some(PivotSubtotals::Custom(list)) => list.clone(),
+            _ => vec![],
+        };
+        let automatic = match af_settings.map(|f| &f.subtotals) {
+            Some(PivotSubtotals::Automatic) | None => pt.subtotals,
+            _ => false,
+        };
+        if !automatic {
             s.push_str(" defaultSubtotal=\"0\"");
+        }
+        for f in &subs {
+            let _ = write!(s, " {}Subtotal=\"1\"", subtotal_type(*f));
         }
         if !pt.subtotals_top {
             s.push_str(" subtotalTop=\"0\"");
         }
         if axis.is_some() {
             let collapsed: &[String] = axis_field(i).map(|f| f.collapsed_items.as_slice()).unwrap_or(&[]);
-            let count = labels.len() + usize::from(pt.subtotals);
+            let count = labels.len() + usize::from(automatic) + subs.len();
             let _ = write!(s, "><items count=\"{count}\">");
             for (x, l) in labels.iter().enumerate() {
                 let _ = write!(s, "<item x=\"{x}\"");
@@ -941,10 +1029,20 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
                 }
                 s.push_str("/>");
             }
-            if pt.subtotals {
+            if automatic {
                 s.push_str("<item t=\"default\"/>");
             }
-            s.push_str("</items></pivotField>");
+            for f in &subs {
+                let _ = write!(s, "<item t=\"{}\"/>", subtotal_type(*f));
+            }
+            s.push_str("</items>");
+            if af_settings.is_some_and(|f| f.repeat_labels) {
+                let _ = write!(
+                    s,
+                    "<extLst><ext uri=\"{EXT_X14_PIVOT_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:pivotField fillDownLabels=\"1\"/></ext></extLst>"
+                );
+            }
+            s.push_str("</pivotField>");
         } else {
             s.push_str("/>");
         }
@@ -1056,7 +1154,28 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
     if !pt.style.is_empty() {
         let _ = write!(s, " name=\"{}\"", esc_attr(&pt.style));
     }
-    s.push_str(" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/>");
+    let _ = write!(
+        s,
+        " showRowHeaders=\"{}\" showColHeaders=\"{}\" showRowStripes=\"{}\" showColStripes=\"{}\" showLastColumn=\"1\"/>",
+        u8::from(o.row_headers),
+        u8::from(o.column_headers),
+        u8::from(o.banded_rows),
+        u8::from(o.banded_columns)
+    );
+    // Excel 2010 additions: alt text and the Values row.
+    if !o.alt_title.is_empty() || !o.alt_description.is_empty() || !o.show_values_row {
+        let _ = write!(s, "<extLst><ext uri=\"{EXT_X14_PIVOT_TABLE}\" xmlns:x14=\"{NS_X14}\"><x14:pivotTableDefinition");
+        if !o.alt_title.is_empty() {
+            let _ = write!(s, " altText=\"{}\"", esc_attr(&o.alt_title));
+        }
+        if !o.alt_description.is_empty() {
+            let _ = write!(s, " altTextSummary=\"{}\"", esc_attr(&o.alt_description));
+        }
+        if !o.show_values_row {
+            s.push_str(" hideValuesRow=\"1\"");
+        }
+        s.push_str("/></ext></extLst>");
+    }
     s.push_str("</pivotTableDefinition>");
     s
 }
@@ -1298,6 +1417,41 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         pt.subtotals = f.flag("defaultSubtotal", true);
         pt.subtotals_top = f.flag("subtotalTop", true);
     }
+    // PivotTable Options.
+    let o = &mut pt.options;
+    o.indent = x.attr_u32("indent").map(|v| v.min(127) as u8).unwrap_or(1);
+    o.autofit = x.flag("useAutoFormatting", false);
+    o.repeat_row_labels = x.flag("itemPrintTitles", false);
+    o.print_titles = x.flag("fieldPrintTitles", false);
+    o.print_buttons = x.flag("printDrill", false);
+    o.merge_labels = x.flag("mergeItem", false);
+    o.filters_over_then_down = x.flag("pageOverThenDown", false);
+    o.filters_per_column = x.attr_u32("pageWrap").unwrap_or(0);
+    o.error_text = x.flag("showError", false).then(|| x.attr("errorCaption").unwrap_or("").to_string());
+    o.empty_text = x.attr("missingCaption").map(str::to_string);
+    o.preserve_formatting = x.flag("preserveFormatting", true);
+    o.custom_list_sort = x.flag("customListSort", true);
+    o.expand_buttons = x.flag("showDrill", true);
+    o.contextual_tooltips = x.flag("showDataTips", true);
+    o.classic_layout = x.flag("gridDropZones", false);
+    o.empty_rows = x.flag("showEmptyRow", false);
+    o.empty_columns = x.flag("showEmptyCol", false);
+    o.field_list_az = x.flag("fieldListSortAscending", false);
+    o.enable_drilldown = x.flag("enableDrill", true);
+    o.multiple_filters = x.flag("multipleFieldFilters", true);
+    o.row_header_caption = x.attr("rowHeaderCaption").map(str::to_string);
+    o.column_header_caption = x.attr("colHeaderCaption").map(str::to_string);
+    if let Some(si) = x.child("pivotTableStyleInfo") {
+        o.row_headers = si.flag("showRowHeaders", true);
+        o.column_headers = si.flag("showColHeaders", true);
+        o.banded_rows = si.flag("showRowStripes", false);
+        o.banded_columns = si.flag("showColStripes", false);
+    }
+    if let Some(ext) = x14_ext(x, "pivotTableDefinition") {
+        o.alt_title = ext.attr("altText").unwrap_or("").to_string();
+        o.alt_description = ext.attr("altTextSummary").unwrap_or("").to_string();
+        o.show_values_row = !ext.flag("hideValuesRow", false);
+    }
     pt.grand_totals_rows = x.flag("rowGrandTotals", true);
     pt.grand_totals_cols = x.flag("colGrandTotals", true);
     pt.show_headers = x.flag("showHeaders", true);
@@ -1320,8 +1474,36 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             let i = i as usize;
             let Some((name, group)) = field_ref(cx, cache, i) else { continue };
             let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
-            let mut f = PivotField { source_col: name.clone(), date_group: group, sort: PivotSort::None, collapsed_items: vec![] };
+            let mut f = PivotField { source_col: name.clone(), date_group: group, sort: PivotSort::None, ..PivotField::default() };
             if let Some(e) = pf(i) {
+                f.caption = e.attr("name").map(str::to_string).filter(|c| !c.is_empty());
+                f.show_empty = e.flag("showAll", true);
+                f.blank_line = e.flag("insertBlankRow", false);
+                f.page_break = e.flag("insertPageBreak", false);
+                f.repeat_labels = x14_ext(e, "pivotField").is_some_and(|x| x.flag("fillDownLabels", false));
+                let custom: Vec<PivotFunc> = [
+                    PivotFunc::Sum,
+                    PivotFunc::Count,
+                    PivotFunc::Average,
+                    PivotFunc::Max,
+                    PivotFunc::Min,
+                    PivotFunc::Product,
+                    PivotFunc::CountNumbers,
+                    PivotFunc::StdDev,
+                    PivotFunc::StdDevP,
+                    PivotFunc::Var,
+                    PivotFunc::VarP,
+                ]
+                .into_iter()
+                .filter(|func| e.flag(&format!("{}Subtotal", subtotal_type(*func)), false))
+                .collect();
+                f.subtotals = if !custom.is_empty() {
+                    PivotSubtotals::Custom(custom)
+                } else if e.flag("defaultSubtotal", true) {
+                    PivotSubtotals::Automatic
+                } else {
+                    PivotSubtotals::None
+                };
                 f.sort = match e.attr("sortType") {
                     Some("ascending") => PivotSort::Asc,
                     Some("descending") => PivotSort::Desc,
@@ -1441,6 +1623,14 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         }
     }
 
+    // With subtotals off for the whole PivotTable, a field without subtotals is just following it.
+    if !pt.subtotals {
+        for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+            if f.subtotals == PivotSubtotals::None {
+                f.subtotals = PivotSubtotals::Automatic;
+            }
+        }
+    }
     pt.anchor = loc.start;
     let above = if pages.is_empty() { 0 } else { pages.len() as u32 + 1 };
     pt.last_range = Some(RangeRef::new(CellRef::new(loc.start.row.saturating_sub(above), loc.start.col), loc.end));
