@@ -1,12 +1,14 @@
 //! The Formulas tab's Function Library: the function categories, their menus, the AutoSum menu
-//! (shared with the Home tab), and the Recently Used list.
+//! (shared with the Home tab), and the Recently Used list, which is fed from the session's
+//! journal so formulas entered through the control channel or MCP count too.
 
 use std::sync::OnceLock;
 
 use egui::{Ui, vec2};
 use gridcraft_engine::formula::lexer::{Tok, tokenize};
 use gridcraft_engine::formula::normalize_function_name;
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
 
@@ -58,6 +60,7 @@ pub fn default_recent() -> Vec<String> {
 pub struct FnEntry {
     pub name: String,
     pub category: String,
+    pub description: String,
 }
 
 /// Every function, sorted by name (built once; the list is static).
@@ -66,7 +69,13 @@ pub fn all() -> &'static [FnEntry] {
     LIST.get_or_init(|| {
         gridcraft_engine::cmd::formulas::function_list()
             .iter()
-            .filter_map(|f| Some(FnEntry { name: f["name"].as_str()?.to_string(), category: f["category"].as_str().unwrap_or("").to_string() }))
+            .filter_map(|f| {
+                Some(FnEntry {
+                    name: f["name"].as_str()?.to_string(),
+                    category: f["category"].as_str().unwrap_or("").to_string(),
+                    description: f["description"].as_str().unwrap_or("").to_string(),
+                })
+            })
             .collect()
     })
 }
@@ -112,6 +121,86 @@ pub fn push_recent(recent: &mut Vec<String>, names: &[String]) {
         }
     }
     *recent = next;
+}
+
+/// Reads a saved Recently Used list: known function names only, at most [`RECENT_MAX`]. A
+/// hand-edited or hostile `ui.json` loses this list, never the rest of the preferences.
+pub fn lenient_recent<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let raw = Json::deserialize(d)?;
+    let Some(list) = raw.as_array() else { return Ok(default_recent()) };
+    let mut out = Vec::new();
+    for name in list.iter().filter_map(Json::as_str) {
+        let name = name.to_ascii_uppercase();
+        if out.len() < RECENT_MAX && is_function(&name) && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    Ok(out)
+}
+
+/// The formula texts a journaled command entered, newest last.
+fn journal_formulas<'a>(id: &str, params: &'a Json, out: &mut Vec<&'a str>) {
+    if !(id.starts_with("cell.") || id.starts_with("range.")) {
+        return;
+    }
+    fn walk<'a>(v: &'a Json, out: &mut Vec<&'a str>) {
+        match v {
+            Json::String(s) if s.starts_with('=') => out.push(s),
+            Json::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    for key in ["input", "value", "values", "formula"] {
+        if let Some(v) = params.get(key) {
+            walk(v, out);
+        }
+    }
+}
+
+/// How many entries the engine drops from the front of a full journal (`Session::execute`).
+const JOURNAL_TRIM: usize = 5_000;
+/// The most formula texts read in one frame; a huge paste only needs its last few functions.
+const SCAN_BUDGET: usize = 2_000;
+
+/// Reads the journal entries added since the last call and moves the functions their formulas
+/// call to the front of Recently Used.
+///
+/// TODO(M14.7): read the recording buffer's depth-0 entries instead. The journal also holds
+/// nested commands (AutoSum's own `cell.set`), which only repeat functions already counted, and
+/// is trimmed when it grows past 10,000 entries, which this compensates for.
+pub fn harvest(app: &mut SheetApp) {
+    let len = app.session.journal.len();
+    if len < app.journal_seen {
+        app.journal_seen = app.journal_seen.saturating_sub(JOURNAL_TRIM).min(len);
+    }
+    if len == app.journal_seen {
+        return;
+    }
+    // Newest first: the last entries name the most recent functions.
+    let mut names: Vec<String> = Vec::new();
+    let mut scanned = 0;
+    for (id, params) in app.session.journal.get(app.journal_seen..).unwrap_or_default().iter().rev() {
+        let mut formulas = Vec::new();
+        journal_formulas(id, params, &mut formulas);
+        for f in formulas.iter().rev() {
+            for n in functions_in_formula(f) {
+                if !names.contains(&n) {
+                    names.push(n);
+                }
+            }
+            scanned += 1;
+            if names.len() >= RECENT_MAX || scanned >= SCAN_BUDGET {
+                break;
+            }
+        }
+        if names.len() >= RECENT_MAX || scanned >= SCAN_BUDGET {
+            break;
+        }
+    }
+    app.journal_seen = len;
+    if !names.is_empty() {
+        push_recent(&mut app.ui.recent_functions, &names);
+    }
 }
 
 /// The name a function shows under in the interface language.

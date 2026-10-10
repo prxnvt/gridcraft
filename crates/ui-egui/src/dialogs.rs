@@ -529,7 +529,7 @@ impl Dialog {
             "insertFunction" => {
                 // A Function Library menu opens it on its own category.
                 let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();
-                Dialog::custom("insertFunction", "Formula Builder", json!({"category": category}))
+                Dialog::custom("insertFunction", "Insert Function", json!({"category": category}))
             }
             "find" => {
                 let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
@@ -1422,31 +1422,70 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
     }
 }
 
+/// Insert Function: search, or pick a category (Most Recently Used, All or one category), then a
+/// function. OK starts the formula in the active cell.
 fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    use crate::function_library::{self as lib, ALL, MOST_RECENTLY_USED};
+    ui.label("Search for a function:");
+    ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(f32::INFINITY).hint_text("e.g. lookup, average, date")).request_focus();
+    // A new search (typed, or set through the control channel) looks through every function,
+    // as Excel's search does.
+    if d.values.get("searched").and_then(Json::as_str) != Some(d.search.as_str()) {
+        d.list_index = 0;
+        if !d.search.trim().is_empty() {
+            d.values.insert("category".into(), json!(ALL));
+        }
+        d.values.insert("searched".into(), json!(d.search));
+    }
+    // The category may be a label or an engine id (programmatic callers, `ui.dialog.set`).
+    let saved = d.values.get("category").and_then(Json::as_str).unwrap_or(MOST_RECENTLY_USED).to_string();
+    let mut category = if saved.eq_ignore_ascii_case(ALL) {
+        ALL.to_string()
+    } else {
+        lib::category_id(&saved).map(lib::category_label).unwrap_or(MOST_RECENTLY_USED).to_string()
+    };
     ui.horizontal(|ui| {
-        ui.label("Search:");
-        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text("e.g. lookup, average, date"));
-        r.request_focus();
+        ui.label("Or select a category:");
+        egui::ComboBox::from_id_salt("insertFunctionCategory").width(200.0).selected_text(category.as_str()).show_ui(ui, |ui| {
+            for c in [MOST_RECENTLY_USED, ALL].into_iter().chain(lib::CATEGORIES.iter().map(|(_, l)| *l)) {
+                ui.selectable_value(&mut category, c.to_string(), c);
+            }
+        });
     });
+    if category != saved {
+        d.list_index = 0;
+    }
+    d.values.insert("category".into(), json!(category));
     let locale = app.ui.language.formula_locale();
-    let list = gridcraft_engine::cmd::formulas::function_list();
-    let q = d.search.to_ascii_lowercase();
-    let hits: Vec<&Json> = list
-        .iter()
-        .filter(|f| {
-            q.is_empty()
-                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_ascii_lowercase().contains(&q))
-                || f["description"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(&q))
-        })
-        .take(300)
-        .collect();
-    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+    let q = d.search.trim().to_lowercase();
+    let matches =
+        |f: &lib::FnEntry| q.is_empty() || locale.function_name(&f.name).to_lowercase().contains(&q) || f.description.to_lowercase().contains(&q);
+    let hits: Vec<&lib::FnEntry> = if category == MOST_RECENTLY_USED {
+        app.ui.recent_functions.iter().filter_map(|n| lib::all().iter().find(|f| f.name == *n)).filter(|f| matches(f)).collect()
+    } else {
+        let id = lib::category_id(&category);
+        lib::all().iter().filter(|f| id.is_none_or(|id| f.category == id) && matches(f)).take(500).collect()
+    };
+    ui.label("Select a function:");
+    egui::ScrollArea::vertical().max_height(240.0).auto_shrink([false, false]).show(ui, |ui| {
+        if hits.is_empty() {
+            ui.label(egui::RichText::new("No functions match.").italics());
+        }
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let font = egui::TextStyle::Body.resolve(ui.style());
         for (i, f) in hits.iter().enumerate() {
-            let name = locale.function_name(f["name"].as_str().unwrap_or(""));
-            let r = ui.add(
-                egui::Button::selectable(i == d.list_index, format!("{name:<18} {}", f["category"].as_str().unwrap_or("")))
-                    .min_size(vec2(480.0, 20.0)),
-            );
+            // Two aligned columns: the function and its category.
+            let name = locale.function_name(&f.name);
+            let category = lib::category_label(&f.category);
+            let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), egui::Sense::click());
+            if i == d.list_index {
+                ui.painter().rect_filled(rect, 3.0, ui.visuals().selection.bg_fill);
+            } else if r.hovered() {
+                ui.painter().rect_filled(rect, 3.0, t.hover);
+            }
+            ui.painter().text(rect.left_center() + vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, name, font.clone(), t.text);
+            ui.painter().text(rect.left_center() + vec2(190.0, 0.0), egui::Align2::LEFT_CENTER, category, font.clone(), t.text_dim);
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, i == d.list_index, format!("{name} ({category})")));
             if r.clicked() {
                 d.list_index = i;
             }
@@ -1458,13 +1497,15 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     });
     if let Some(f) = hits.get(d.list_index) {
         ui.separator();
-        ui.label(egui::RichText::new(crate::formula_locale::signature(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default()).strong());
-        ui.label(crate::formula_locale::description(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default());
+        ui.label(egui::RichText::new(crate::formula_locale::signature(&f.name, locale).unwrap_or_default()).strong());
+        ui.label(crate::formula_locale::description(&f.name, locale).unwrap_or_default());
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(n) = hits.get(d.list_index).and_then(|f| f["name"].as_str()) {
-        let n = app.session.active().map(|doc| crate::formula_locale::completion_name(n, locale, &doc.wb, doc.wb.active_sheet)).unwrap_or(n);
+    if *confirm && let Some(f) = hits.get(d.list_index) {
+        lib::push_recent(&mut app.ui.recent_functions, std::slice::from_ref(&f.name));
+        let n =
+            app.session.active().map(|doc| crate::formula_locale::completion_name(&f.name, locale, &doc.wb, doc.wb.active_sheet)).unwrap_or(&f.name);
         let cur = app.editor.as_ref().map(|e| e.text.clone());
         let text = match cur {
             Some(t) if t.starts_with('=') => format!("{t}{n}("),

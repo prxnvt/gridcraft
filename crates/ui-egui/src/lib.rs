@@ -57,6 +57,7 @@ pub struct UiState {
     pub recent: Vec<String>,
     /// Formulas › Recently Used and Insert Function's Most Recently Used category, newest first
     /// (at most [`function_library::RECENT_MAX`]).
+    #[serde(deserialize_with = "function_library::lenient_recent")]
     pub recent_functions: Vec<String>,
     /// Interface language. English by default (so tests and headless renders never depend on the
     /// host's locale); the desktop app starts from [`i18n::Language::system`] when `ui.json` has
@@ -178,6 +179,8 @@ pub struct SheetApp {
     pub confirm: Option<Confirm>,
     /// Dialog to open when the current one closes (Data Analysis → a tool's form).
     pub dialog_next: Option<dialogs::Dialog>,
+    /// How much of the session's journal Recently Used has read (see [`function_library::harvest`]).
+    pub(crate) journal_seen: usize,
 }
 
 /// A pending "replace it?" question from a command (see [`confirm_text`]).
@@ -207,6 +210,7 @@ pub fn confirm_text(e: &str) -> Option<String> {
 
 impl SheetApp {
     pub fn new(session: Session, services: Services) -> SheetApp {
+        let journal_seen = session.journal.len();
         SheetApp {
             session,
             ui: UiState::default(),
@@ -238,6 +242,7 @@ impl SheetApp {
             started: now_ms(),
             confirm: None,
             dialog_next: None,
+            journal_seen,
         }
     }
 
@@ -627,6 +632,8 @@ impl SheetApp {
         self.effective_dark = ctx.theme() == egui::Theme::Dark;
         control::poll(self, ctx);
         self.drive_job(ctx);
+        // Formulas entered since the last frame, from any source, feed Recently Used.
+        function_library::harvest(self);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
