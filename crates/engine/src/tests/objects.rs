@@ -127,3 +127,123 @@ fn hostile_object_params_are_refused() {
     let a = sheet(&s, 0).object_anchor(objs[4]).unwrap();
     assert!(a.dx.is_finite() && a.dy.is_finite() && a.width <= 10000.0 && a.height >= 0.0);
 }
+
+fn anchor_of(s: &Session, sheet_i: usize, o: ObjRef) -> Anchor {
+    sheet(s, sheet_i).object_anchor(o).unwrap()
+}
+
+fn link(s: &Session, sheet_i: usize, id: u32) -> String {
+    sheet(s, sheet_i).controls.iter().find(|c| c.id == id).and_then(|c| c.link.clone()).unwrap_or_default()
+}
+
+#[test]
+fn shapes_equations_and_controls_follow_row_and_column_edits() {
+    let mut s = s();
+    let shape =
+        ObjRef::new(ObjKind::Shape, s.execute("insert.shape", json!({"kind": "rectangle", "at": "C5"})).unwrap()["shape"].as_u64().unwrap() as u32);
+    let equation = ObjRef::new(ObjKind::Equation, add_equation(&mut s, 0, "D8", "e^{i\\pi}+1=0"));
+    let control = ObjRef::new(ObjKind::Control, add_control(&mut s, 0, "E6", ControlKind::Spin, None));
+    let pinned = ObjRef::new(ObjKind::Control, add_control(&mut s, 0, "F9", ControlKind::Button, None));
+    s.execute("object.setAnchorMode", json!({"kind": "control", "id": pinned.id, "mode": "absolute"})).unwrap();
+    let cells = |s: &Session| [shape, equation, control, pinned].map(|o| anchor_of(s, 0, o).cell.a1());
+
+    s.execute("home.insertRows", json!({"rows": "2:3"})).unwrap();
+    assert_eq!(cells(&s), ["C7", "D10", "E8", "F9"]);
+    s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
+    assert_eq!(cells(&s), ["D7", "E10", "F8", "F9"]);
+    s.execute("home.deleteColumns", json!({"cols": "A:A"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "2:3"})).unwrap();
+    assert_eq!(cells(&s), ["C5", "D8", "E6", "F9"]);
+    // Deleting the control's own row collapses it onto the row that takes its place.
+    s.execute("home.deleteRows", json!({"rows": "6:6"})).unwrap();
+    assert_eq!(anchor_of(&s, 0, control).cell.a1(), "E6");
+    assert_eq!(anchor_of(&s, 0, equation).cell.a1(), "D7");
+    // Sorting moves a control anchored inside the block with its row.
+    s.execute("range.setValues", json!({"range": "H1", "values": [["k"], [3], [1], [2]]})).unwrap();
+    let row_ctl = ObjRef::new(ObjKind::Control, add_control(&mut s, 0, "H2", ControlKind::Button, None));
+    s.execute("selection.set", json!({"range": "H1:H4"})).unwrap();
+    s.execute("data.sortAscending", json!({"header": true, "column": "H"})).unwrap();
+    assert_eq!(anchor_of(&s, 0, row_ctl).cell.a1(), "H4", "the row holding 3 sorts last");
+    // One undo restores the anchors.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(anchor_of(&s, 0, row_ctl).cell.a1(), "H2");
+}
+
+#[test]
+fn control_links_follow_inserts_deletes_renames_and_cut_moves() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let local = add_control(&mut s, 0, "E2", ControlKind::Slider, Some("$B$2"));
+    let remote = add_control(&mut s, 0, "E6", ControlKind::Spin, Some("Data!$A$1"));
+    // A control on the other sheet pointing back at this one.
+    let back = add_control(&mut s, 1, "C3", ControlKind::Spin, Some("Sheet1!$B$2"));
+
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
+    assert_eq!(link(&s, 0, local), "$C$3");
+    assert_eq!(link(&s, 1, back), "Sheet1!$C$3");
+    assert_eq!(link(&s, 0, remote), "Data!$A$1", "edits on Sheet1 leave links into Data alone");
+
+    s.execute("cell.set", json!({"cell": "C3", "input": "7"})).unwrap();
+    s.execute("edit.cut", json!({"range": "C3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "G9"})).unwrap();
+    assert_eq!(link(&s, 0, local), "$G$9", "a cut-move takes the link with the cell");
+    assert_eq!(link(&s, 1, back), "Sheet1!$G$9");
+
+    s.execute("sheet.rename", json!({"sheet": 1, "name": "Inputs"})).unwrap();
+    assert_eq!(link(&s, 0, remote), "Inputs!$A$1");
+    s.execute("home.deleteRows", json!({"rows": "9:9"})).unwrap();
+    assert!(link(&s, 0, local).contains("#REF!"), "{}", link(&s, 0, local));
+    s.execute("home.deleteSheet", json!({"sheet": 1})).unwrap();
+    assert!(link(&s, 0, remote).contains("#REF!"), "{}", link(&s, 0, remote));
+    // Undo walks it all back.
+    for _ in 0..2 {
+        s.execute("edit.undo", json!({})).unwrap();
+    }
+    assert_eq!((link(&s, 0, local), link(&s, 0, remote)), ("$G$9".to_string(), "Inputs!$A$1".to_string()));
+}
+
+#[test]
+fn chart_series_follow_a_cut_move_and_a_sheet_delete() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[3], [5], [2], [8]]})).unwrap();
+    let chart = s.execute("insert.chart", json!({"range": "A1:A4", "type": "column"})).unwrap()["chart"].as_u64().unwrap() as u32;
+    let values = |s: &Session| sheet(s, 0).charts.iter().find(|c| c.id == chart).map(|c| c.series[0].values.clone()).unwrap_or_default();
+    s.execute("edit.cut", json!({"range": "A1:A4"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert!(values(&s).contains("$F$2:$F$5"), "{}", values(&s));
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0].series[0].values = "Other!$A$1:$A$3".into();
+    s.execute("home.deleteSheet", json!({"sheet": 1})).unwrap();
+    assert!(values(&s).contains("#REF!"), "{}", values(&s));
+}
+
+#[test]
+fn a_copied_sheet_gives_its_objects_fresh_ids() {
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let mut ids: Vec<u32> = wb
+        .sheets
+        .iter()
+        .flat_map(|sh| {
+            sh.charts
+                .iter()
+                .map(|c| c.id)
+                .chain(sh.images.iter().map(|c| c.id))
+                .chain(sh.shapes.iter().map(|c| c.id))
+                .chain(sh.controls.iter().map(|c| c.id))
+        })
+        .collect();
+    assert_eq!(ids.len(), 2 * objs.len());
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 2 * objs.len(), "every object id stays unique across the workbook");
+    let copy = sheet(&s, 1);
+    assert_eq!(copy.controls.len(), 1);
+    assert_eq!(copy.object_ref(copy.controls[0].id).map(|o| o.kind), Some(ObjKind::Control));
+    assert!(s.doc().unwrap().wb.next_object_id() > *ids.last().unwrap_or(&0));
+}

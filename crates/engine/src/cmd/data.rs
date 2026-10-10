@@ -303,8 +303,7 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
         // The object's own geometry (its top-left anchor cell, offset and size) is read from the
         // pre-sort `sh`; a two-cell object's bottom-right cell is derived from its size here so it
         // can be re-fitted to the lines it spans after the sort.
-        let objs: Vec<Anchor> =
-            sh.images.iter().map(|o| o.anchor).chain(sh.charts.iter().map(|o| o.anchor)).chain(sh.shapes.iter().map(|o| o.anchor)).collect();
+        let objs: Vec<Anchor> = sh.object_anchors().copied().collect();
         let descs: Vec<(u32, u32, f32, f32)> = objs
             .iter()
             .map(|a| {
@@ -338,33 +337,22 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
                 }
             }
         }
-        // Re-anchor floating objects now that the row heights are final. `objs` was collected as
-        // images ++ charts ++ shapes, so the same index maps straight onto each vec.
+        // Re-anchor floating objects now that the row heights are final. `objs` was collected in
+        // `object_anchors` order, which `object_anchors_mut` repeats.
         // Only objects anchored inside the sorted block move: within its lines on the sort axis
         // and within its span on the other axis (a picture beside the block stays put).
         let (b0, b1) = if by_cols { (body.start.col, body.end.col) } else { (body.start.row, body.end.row) };
         let (o0, o1) = if by_cols { (body.start.row, body.end.row) } else { (body.start.col, body.end.col) };
-        let ni = shm.images.len();
-        let nch = shm.charts.len();
-        for (i, (a, desc)) in objs.into_iter().zip(descs).enumerate() {
-            let other = if by_cols { a.cell.row } else { a.cell.col };
-            if other < o0 || other > o1 {
-                continue;
-            }
-            let na = sorted_anchor(shm, a, desc, by_cols, b0, b1, &dst_of);
-            if na != a {
-                if i < ni {
-                    if let Some(o) = shm.images.get_mut(i) {
-                        o.anchor = na;
-                    }
-                } else if i < ni + nch {
-                    if let Some(o) = shm.charts.get_mut(i - ni) {
-                        o.anchor = na;
-                    }
-                } else if let Some(o) = shm.shapes.get_mut(i - ni - nch) {
-                    o.anchor = na;
-                }
-            }
+        let new_anchors: Vec<Anchor> = objs
+            .into_iter()
+            .zip(descs)
+            .map(|(a, desc)| {
+                let other = if by_cols { a.cell.row } else { a.cell.col };
+                if other < o0 || other > o1 { a } else { sorted_anchor(shm, a, desc, by_cols, b0, b1, &dst_of) }
+            })
+            .collect();
+        for (a, n) in shm.object_anchors_mut().zip(new_anchors) {
+            *a = n;
         }
         for (c, _) in moved {
             cx.changed.push((sheet, c));

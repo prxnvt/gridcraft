@@ -1055,6 +1055,34 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             n.formula = gridcraft_formula::print(&new);
         }
     }
+    rewrite_cell_links(wb, |host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e));
+}
+
+/// The hook every reference-moving edit (insert and delete of lines or cells, cut-move, sheet
+/// rename and delete) runs over the cells floating objects point at: chart series and control
+/// links. `f` maps a reference held by an object on sheet `host` to its new form. Text that
+/// doesn't parse is kept.
+pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(&str, gridcraft_formula::Expr) -> gridcraft_formula::Expr) {
+    for si in 0..wb.sheets.len() {
+        let Some(host) = wb.sheets.get(si).filter(|s| !s.charts.is_empty() || !s.controls.is_empty()).map(|s| s.name.clone()) else { continue };
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        let fix = |text: &str| -> String {
+            match gridcraft_formula::parse(text) {
+                Ok(expr) => gridcraft_formula::print(&f(&host, expr)),
+                Err(_) => text.to_string(),
+            }
+        };
+        for ch in sh.charts.iter_mut() {
+            for se in ch.series.iter_mut() {
+                se.values = fix(&se.values);
+                se.categories = se.categories.as_deref().map(fix);
+                se.name = se.name.as_deref().map(fix);
+            }
+        }
+        for c in sh.controls.iter_mut() {
+            c.link = c.link.as_deref().map(fix);
+        }
+    }
 }
 
 // ---------------------------------------------------------------- clear
