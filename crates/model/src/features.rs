@@ -956,6 +956,80 @@ pub struct PivotValue {
     pub base_item: Option<String>,
 }
 
+/// A comparison in a label or value filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PivotCompare {
+    Equals,
+    NotEquals,
+    BeginsWith,
+    NotBeginsWith,
+    EndsWith,
+    NotEndsWith,
+    Contains,
+    NotContains,
+    Greater,
+    GreaterOrEqual,
+    Less,
+    LessOrEqual,
+    Between,
+    NotBetween,
+}
+
+/// What a Top 10 filter counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PivotTopBy {
+    Items,
+    Percent,
+    Sum,
+}
+
+/// A date filter's condition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PivotDateRule {
+    Equals,
+    NotEquals,
+    Before,
+    After,
+    Between,
+    Tomorrow,
+    Today,
+    Yesterday,
+    NextWeek,
+    ThisWeek,
+    LastWeek,
+    NextMonth,
+    ThisMonth,
+    LastMonth,
+    NextQuarter,
+    ThisQuarter,
+    LastQuarter,
+    NextYear,
+    ThisYear,
+    LastYear,
+    YearToDate,
+    /// Quarter 1–4 of any year.
+    Quarter(u8),
+    /// Month 1–12 of any year.
+    Month(u8),
+}
+
+/// A filter rule on a row or column field.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PivotRule {
+    /// On item labels.
+    Label { op: PivotCompare, value: String, value2: String },
+    /// On item dates (the field's values).
+    Date { rule: PivotDateRule, value: Option<f64>, value2: Option<f64> },
+    /// On each item's total of a value field.
+    Value { op: PivotCompare, field: String, value: f64, value2: f64 },
+    /// The top or bottom items by a value field.
+    Top { top: bool, count: f64, by: PivotTopBy, field: String },
+}
+
 /// A report filter (or, for a field also in Rows/Columns, its hidden-items filter).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -963,6 +1037,10 @@ pub struct PivotFilter {
     pub source_col: String,
     /// Item labels shown; `None` = all.
     pub selected: Option<Vec<String>>,
+    /// Label or date filter.
+    pub label: Option<PivotRule>,
+    /// Value or Top 10 filter.
+    pub value: Option<PivotRule>,
 }
 
 /// A PivotTable: its definition plus where its output was last written. The output itself is
@@ -995,6 +1073,9 @@ pub struct PivotTable {
     pub options: PivotOptions,
     /// Fields made by grouping selected items.
     pub manual_groups: Vec<PivotManualGroup>,
+    /// Cells with a field button, from the last refresh (not saved).
+    #[serde(skip)]
+    pub buttons: Vec<(CellRef, String)>,
 }
 
 impl Default for PivotTable {
@@ -1018,6 +1099,7 @@ impl Default for PivotTable {
             last_range: None,
             options: PivotOptions::default(),
             manual_groups: vec![],
+            buttons: vec![],
         }
     }
 }

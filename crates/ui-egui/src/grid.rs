@@ -63,6 +63,8 @@ pub struct GridState {
     pub rect: Option<Rect>,
     pub cells_rect: Option<Rect>,
     pub filter_menu: Option<(u32, Pos2)>,
+    /// Open PivotTable field drop-down: (pivot id, field, where).
+    pub pivot_menu: Option<(u32, String, Pos2)>,
     pub context_menu: Option<Pos2>,
     pub marching_phase: f32,
     pub last_click: Option<(CellRef, f64)>,
@@ -423,6 +425,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         in_cell_editor(app, ui, &geo, sh, &wb);
     }
     filter_menu(app, ui, &geo, previous_popups.0 == app.grid.filter_menu);
+    crate::pivot_filter::menu(app, ui);
     list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
@@ -847,6 +850,7 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
             }
         }
     }
+    buttons.extend(crate::pivot_filter::buttons(sh));
     for (c, active) in buttons {
         if !range.contains(c) {
             continue;
@@ -1256,6 +1260,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             && r.contains(p)
         {
             app.grid.list_picker = Some(sel.active);
+            return;
+        }
+        // PivotTable field buttons.
+        if let Some((pivot, field)) = crate::pivot_filter::button_at(sh, c)
+            && filter_button_rect(geo, sh, c).contains(p)
+        {
+            app.grid.pivot_menu = Some((pivot, field, p));
             return;
         }
         // Filter dropdown buttons.

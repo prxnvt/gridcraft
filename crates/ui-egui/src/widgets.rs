@@ -174,7 +174,15 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
 }
 
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
-    let Some((title, msg)) = app.message.clone() else { return };
+    let shown_key = egui::Id::new("message_box_shown");
+    let Some((title, msg)) = app.message.clone() else {
+        ctx.data_mut(|d| d.remove::<u64>(shown_key));
+        return;
+    };
+    // The key that raised the message (Enter on a dialog's OK) mustn't also dismiss it.
+    let frame = ctx.cumulative_pass_nr();
+    let first = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(shown_key, || frame));
+    let keys_live = frame > first;
     let mut close = false;
     egui::Modal::new(egui::Id::new("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
@@ -189,13 +197,14 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button("  OK  ").clicked() || (keys_live && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))) {
                 close = true;
             }
         });
     });
     if close {
         app.message = None;
+        ctx.data_mut(|d| d.remove::<u64>(shown_key));
     }
 }
 

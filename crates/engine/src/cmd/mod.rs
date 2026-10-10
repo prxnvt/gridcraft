@@ -245,6 +245,11 @@ pub struct Ctx<'a> {
     pub protection_checked: bool,
 }
 
+/// Today as a date serial for PivotTable date filters (the calculation's "now").
+pub(crate) fn pivot_today(_wb: &gridcraft_model::Workbook) -> f64 {
+    gridcraft_calc::now_serial().floor()
+}
+
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     let d = s.doc_mut()?;
     commit(d, |cx| {

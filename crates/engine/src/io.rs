@@ -63,7 +63,8 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
         return Ok((wb, report.warnings));
     }
     if sniffed == gridcraft_xlsx::Format::Xlsx || kind == Some(FileKind::Xlsx) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        let (mut wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        crate::pivot::place_buttons(&mut wb);
         return Ok((wb, report.warnings));
     }
     match kind {
@@ -73,6 +74,7 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
             if wb.sheets.is_empty() {
                 wb = Workbook::new();
             }
+            crate::pivot::place_buttons(&mut wb);
             Ok((wb, vec![]))
         }
         Some(FileKind::Tsv) => {

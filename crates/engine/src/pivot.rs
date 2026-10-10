@@ -629,6 +629,8 @@ pub struct Output {
     /// Rows above the body (report filters plus a blank row).
     pub body_offset: u32,
     pub width: u32,
+    /// Field buttons (filter drop-downs): (row, column, field) relative to the top-left.
+    pub buttons: Vec<(u32, u32, String)>,
 }
 
 impl Output {
@@ -645,6 +647,7 @@ struct Grid {
     rows: Vec<Vec<OutCell>>,
     kinds: Vec<RowKind>,
     width: usize,
+    buttons: Vec<(u32, u32, String)>,
 }
 
 impl Grid {
@@ -897,9 +900,6 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     // ---- aggregate
     let mut row_items: Vec<FieldItems> = rows.iter().map(|_| FieldItems::default()).collect();
     let mut col_items: Vec<FieldItems> = cols.iter().map(|_| FieldItems::default()).collect();
-    let mut aggs: AggMap = HashMap::new();
-    let mut row_set: HashSet<Vec<u32>> = HashSet::new();
-    let mut col_set: HashSet<Vec<u32>> = HashSet::new();
     let filter_fmts: Vec<String> = filters.iter().map(|f| fmt_of(f.0)).collect();
     let row_fmts: Vec<String> = rows.iter().map(|(c, _)| fmt_of(*c)).collect();
     let col_fmts: Vec<String> = cols.iter().map(|(c, _)| fmt_of(*c)).collect();
@@ -923,11 +923,23 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             fi.intern(wb, v, &Grouping::of(f), fmt, ri);
         }
     }
+    let today = crate::cmd::pivot_today(wb);
+    // Records that pass the item, label and date filters, with their row and column paths.
+    let mut recs: Vec<(usize, Vec<u32>, Vec<u32>)> = Vec::new();
     'rec: for (ri, rec) in src.rows.iter().enumerate() {
-        for ((c, f, g, _), fmt) in filters.iter().zip(filter_fmts.iter()) {
-            if let Some(sel) = &f.selected {
-                let label = item_label(wb, rec.get(*c).unwrap_or(&Value::Empty), g, fmt);
-                if !sel.iter().any(|s| s.eq_ignore_ascii_case(&label)) {
+        for ((c, f, g, report), fmt) in filters.iter().zip(filter_fmts.iter()) {
+            let v = rec.get(*c).unwrap_or(&Value::Empty);
+            if f.selected.is_some() || f.label.is_some() {
+                let label = item_label(wb, v, g, fmt);
+                if let Some(sel) = &f.selected
+                    && !sel.iter().any(|s| s.eq_ignore_ascii_case(&label))
+                {
+                    continue 'rec;
+                }
+                if let Some(rule) = &f.label
+                    && !*report
+                    && !label_rule_ok(rule, &label, v, today)
+                {
                     continue 'rec;
                 }
             }
@@ -943,18 +955,85 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         for (((c, f), fi), fmt) in cols.iter().zip(col_items.iter_mut()).zip(col_fmts.iter()) {
             cp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), &Grouping::of(f), fmt, ri));
         }
-        for a in 0..=rp.len() {
-            for b in 0..=cp.len() {
-                let e = aggs.entry((rp[..a].to_vec(), cp[..b].to_vec())).or_insert_with(|| vec![Acc::default(); k]);
-                for (acc, (c, _)) in e.iter_mut().zip(vals.iter()) {
-                    acc.add(rec.get(*c).unwrap_or(&Value::Empty));
+        recs.push((ri, rp, cp));
+    }
+    let aggregate =
+        |excl_rows: &HashSet<Vec<u32>>, excl_cols: &HashSet<Vec<u32>>| -> Result<(AggMap, HashSet<Vec<u32>>, HashSet<Vec<u32>>), String> {
+            let mut aggs: AggMap = HashMap::new();
+            let mut row_set: HashSet<Vec<u32>> = HashSet::new();
+            let mut col_set: HashSet<Vec<u32>> = HashSet::new();
+            let hit = |excl: &HashSet<Vec<u32>>, p: &[u32]| !excl.is_empty() && (1..=p.len()).any(|n| p.get(..n).is_some_and(|x| excl.contains(x)));
+            for (ri, rp, cp) in &recs {
+                if hit(excl_rows, rp) || hit(excl_cols, cp) {
+                    continue;
+                }
+                let Some(rec) = src.rows.get(*ri) else { continue };
+                for a in 0..=rp.len() {
+                    for b in 0..=cp.len() {
+                        let e = aggs.entry((rp[..a].to_vec(), cp[..b].to_vec())).or_insert_with(|| vec![Acc::default(); k]);
+                        for (acc, (c, _)) in e.iter_mut().zip(vals.iter()) {
+                            acc.add(rec.get(*c).unwrap_or(&Value::Empty));
+                        }
+                    }
+                }
+                row_set.insert(rp.clone());
+                col_set.insert(cp.clone());
+                if aggs.len() > 5_000_000 {
+                    return Err("The PivotTable report is too large.".into());
+                }
+            }
+            Ok((aggs, row_set, col_set))
+        };
+    let none = HashSet::new();
+    let (mut aggs, mut row_set, mut col_set) = aggregate(&none, &none)?;
+    // Value and Top 10 filters drop items (within each parent); totals then count only the rest.
+    let value_rule = |f: &PivotField| pt.filters.iter().find(|x| x.source_col.eq_ignore_ascii_case(&f.source_col)).and_then(|x| x.value.as_ref());
+    let row_rules: Vec<Option<&PivotRule>> = rows.iter().map(|(_, f)| value_rule(f)).collect();
+    let col_rules: Vec<Option<&PivotRule>> = cols.iter().map(|(_, f)| value_rule(f)).collect();
+    if k > 0 && (row_rules.iter().any(Option::is_some) || col_rules.iter().any(Option::is_some)) {
+        let value_index =
+            |field: &str| vals.iter().position(|(_, v)| v.name.eq_ignore_ascii_case(field) || v.source_col.eq_ignore_ascii_case(field)).unwrap_or(0);
+        let total = |rp: &[u32], cp: &[u32], vi: usize| -> Option<f64> {
+            let (_, v) = vals.get(vi)?;
+            aggs.get(&(rp.to_vec(), cp.to_vec())).and_then(|a| a.get(vi)).and_then(|a| a.result(v.func).as_f64())
+        };
+        let mut excl_rows = HashSet::new();
+        let mut excl_cols = HashSet::new();
+        for (on_rows, rules, set, excl) in [(true, &row_rules, &row_set, &mut excl_rows), (false, &col_rules, &col_set, &mut excl_cols)] {
+            let mut parents: HashMap<Vec<u32>, Vec<u32>> = HashMap::new();
+            for path in set {
+                for d in 0..path.len() {
+                    let (Some(parent), Some(item)) = (path.get(..d), path.get(d)) else { continue };
+                    let e = parents.entry(parent.to_vec()).or_default();
+                    if !e.contains(item) {
+                        e.push(*item);
+                    }
+                }
+            }
+            for (parent, items) in &parents {
+                let Some(Some(rule)) = rules.get(parent.len()) else { continue };
+                let field = match rule {
+                    PivotRule::Value { field, .. } | PivotRule::Top { field, .. } => field.as_str(),
+                    _ => continue,
+                };
+                let vi = value_index(field);
+                let scored: Vec<(u32, Option<f64>)> = items
+                    .iter()
+                    .map(|it| {
+                        let mut path = parent.clone();
+                        path.push(*it);
+                        (*it, if on_rows { total(&path, &[], vi) } else { total(&[], &path, vi) })
+                    })
+                    .collect();
+                for it in rule_drops(rule, &scored) {
+                    let mut path = parent.clone();
+                    path.push(it);
+                    excl.insert(path);
                 }
             }
         }
-        row_set.insert(rp);
-        col_set.insert(cp);
-        if aggs.len() > 5_000_000 {
-            return Err("The PivotTable report is too large.".into());
+        if !excl_rows.is_empty() || !excl_cols.is_empty() {
+            (aggs, row_set, col_set) = aggregate(&excl_rows, &excl_cols)?;
         }
     }
 
@@ -1039,7 +1118,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         width = width.max(1);
     }
     let width = width.max(1);
-    let mut g = Grid { rows: vec![], kinds: vec![], width };
+    let mut g = Grid { rows: vec![], kinds: vec![], width, buttons: vec![] };
 
     // ---- report filters
     for _ in 0..filter_rows {
@@ -1055,6 +1134,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         };
         g.set(r, grp * 3, Value::text(name), CellKind::Filter, 0, None);
         g.set(r, grp * 3 + 1, Value::text(shown), CellKind::Filter, 0, None);
+        g.buttons.push((r as u32, (grp * 3 + 1) as u32, f.source_col.clone()));
     }
     if !shown_filters.is_empty() {
         g.push_row(RowKind::Blank)?;
@@ -1064,7 +1144,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     if empty {
         let r = g.push_row(RowKind::Placeholder)?;
         g.set(r, 0, Value::text(format!("{} — choose fields", pt.name)), CellKind::Placeholder, 0, None);
-        return Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset });
+        return Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, buttons: g.buttons });
     }
 
     let val_name = |vi: usize| vals.get(vi).map(|(_, v)| v.name.clone()).unwrap_or_default();
@@ -1076,9 +1156,13 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         if compact {
             let caption = pt.options.row_header_caption.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| "Row Labels".into());
             g.set(r, 0, Value::text(caption), CellKind::Header, 0, None);
+            if let Some(f) = row_fields.first() {
+                g.buttons.push((r as u32, 0, f.source_col.clone()));
+            }
         } else {
             for (i, f) in row_fields.iter().enumerate() {
                 g.set(r, i, Value::text(f.shown_name()), CellKind::Header, 0, None);
+                g.buttons.push((r as u32, i as u32, f.source_col.clone()));
             }
         }
     };
@@ -1104,6 +1188,9 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                 col_fields.first().map(|f| f.shown_name().to_string()).unwrap_or_default()
             };
             g.set(cap, l, Value::text(caption), CellKind::Header, 0, None);
+            if let Some(f) = col_fields.first() {
+                g.buttons.push((cap as u32, l as u32, f.source_col.clone()));
+            }
         }
         let levels = cols.len() + usize::from(k > 1);
         let first_level = g.rows.len();
@@ -1365,7 +1452,172 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset })
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, buttons: g.buttons })
+}
+
+/// Whether `text` matches `pattern` with `*` and `?` wildcards (case-insensitive).
+fn wildcard(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let t: Vec<char> = text.to_lowercase().chars().collect();
+    let (mut pi, mut ti, mut star, mut mark) = (0usize, 0usize, None::<usize>, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s0) = star {
+            pi = s0 + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// Ordering of a label against a filter value: as numbers when both are numbers.
+fn label_cmp(a: &str, b: &str) -> Ordering {
+    match (a.trim().parse::<f64>(), b.trim().parse::<f64>()) {
+        (Ok(x), Ok(y)) => x.total_cmp(&y),
+        _ => a.to_lowercase().cmp(&b.to_lowercase()),
+    }
+}
+
+fn compare_text(op: PivotCompare, label: &str, a: &str, b: &str) -> bool {
+    let (l, x) = (label.to_lowercase(), a.to_lowercase());
+    match op {
+        PivotCompare::Equals => wildcard(a, label),
+        PivotCompare::NotEquals => !wildcard(a, label),
+        PivotCompare::BeginsWith => l.starts_with(&x),
+        PivotCompare::NotBeginsWith => !l.starts_with(&x),
+        PivotCompare::EndsWith => l.ends_with(&x),
+        PivotCompare::NotEndsWith => !l.ends_with(&x),
+        PivotCompare::Contains => wildcard(&format!("*{a}*"), label),
+        PivotCompare::NotContains => !wildcard(&format!("*{a}*"), label),
+        PivotCompare::Greater => label_cmp(label, a) == Ordering::Greater,
+        PivotCompare::GreaterOrEqual => label_cmp(label, a) != Ordering::Less,
+        PivotCompare::Less => label_cmp(label, a) == Ordering::Less,
+        PivotCompare::LessOrEqual => label_cmp(label, a) != Ordering::Greater,
+        PivotCompare::Between => label_cmp(label, a) != Ordering::Less && label_cmp(label, b) != Ordering::Greater,
+        PivotCompare::NotBetween => !(label_cmp(label, a) != Ordering::Less && label_cmp(label, b) != Ordering::Greater),
+    }
+}
+
+fn compare_num(op: PivotCompare, v: f64, a: f64, b: f64) -> bool {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    match op {
+        PivotCompare::Equals => v == a,
+        PivotCompare::NotEquals => v != a,
+        PivotCompare::Greater => v > a,
+        PivotCompare::GreaterOrEqual => v >= a,
+        PivotCompare::Less => v < a,
+        PivotCompare::LessOrEqual => v <= a,
+        PivotCompare::Between => v >= lo && v <= hi,
+        PivotCompare::NotBetween => v < lo || v > hi,
+        _ => true,
+    }
+}
+
+/// Year, month (1–12) and quarter (1–4) of a serial.
+fn ymq(serial: f64) -> Option<(i32, u32, u32)> {
+    let d = datetime_from_serial(gridcraft_core::DateSystem::D1900, serial)?;
+    Some((d.year, d.month, (d.month - 1) / 3 + 1))
+}
+
+/// Whether a date (serial `x`) meets a date filter, with `today` as today's serial.
+fn date_rule_ok(rule: PivotDateRule, x: f64, a: Option<f64>, b: Option<f64>, today: f64) -> bool {
+    let day = x.floor();
+    let t = today.floor();
+    let weekday = |s: f64| datetime_from_serial(gridcraft_core::DateSystem::D1900, s).map(|d| d.weekday as f64).unwrap_or(0.0);
+    let week = |offset: f64| {
+        let start = t - weekday(t) + 7.0 * offset;
+        day >= start && day < start + 7.0
+    };
+    let (Some((y, m, q)), Some((ty, tm, tq))) = (ymq(day), ymq(t)) else { return false };
+    let month = |offset: i32| {
+        let total = ty * 12 + tm as i32 - 1 + offset;
+        y == total.div_euclid(12) && m as i32 == total.rem_euclid(12) + 1
+    };
+    let quarter = |offset: i32| {
+        let total = ty * 4 + tq as i32 - 1 + offset;
+        y == total.div_euclid(4) && q as i32 == total.rem_euclid(4) + 1
+    };
+    match rule {
+        PivotDateRule::Equals => a.is_some_and(|a| day == a.floor()),
+        PivotDateRule::NotEquals => a.is_none_or(|a| day != a.floor()),
+        PivotDateRule::Before => a.is_some_and(|a| day < a.floor()),
+        PivotDateRule::After => a.is_some_and(|a| day > a.floor()),
+        PivotDateRule::Between => match (a, b) {
+            (Some(a), Some(b)) => day >= a.floor().min(b.floor()) && day <= a.floor().max(b.floor()),
+            _ => false,
+        },
+        PivotDateRule::Tomorrow => day == t + 1.0,
+        PivotDateRule::Today => day == t,
+        PivotDateRule::Yesterday => day == t - 1.0,
+        PivotDateRule::NextWeek => week(1.0),
+        PivotDateRule::ThisWeek => week(0.0),
+        PivotDateRule::LastWeek => week(-1.0),
+        PivotDateRule::NextMonth => month(1),
+        PivotDateRule::ThisMonth => month(0),
+        PivotDateRule::LastMonth => month(-1),
+        PivotDateRule::NextQuarter => quarter(1),
+        PivotDateRule::ThisQuarter => quarter(0),
+        PivotDateRule::LastQuarter => quarter(-1),
+        PivotDateRule::NextYear => y == ty + 1,
+        PivotDateRule::ThisYear => y == ty,
+        PivotDateRule::LastYear => y == ty - 1,
+        PivotDateRule::YearToDate => y == ty && day <= t,
+        PivotDateRule::Quarter(n) => q == n as u32,
+        PivotDateRule::Month(n) => m == n as u32,
+    }
+}
+
+/// Whether a record passes a label or date filter on its item.
+fn label_rule_ok(rule: &PivotRule, label: &str, raw: &Value, today: f64) -> bool {
+    match rule {
+        PivotRule::Label { op, value, value2 } => compare_text(*op, label, value, value2),
+        PivotRule::Date { rule, value, value2 } => raw.as_f64().is_some_and(|x| date_rule_ok(*rule, x, *value, *value2, today)),
+        _ => true,
+    }
+}
+
+/// The items a value or Top 10 filter drops among siblings `(item, total)`.
+fn rule_drops(rule: &PivotRule, scored: &[(u32, Option<f64>)]) -> Vec<u32> {
+    match rule {
+        PivotRule::Value { op, value, value2, .. } => {
+            scored.iter().filter(|(_, v)| !v.is_some_and(|x| compare_num(*op, x, *value, *value2))).map(|(i, _)| *i).collect()
+        }
+        PivotRule::Top { top, count, by, .. } => {
+            let mut order: Vec<(u32, f64)> = scored.iter().map(|(i, v)| (*i, v.unwrap_or(f64::NEG_INFINITY))).collect();
+            order.sort_by(|a, b| if *top { b.1.total_cmp(&a.1) } else { a.1.total_cmp(&b.1) });
+            let keep: usize = match by {
+                PivotTopBy::Items => (count.max(0.0).floor() as usize).min(order.len()),
+                PivotTopBy::Percent | PivotTopBy::Sum => {
+                    let total: f64 = order.iter().map(|x| x.1.max(0.0)).sum();
+                    let goal = if *by == PivotTopBy::Percent { total * count / 100.0 } else { *count };
+                    let mut acc = 0.0;
+                    let mut n = 0;
+                    for (_, v) in &order {
+                        if acc >= goal {
+                            break;
+                        }
+                        acc += v.max(0.0);
+                        n += 1;
+                    }
+                    n
+                }
+            };
+            order.iter().skip(keep).map(|(i, _)| *i).collect()
+        }
+        _ => vec![],
+    }
 }
 
 /// A Show Values As base item, resolved against the base field's items.
@@ -1638,8 +1890,32 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = Some(area);
+        p.buttons = place(&out.buttons, origin);
     }
     Ok(area)
+}
+
+fn place(buttons: &[(u32, u32, String)], origin: CellRef) -> Vec<(CellRef, String)> {
+    buttons.iter().map(|(r, c, f)| (CellRef::new(origin.row.saturating_add(*r), origin.col.saturating_add(*c)), f.clone())).collect()
+}
+
+/// Finds where each PivotTable's field buttons are, for PivotTables read from a file (their cells
+/// are as saved; nothing is rewritten).
+pub fn place_buttons(wb: &mut Workbook) {
+    let mut found: Vec<(usize, usize, Vec<(CellRef, String)>)> = Vec::new();
+    for (si, sh) in wb.sheets.iter().enumerate() {
+        for (pi, pt) in sh.pivots.iter().enumerate() {
+            let Some(r) = pt.last_range else { continue };
+            if let Ok(out) = compute(wb, pt, si) {
+                found.push((si, pi, place(&out.buttons, r.start)));
+            }
+        }
+    }
+    for (si, pi, b) in found {
+        if let Some(p) = wb.sheet_mut(si).and_then(|s| s.pivots.get_mut(pi)) {
+            p.buttons = b;
+        }
+    }
 }
 
 /// Clears a pivot's last output area.
@@ -1650,5 +1926,76 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     shm.merges.retain(|m| !r.contains(m.start));
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = None;
+        p.buttons.clear();
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    fn serial(y: i64, m: i64, d: i64) -> f64 {
+        gridcraft_core::date::serial_from_ymd(gridcraft_core::DateSystem::D1900, y, m, d).unwrap()
+    }
+
+    #[test]
+    fn wildcards_and_comparisons() {
+        assert!(wildcard("?ast", "East"));
+        assert!(wildcard("e*", "EAST"));
+        assert!(wildcard("*s*t", "East"));
+        assert!(!wildcard("?ast", "Coast"));
+        assert!(compare_text(PivotCompare::Contains, "Northwest", "WEST", ""));
+        assert!(compare_text(PivotCompare::NotBeginsWith, "West", "E", ""));
+        // Numbers compare as numbers, text as text.
+        assert!(compare_text(PivotCompare::Greater, "10", "9", ""));
+        assert!(compare_text(PivotCompare::Between, "Melon", "b", "n"));
+        assert!(compare_text(PivotCompare::NotBetween, "Zebra", "b", "n"));
+        assert!(compare_num(PivotCompare::Between, 5.0, 10.0, 1.0));
+        assert!(!compare_num(PivotCompare::NotBetween, 5.0, 1.0, 10.0));
+    }
+
+    #[test]
+    fn relative_dates() {
+        // Thursday 15 October 2026.
+        let today = serial(2026, 10, 15);
+        let ok = |r: PivotDateRule, y: i64, m: i64, d: i64| date_rule_ok(r, serial(y, m, d), None, None, today);
+        assert!(ok(PivotDateRule::Today, 2026, 10, 15));
+        assert!(ok(PivotDateRule::Yesterday, 2026, 10, 14));
+        assert!(ok(PivotDateRule::Tomorrow, 2026, 10, 16));
+        // Weeks run Sunday to Saturday.
+        assert!(ok(PivotDateRule::ThisWeek, 2026, 10, 11));
+        assert!(ok(PivotDateRule::ThisWeek, 2026, 10, 17));
+        assert!(!ok(PivotDateRule::ThisWeek, 2026, 10, 18));
+        assert!(ok(PivotDateRule::NextWeek, 2026, 10, 18));
+        assert!(ok(PivotDateRule::LastWeek, 2026, 10, 10));
+        assert!(ok(PivotDateRule::LastMonth, 2026, 9, 30));
+        assert!(ok(PivotDateRule::NextQuarter, 2027, 1, 1));
+        assert!(ok(PivotDateRule::LastQuarter, 2026, 7, 1));
+        assert!(ok(PivotDateRule::LastYear, 2025, 12, 31));
+        assert!(ok(PivotDateRule::YearToDate, 2026, 1, 1));
+        assert!(!ok(PivotDateRule::YearToDate, 2026, 10, 16));
+        assert!(ok(PivotDateRule::Quarter(2), 2019, 5, 1));
+        assert!(ok(PivotDateRule::Month(12), 2001, 12, 25));
+        // December rolls into next January.
+        let dec = serial(2026, 12, 3);
+        assert!(date_rule_ok(PivotDateRule::NextMonth, serial(2027, 1, 9), None, None, dec));
+        assert!(date_rule_ok(PivotDateRule::Between, serial(2026, 3, 1), Some(serial(2026, 4, 1)), Some(serial(2026, 2, 1)), dec));
+    }
+
+    #[test]
+    fn top_and_value_drops() {
+        let scored = [(0, Some(415.0)), (1, Some(285.0)), (2, Some(135.0))];
+        let top = |top, count, by| {
+            let mut d = rule_drops(&PivotRule::Top { top, count, by, field: String::new() }, &scored);
+            d.sort();
+            d
+        };
+        assert_eq!(top(true, 1.0, PivotTopBy::Items), vec![1, 2]);
+        assert_eq!(top(false, 1.0, PivotTopBy::Items), vec![0, 1]);
+        assert_eq!(top(true, 50.0, PivotTopBy::Percent), vec![2]);
+        assert_eq!(top(true, 400.0, PivotTopBy::Sum), vec![1, 2]);
+        assert_eq!(top(true, 99.0, PivotTopBy::Items), Vec::<u32>::new());
+        let v = rule_drops(&PivotRule::Value { op: PivotCompare::Greater, field: String::new(), value: 200.0, value2: 0.0 }, &scored);
+        assert_eq!(v, vec![2]);
     }
 }

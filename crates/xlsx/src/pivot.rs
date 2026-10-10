@@ -18,8 +18,8 @@ use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{
-    BASE_NEXT, BASE_PREVIOUS, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotManualGroup, PivotNamedGroup, PivotNumberGroup,
-    PivotShowAs, PivotSort, PivotSubtotals, PivotTable, PivotValue, Workbook,
+    BASE_NEXT, BASE_PREVIOUS, PivotCompare, PivotDateGroup, PivotDateRule, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotManualGroup,
+    PivotNamedGroup, PivotNumberGroup, PivotRule, PivotShowAs, PivotSort, PivotSubtotals, PivotTable, PivotTopBy, PivotValue, Workbook,
 };
 
 use crate::IoError;
@@ -1363,6 +1363,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
         u8::from(o.banded_rows),
         u8::from(o.banded_columns)
     );
+    filters_xml(&mut s, pt, axis_map, &vals);
     // Excel 2010 additions: alt text and the Values row.
     if !o.alt_title.is_empty() || !o.alt_description.is_empty() || !o.show_values_row {
         let _ = write!(s, "<extLst><ext uri=\"{EXT_X14_PIVOT_TABLE}\" xmlns:x14=\"{NS_X14}\"><x14:pivotTableDefinition");
@@ -1379,6 +1380,226 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
     }
     s.push_str("</pivotTableDefinition>");
     s
+}
+
+fn compare_suffix(op: PivotCompare) -> &'static str {
+    match op {
+        PivotCompare::Equals => "Equal",
+        PivotCompare::NotEquals => "NotEqual",
+        PivotCompare::BeginsWith => "BeginsWith",
+        PivotCompare::NotBeginsWith => "NotBeginsWith",
+        PivotCompare::EndsWith => "EndsWith",
+        PivotCompare::NotEndsWith => "NotEndsWith",
+        PivotCompare::Contains => "Contains",
+        PivotCompare::NotContains => "NotContains",
+        PivotCompare::Greater => "GreaterThan",
+        PivotCompare::GreaterOrEqual => "GreaterThanOrEqual",
+        PivotCompare::Less => "LessThan",
+        PivotCompare::LessOrEqual => "LessThanOrEqual",
+        PivotCompare::Between => "Between",
+        PivotCompare::NotBetween => "NotBetween",
+    }
+}
+
+const COMPARES: [PivotCompare; 14] = [
+    PivotCompare::Equals,
+    PivotCompare::NotEquals,
+    PivotCompare::BeginsWith,
+    PivotCompare::NotBeginsWith,
+    PivotCompare::EndsWith,
+    PivotCompare::NotEndsWith,
+    PivotCompare::Contains,
+    PivotCompare::NotContains,
+    PivotCompare::Greater,
+    PivotCompare::GreaterOrEqual,
+    PivotCompare::Less,
+    PivotCompare::LessOrEqual,
+    PivotCompare::Between,
+    PivotCompare::NotBetween,
+];
+
+/// Dynamic date periods by their filter type names.
+const DATE_PERIODS: [(PivotDateRule, &str); 15] = [
+    (PivotDateRule::Tomorrow, "tomorrow"),
+    (PivotDateRule::Today, "today"),
+    (PivotDateRule::Yesterday, "yesterday"),
+    (PivotDateRule::NextWeek, "nextWeek"),
+    (PivotDateRule::ThisWeek, "thisWeek"),
+    (PivotDateRule::LastWeek, "lastWeek"),
+    (PivotDateRule::NextMonth, "nextMonth"),
+    (PivotDateRule::ThisMonth, "thisMonth"),
+    (PivotDateRule::LastMonth, "lastMonth"),
+    (PivotDateRule::NextQuarter, "nextQuarter"),
+    (PivotDateRule::ThisQuarter, "thisQuarter"),
+    (PivotDateRule::LastQuarter, "lastQuarter"),
+    (PivotDateRule::NextYear, "nextYear"),
+    (PivotDateRule::ThisYear, "thisYear"),
+    (PivotDateRule::LastYear, "lastYear"),
+];
+
+fn date_type(rule: PivotDateRule) -> String {
+    match rule {
+        PivotDateRule::Equals => "dateEqual".into(),
+        PivotDateRule::NotEquals => "dateNotEqual".into(),
+        PivotDateRule::Before => "dateOlderThan".into(),
+        PivotDateRule::After => "dateNewerThan".into(),
+        PivotDateRule::Between => "dateBetween".into(),
+        PivotDateRule::YearToDate => "yearToDate".into(),
+        PivotDateRule::Quarter(q) => format!("Q{q}"),
+        PivotDateRule::Month(m) => format!("M{m}"),
+        r => DATE_PERIODS.iter().find(|(x, _)| *x == r).map(|(_, n)| (*n).to_string()).unwrap_or_else(|| "today".into()),
+    }
+}
+
+fn date_rule_from(t: &str) -> Option<PivotDateRule> {
+    Some(match t {
+        "dateEqual" => PivotDateRule::Equals,
+        "dateNotEqual" => PivotDateRule::NotEquals,
+        "dateOlderThan" | "dateOlderThanOrEqual" => PivotDateRule::Before,
+        "dateNewerThan" | "dateNewerThanOrEqual" => PivotDateRule::After,
+        "dateBetween" => PivotDateRule::Between,
+        "yearToDate" => PivotDateRule::YearToDate,
+        _ => {
+            if let Some(r) = DATE_PERIODS.iter().find(|(_, n)| *n == t) {
+                return Some(r.0);
+            }
+            let n = |p: &str| t.strip_prefix(p).and_then(|d| d.parse::<u8>().ok());
+            if let Some(q) = n("Q").filter(|q| (1..=4).contains(q)) {
+                return Some(PivotDateRule::Quarter(q));
+            }
+            PivotDateRule::Month(n("M").filter(|m| (1..=12).contains(m))?)
+        }
+    })
+}
+
+/// The `customFilters` of an AutoFilter column for a comparison.
+fn custom_filters(op: PivotCompare, a: &str, b: &str) -> String {
+    let one = |oper: Option<&str>, v: &str| match oper {
+        Some(o) => format!("<customFilter operator=\"{o}\" val=\"{}\"/>", esc_attr(v)),
+        None => format!("<customFilter val=\"{}\"/>", esc_attr(v)),
+    };
+    let (and, parts) = match op {
+        PivotCompare::Equals => (false, vec![one(None, a)]),
+        PivotCompare::NotEquals => (false, vec![one(Some("notEqual"), a)]),
+        PivotCompare::BeginsWith => (false, vec![one(None, &format!("{a}*"))]),
+        PivotCompare::NotBeginsWith => (false, vec![one(Some("notEqual"), &format!("{a}*"))]),
+        PivotCompare::EndsWith => (false, vec![one(None, &format!("*{a}"))]),
+        PivotCompare::NotEndsWith => (false, vec![one(Some("notEqual"), &format!("*{a}"))]),
+        PivotCompare::Contains => (false, vec![one(None, &format!("*{a}*"))]),
+        PivotCompare::NotContains => (false, vec![one(Some("notEqual"), &format!("*{a}*"))]),
+        PivotCompare::Greater => (false, vec![one(Some("greaterThan"), a)]),
+        PivotCompare::GreaterOrEqual => (false, vec![one(Some("greaterThanOrEqual"), a)]),
+        PivotCompare::Less => (false, vec![one(Some("lessThan"), a)]),
+        PivotCompare::LessOrEqual => (false, vec![one(Some("lessThanOrEqual"), a)]),
+        PivotCompare::Between => (true, vec![one(Some("greaterThanOrEqual"), a), one(Some("lessThanOrEqual"), b)]),
+        PivotCompare::NotBetween => (false, vec![one(Some("lessThan"), a), one(Some("greaterThan"), b)]),
+    };
+    format!("<customFilters{}>{}</customFilters>", if and { " and=\"1\"" } else { "" }, parts.concat())
+}
+
+/// `<filters>`: label, date, value and Top 10 filters on axis fields.
+fn filters_xml(s: &mut String, pt: &PivotTable, axis_map: &[Option<usize>], vals: &[(usize, &PivotValue)]) {
+    let measure = |name: &str| vals.iter().position(|(_, v)| same(&v.name, name)).unwrap_or(0);
+    let mut out = String::new();
+    let mut n = 0;
+    for f in &pt.filters {
+        let Some(pos) = pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, &f.source_col)) else { continue };
+        let Some(Some(fld)) = axis_map.get(pos) else { continue };
+        for rule in f.label.iter().chain(f.value.iter()) {
+            let (ty, extra, inner) = match rule {
+                PivotRule::Label { op, value, value2 } => {
+                    let mut extra = format!(" stringValue1=\"{}\"", esc_attr(value));
+                    if matches!(op, PivotCompare::Between | PivotCompare::NotBetween) {
+                        let _ = write!(extra, " stringValue2=\"{}\"", esc_attr(value2));
+                    }
+                    (format!("caption{}", compare_suffix(*op)), extra, custom_filters(*op, value, value2))
+                }
+                PivotRule::Value { op, field, value, value2 } => (
+                    format!("value{}", compare_suffix(*op)),
+                    format!(" iMeasureFld=\"{}\"", measure(field)),
+                    custom_filters(*op, &crate::xml::num(*value), &crate::xml::num(*value2)),
+                ),
+                PivotRule::Top { top, count, by, field } => {
+                    let ty = match by {
+                        PivotTopBy::Items => "count",
+                        PivotTopBy::Percent => "percent",
+                        PivotTopBy::Sum => "sum",
+                    };
+                    let inner = format!(
+                        "<top10 top=\"{}\" percent=\"{}\" val=\"{}\"/>",
+                        u8::from(*top),
+                        u8::from(*by == PivotTopBy::Percent),
+                        crate::xml::num(*count)
+                    );
+                    (ty.to_string(), format!(" iMeasureFld=\"{}\"", measure(field)), inner)
+                }
+                PivotRule::Date { rule, value, value2 } => {
+                    let v1 = value.map(crate::xml::num).unwrap_or_default();
+                    let v2 = value2.map(crate::xml::num).unwrap_or_default();
+                    let inner = match rule {
+                        PivotDateRule::Equals => custom_filters(PivotCompare::Equals, &v1, ""),
+                        PivotDateRule::NotEquals => custom_filters(PivotCompare::NotEquals, &v1, ""),
+                        PivotDateRule::Before => custom_filters(PivotCompare::Less, &v1, ""),
+                        PivotDateRule::After => custom_filters(PivotCompare::Greater, &v1, ""),
+                        PivotDateRule::Between => custom_filters(PivotCompare::Between, &v1, &v2),
+                        r => format!("<dynamicFilter type=\"{}\"/>", date_type(*r)),
+                    };
+                    let mut extra = String::new();
+                    if value.is_some() {
+                        let _ = write!(extra, " stringValue1=\"{v1}\"");
+                    }
+                    if value2.is_some() {
+                        let _ = write!(extra, " stringValue2=\"{v2}\"");
+                    }
+                    (date_type(*rule), extra, inner)
+                }
+            };
+            n += 1;
+            let _ = write!(
+                out,
+                "<filter fld=\"{fld}\" type=\"{ty}\" evalOrder=\"-1\" id=\"{n}\"{extra}><autoFilter ref=\"A1\"><filterColumn colId=\"0\">{inner}</filterColumn></autoFilter></filter>"
+            );
+        }
+    }
+    if n > 0 {
+        let _ = write!(s, "<filters count=\"{n}\">{out}</filters>");
+    }
+}
+
+/// Reads a `<filter>` into a rule; `measure` names a data field by index.
+fn read_filter(e: &El, measure: &dyn Fn(u32) -> Option<String>) -> Option<PivotRule> {
+    let ty = e.attr("type")?;
+    let col = e.child("autoFilter").and_then(|a| a.child("filterColumn"));
+    let nums: Vec<f64> = col
+        .and_then(|c| c.child("customFilters"))
+        .map(|c| c.kids("customFilter").filter_map(|x| x.attr("val").and_then(|v| v.parse::<f64>().ok())).collect())
+        .unwrap_or_default();
+    let s1 = e.attr("stringValue1").unwrap_or("").to_string();
+    let s2 = e.attr("stringValue2").unwrap_or("").to_string();
+    let compare = |suffix: &str| COMPARES.iter().copied().find(|c| compare_suffix(*c) == suffix);
+    if let Some(op) = ty.strip_prefix("caption").and_then(compare) {
+        return Some(PivotRule::Label { op, value: s1, value2: s2 });
+    }
+    let field = || e.attr_u32("iMeasureFld").and_then(measure).unwrap_or_default();
+    if let Some(op) = ty.strip_prefix("value").and_then(compare) {
+        let n = |k: usize, s: &str| nums.get(k).copied().or_else(|| s.parse::<f64>().ok()).unwrap_or(0.0);
+        return Some(PivotRule::Value { op, field: field(), value: n(0, &s1), value2: n(1, &s2) });
+    }
+    let by = match ty {
+        "count" => Some(PivotTopBy::Items),
+        "percent" => Some(PivotTopBy::Percent),
+        "sum" => Some(PivotTopBy::Sum),
+        _ => None,
+    };
+    if let Some(by) = by {
+        let t = col.and_then(|c| c.child("top10"));
+        let count = t.and_then(|t| t.attr("val")).and_then(|v| v.parse::<f64>().ok()).unwrap_or(10.0);
+        let top = t.is_none_or(|t| t.flag("top", true));
+        return Some(PivotRule::Top { top, count, by, field: field() });
+    }
+    let rule = date_rule_from(ty)?;
+    let n = |k: usize, s: &str| s.parse::<f64>().ok().or_else(|| nums.get(k).copied());
+    Some(PivotRule::Date { rule, value: n(0, &s1), value2: n(1, &s2) })
 }
 
 // ================================================================ reading
@@ -1734,8 +1955,8 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     if x.flag("dataOnRows", false) {
         cx.warn(format!("PivotTable \"{}\": values on rows are shown on columns", pt.name));
     }
-    if x.child("calculatedItems").is_some() || x.path(&["filters", "filter"]).is_some() {
-        cx.warn(format!("PivotTable \"{}\": calculated items and label/value filters are not supported", pt.name));
+    if x.child("calculatedItems").is_some() {
+        cx.warn(format!("PivotTable \"{}\": calculated items are not supported", pt.name));
     }
 
     let mut filters: Vec<PivotFilter> = Vec::new();
@@ -1792,7 +2013,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 if items.iter().any(|it| it.flag("h", false)) {
                     let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
                     if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
-                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
+                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown), ..PivotFilter::default() });
                     }
                 }
             }
@@ -1819,7 +2040,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 })
             })
         };
-        page_filters.push(PivotFilter { source_col: name, selected });
+        page_filters.push(PivotFilter { source_col: name, selected, ..PivotFilter::default() });
     }
     let mut axis_filters = Vec::new();
     pt.rows = axis(cx, &row_x, &mut axis_filters);
@@ -1900,6 +2121,32 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         }
     }
 
+    // Label, date, value and Top 10 filters.
+    if let Some(fs) = x.child("filters") {
+        let names: Vec<String> = pt.values.iter().map(|v| v.name.clone()).collect();
+        let measure = |i: u32| names.get(i as usize).cloned();
+        for e in fs.kids("filter").take(1000) {
+            let Some(fld) = e.attr_u32("fld").map(|i| i as usize) else { continue };
+            let Some(name) = field_ref(cx, cache, fld).map(|r| r.name) else { continue };
+            let Some(rule) = read_filter(e, &measure) else {
+                cx.warn(format!("PivotTable filter type \"{}\" is not supported", e.attr("type").unwrap_or("")));
+                continue;
+            };
+            let at = match pt.filters.iter().position(|f| same(&f.source_col, &name)) {
+                Some(i) => i,
+                None => {
+                    pt.filters.push(PivotFilter { source_col: name, ..PivotFilter::default() });
+                    pt.filters.len() - 1
+                }
+            };
+            if let Some(f) = pt.filters.get_mut(at) {
+                match rule {
+                    PivotRule::Label { .. } | PivotRule::Date { .. } => f.label = Some(rule),
+                    _ => f.value = Some(rule),
+                }
+            }
+        }
+    }
     // Manual group fields used by the PivotTable.
     let used: Vec<usize> = row_x
         .iter()

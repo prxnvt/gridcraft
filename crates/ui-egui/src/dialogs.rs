@@ -367,6 +367,7 @@ impl Dialog {
             "solverTrial" => Dialog::custom("solverTrial", "Show Trial Solution", params.clone()),
             "toolpak" => return crate::toolpak::open(params.get("tool").and_then(Json::as_str).unwrap_or("")),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active_abs, "to": "", "changing": ""})),
+            "pivotFilter" => crate::pivot_filter::dialog(&params),
             "subtotal" => Dialog::form(
                 "subtotal",
                 "Subtotal",
@@ -813,6 +814,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "manageRules" => manage_rules(app, ui),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
+                "pivotFilter" => crate::pivot_filter::show(app, ui, &mut d, &mut confirm),
                 "dataAnalysis" => crate::toolpak::list(app, ui, &mut d, &mut open),
                 "solver" => crate::solver_ui::show(app, ui, &mut d, &mut open),
                 "solverResults" => crate::solver_ui::results(app, ui, &mut d, &mut open),

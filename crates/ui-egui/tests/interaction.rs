@@ -562,3 +562,90 @@ fn show_iteration_results_pauses_with_the_trial_dialog() {
     h.run_steps(2);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name.clone()).as_deref(), Some("solverResults"));
 }
+
+fn pivot_session() -> Session {
+    let mut s = blank();
+    let rows = json!([["Region", "Sales"], ["East", 100], ["West", 50], ["North", 30], ["East", 20]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    s
+}
+
+/// The value beside a row label in the active sheet's PivotTable.
+fn pivot_value(h: &egui_kittest::Harness<'static, SheetApp>, label: &str) -> Option<Value> {
+    let d = h.state().session.active()?;
+    let sh = d.wb.active()?;
+    let r = sh.pivots.last()?.last_range?;
+    let row = (r.start.row..=r.end.row).find(|row| sh.value(CellRef::new(*row, r.start.col)).display() == label)?;
+    Some(sh.value(CellRef::new(row, r.start.col + 1)))
+}
+
+#[test]
+fn pivot_field_button_sorts_and_filters() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(pivot_session());
+    let (id, buttons) = {
+        let sh = h.state().session.active().and_then(|d| d.wb.active()).unwrap();
+        let pt = sh.pivots.last().unwrap();
+        (pt.id, gridcraft_ui_egui::pivot_filter::buttons(sh))
+    };
+    // Row Labels has a button, unfiltered.
+    assert_eq!(buttons, vec![(CellRef::new(2, 0), false)]);
+    h.state_mut().grid.pivot_menu = Some((id, "Region".into(), egui::pos2(400.0, 200.0)));
+    h.run_steps(2);
+    h.get_by_label("Sort Z to A").click();
+    h.run_steps(2);
+    let first = h.state().session.active().and_then(|d| d.wb.active()).map(|s| s.value(CellRef::new(3, 0)).display());
+    assert_eq!(first.as_deref(), Some("West"));
+    // Uncheck West and press OK.
+    h.state_mut().grid.pivot_menu = Some((id, "Region".into(), egui::pos2(400.0, 200.0)));
+    h.run_steps(2);
+    h.get_by_label("West").click();
+    h.run_steps(1);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(h.state().grid.pivot_menu.is_none());
+    assert_eq!(pivot_value(&h, "West"), None);
+    assert_eq!(pivot_value(&h, "Grand Total"), Some(Value::Number(150.0)));
+    let sh = h.state().session.active().and_then(|d| d.wb.active()).unwrap();
+    assert_eq!(gridcraft_ui_egui::pivot_filter::buttons(sh), vec![(CellRef::new(2, 0), true)], "the button shows the filter");
+}
+
+#[test]
+fn pivot_label_and_top10_dialogs() {
+    let mut h = harness(pivot_session());
+    let id = h.state().session.active().and_then(|d| d.wb.active()).and_then(|s| s.pivots.last()).map(|p| p.id).unwrap();
+    h.state_mut()
+        .open_dialog("pivotFilter", json!({"kind": "label", "pivot": id, "field": "Region", "op": "beginsWith", "values": ["Sum of Sales"]}));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.title.clone()).as_deref(), Some("Label Filter (Region)"));
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("value".into(), json!("E"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    assert_eq!(pivot_value(&h, "Grand Total"), Some(Value::Number(120.0)));
+    // Top 10: the bottom item by Sum of Sales.
+    h.state_mut().open_dialog("pivotFilter", json!({"kind": "top10", "pivot": id, "field": "Region", "values": ["Sum of Sales"]}));
+    h.run_steps(2);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("top".into(), json!("bottom"));
+        d.values.insert("count".into(), json!("1"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    assert_eq!(pivot_value(&h, "Grand Total"), Some(Value::Number(30.0)));
+    // A bad count keeps the dialog open with a message.
+    h.state_mut().open_dialog("pivotFilter", json!({"kind": "top10", "pivot": id, "field": "Region", "values": ["Sum of Sales"]}));
+    h.run_steps(2);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("count".into(), json!("x"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_some());
+    assert!(h.state().message.is_some());
+}
