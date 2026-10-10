@@ -945,6 +945,7 @@ pub fn now_serial() -> f64 {
 /// Evaluates a workbook with some cells replaced by constants, without touching the original:
 /// the workbook is cloned (cheap; sheets are copy-on-write) and only the replaced cells'
 /// dependents are recalculated. Goal Seek, Scenario Manager, Solver and data tables use it.
+#[derive(Clone)]
 pub struct Trial {
     base: Workbook,
     calc: Calc,

@@ -960,6 +960,7 @@ fn number(v: &Value) -> Option<f64> {
 }
 
 /// The model evaluated by recalculating the workbook with the variable cells replaced.
+#[derive(Clone)]
 pub(crate) struct CellProblem {
     trial: Trial,
     sheet: usize,
@@ -1007,6 +1008,30 @@ impl sv::Problem for CellProblem {
         }
         Some(sv::Eval { objective, cons })
     }
+
+    /// Several points at once: in parallel on the desktop (each worker with its own copy of the
+    /// trial workbook), one after another in the browser.
+    fn eval_many(&mut self, xs: &[Vec<f64>]) -> Vec<Option<sv::Eval>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            let workers = rayon::current_num_threads().clamp(1, 16);
+            if xs.len() >= 8 && workers > 1 {
+                let size = xs.len().div_ceil(workers).max(1);
+                let base: &CellProblem = self;
+                let out: Vec<Option<sv::Eval>> = xs
+                    .par_chunks(size)
+                    .flat_map_iter(|chunk| {
+                        let mut worker = base.clone();
+                        chunk.iter().map(|x| sv::Problem::eval(&mut worker, x)).collect::<Vec<_>>()
+                    })
+                    .collect();
+                self.evaluations += xs.len() as u64;
+                return out;
+            }
+        }
+        xs.iter().map(|x| sv::Problem::eval(self, x)).collect()
+    }
 }
 
 /// The engine for a method.
@@ -1014,7 +1039,7 @@ fn engine_for(m: &SolverModel, spec: Spec) -> std::result::Result<Box<dyn sv::En
     match m.method {
         Method::Simplex => Ok(Box::new(sv::simplex::Simplex::new(spec))),
         Method::Grg => Ok(Box::new(sv::grg::Grg::new(spec))),
-        Method::Evolutionary => Err("Choose Simplex LP or GRG Nonlinear: the Evolutionary method isn't available yet.".into()),
+        Method::Evolutionary => Ok(Box::new(sv::evolutionary::Evolutionary::new(spec))),
     }
 }
 
@@ -1031,6 +1056,9 @@ pub(crate) struct SolverJob {
     keep: bool,
     /// Started from the dialog: the solution is one undo step and the results dialog follows.
     interactive: bool,
+    /// Evolutionary: best objective seen and when it last improved.
+    best_seen: f64,
+    improved_at: f64,
 }
 
 impl SolverJob {
@@ -1041,7 +1069,20 @@ impl SolverJob {
         let engine = engine_for(&m, prepared.spec.clone()).map_err(EngineError::Other)?;
         let problem = CellProblem::new(d, &prepared);
         let max_ms = if m.options.max_time > 0.0 { m.options.max_time * 1000.0 } else { 0.0 };
-        Ok(SolverJob { doc: d.uid, model: m, prepared, problem, engine, started: crate::clock::now_ms(), max_ms, keep, interactive })
+        let now = crate::clock::now_ms();
+        Ok(SolverJob {
+            doc: d.uid,
+            model: m,
+            prepared,
+            problem,
+            engine,
+            started: now,
+            max_ms,
+            keep,
+            interactive,
+            best_seen: f64::NAN,
+            improved_at: now,
+        })
     }
 
     fn finish(&mut self, s: &mut Session, o: sv::Outcome) -> Result<Json> {
@@ -1254,9 +1295,23 @@ impl crate::job::Job for SolverJob {
             match self.engine.step(&mut self.problem, 4) {
                 sv::Step::Done(o) => return crate::job::Step::Done(self.finish(s, *o)),
                 sv::Step::Running { iteration, objective, .. } => {
-                    if self.max_ms > 0.0 && crate::clock::has_clock() && crate::clock::now_ms() - self.started >= self.max_ms {
+                    let now = crate::clock::now_ms();
+                    if self.max_ms > 0.0 && crate::clock::has_clock() && now - self.started >= self.max_ms {
                         let o = self.engine.stop(Status::MaxTime);
                         return crate::job::Step::Done(self.finish(s, o));
+                    }
+                    if self.model.method == Method::Evolutionary && crate::clock::has_clock() {
+                        let better = match self.model.goal {
+                            Goal::Max => objective > self.best_seen,
+                            _ => objective < self.best_seen,
+                        };
+                        if objective.is_finite() && (self.best_seen.is_nan() || better) {
+                            self.best_seen = objective;
+                            self.improved_at = now;
+                        } else if now - self.improved_at >= self.model.options.max_time_without_improvement.max(0.1) * 1000.0 {
+                            let o = self.engine.stop(Status::CannotImprove);
+                            return crate::job::Step::Done(self.finish(s, o));
+                        }
                     }
                     units += 4;
                     if budget.expired(units) {
@@ -1497,6 +1552,28 @@ mod tests {
         assert_eq!(r["sensitivity"]["kind"], "nlp");
         let lm = r["sensitivity"]["constraints"][0]["lagrangeMultiplier"].as_f64().unwrap();
         assert!((lm - 5.0).abs() < 1e-2, "{lm}");
+    }
+
+    #[test]
+    fn non_smooth_model_with_evolutionary() {
+        let mut s = session();
+        // Minimise a stepped cost: ROUND makes the model non-smooth.
+        s.execute("range.setValues", json!({"range": "B1", "values": [[0]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "C1", "input": "=ABS(ROUND(B1,0)-7)+ABS(B1-7.2)/100"})).unwrap();
+        let r = s
+            .execute(
+                "data.solver",
+                json!({"objective": "$C$1", "goal": "min", "variables": "$B$1", "method": "evolutionary",
+                       "constraints": [{"left": "$B$1", "op": "<=", "right": "20"}],
+                       "options": {"randomSeed": 5, "maxTimeWithoutImprovement": 1}}),
+            )
+            .unwrap();
+        assert!(r["status"] == 1 || r["status"] == 2, "{r}");
+        assert!((n(&s, "B1") - 7.2).abs() < 0.3, "{r}");
+        assert_eq!(r["method"], "Evolutionary");
+        // Without an upper bound (and Require Bounds on) it asks for bounds.
+        let r = s.execute("data.solver", json!({"constraints": []})).unwrap();
+        assert_eq!(r["status"], 18);
     }
 
     #[test]

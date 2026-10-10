@@ -5,6 +5,7 @@
 //! by recalculating the workbook with the variable cells replaced. Engines run a slice at a time
 //! ([`Engine::step`]) so a long solve can be shown, paused and stopped.
 
+pub mod evolutionary;
 pub mod grg;
 pub mod lp;
 pub mod simplex;
