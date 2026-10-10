@@ -126,29 +126,37 @@ fn workbook() -> Workbook {
                 func: PivotFunc::Sum,
                 name: "Share".into(),
                 show_as: PivotShowAs::PercentOfGrandTotal,
-                number_format: None,
+                ..PivotValue::default()
             },
-            PivotValue { source_col: "Sales".into(), func: PivotFunc::Max, name: "Rank".into(), show_as: PivotShowAs::Rank, number_format: None },
+            PivotValue {
+                source_col: "Sales".into(),
+                func: PivotFunc::Max,
+                name: "Rank".into(),
+                show_as: PivotShowAs::Rank,
+                base_field: Some("Date".into()),
+                ..PivotValue::default()
+            },
             PivotValue {
                 source_col: "Sales".into(),
                 func: PivotFunc::Average,
                 name: "Running".into(),
                 show_as: PivotShowAs::RunningTotal,
-                number_format: None,
+                base_field: Some("Date".into()),
+                ..PivotValue::default()
             },
             PivotValue {
                 source_col: "Units".into(),
                 func: PivotFunc::StdDevP,
                 name: "Spread".into(),
                 show_as: PivotShowAs::PercentOfColumnTotal,
-                number_format: None,
+                ..PivotValue::default()
             },
             PivotValue {
                 source_col: "Units".into(),
                 func: PivotFunc::VarP,
                 name: "RowPct".into(),
                 show_as: PivotShowAs::PercentOfRowTotal,
-                number_format: None,
+                ..PivotValue::default()
             },
         ],
         filters: vec![
@@ -445,7 +453,9 @@ fn hostile_pivot_parts_warn_not_panic() {
     assert!(pt.values.iter().any(|v| v.func == PivotFunc::Sum && v.source_col == "V"));
     assert!(report.warnings.iter().any(|w| w.contains("bogus")), "{:?}", report.warnings);
     assert!(report.warnings.iter().any(|w| w.contains("grouping")), "{:?}", report.warnings);
-    assert!(report.warnings.iter().any(|w| w.contains("index")), "{:?}", report.warnings);
+    // Index and % of Parent Total are read now.
+    assert!(pt.values.iter().any(|v| v.show_as == PivotShowAs::Index), "{:?}", pt.values);
+    assert!(pt.values.iter().any(|v| v.show_as == PivotShowAs::PercentOfParentTotal), "{:?}", pt.values);
 }
 
 #[test]

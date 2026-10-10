@@ -17,7 +17,10 @@ use std::fmt::Write as _;
 use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
-use gridcraft_model::{PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, Workbook};
+use gridcraft_model::{
+    BASE_NEXT, BASE_PREVIOUS, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue,
+    Workbook,
+};
 
 use crate::IoError;
 use crate::read::Ctx;
@@ -1001,29 +1004,50 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
             if v.func != PivotFunc::Sum {
                 let _ = write!(s, " subtotal=\"{}\"", func_name(v.func));
             }
-            let base_field = row_idx.first().or(col_idx.first()).copied().unwrap_or(0);
-            match v.show_as {
-                PivotShowAs::Normal => s.push_str(" baseField=\"0\" baseItem=\"0\""),
-                PivotShowAs::PercentOfGrandTotal => s.push_str(" showDataAs=\"percentOfTotal\" baseField=\"0\" baseItem=\"0\""),
-                PivotShowAs::PercentOfColumnTotal => s.push_str(" showDataAs=\"percentOfCol\" baseField=\"0\" baseItem=\"0\""),
-                PivotShowAs::PercentOfRowTotal => s.push_str(" showDataAs=\"percentOfRow\" baseField=\"0\" baseItem=\"0\""),
-                PivotShowAs::RunningTotal => {
-                    let _ = write!(s, " showDataAs=\"runTotal\" baseField=\"{base_field}\" baseItem=\"0\"");
-                }
-                PivotShowAs::Rank => {
-                    let _ = write!(s, " baseField=\"{base_field}\" baseItem=\"0\"");
-                }
+            // The base field: the named axis field, else the first row (or column) field.
+            let named = v.base_field.as_deref().and_then(|b| {
+                let p = pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, b))?;
+                axis_map.get(p).copied().flatten()
+            });
+            let base_field = named.or(row_idx.first().or(col_idx.first()).copied()).unwrap_or(0);
+            let base_item = match v.base_item.as_deref() {
+                Some(BASE_PREVIOUS) => 1_048_828,
+                Some(BASE_NEXT) => 1_048_829,
+                Some(label) => c.fields.get(base_field).and_then(|f| f.item_labels().iter().position(|l| same(l, label))).unwrap_or(0),
+                None => 0,
+            };
+            let (data_as, x14): (Option<&str>, Option<&str>) = match v.show_as {
+                PivotShowAs::Normal => (None, None),
+                PivotShowAs::PercentOfGrandTotal => (Some("percentOfTotal"), None),
+                PivotShowAs::PercentOfColumnTotal => (Some("percentOfCol"), None),
+                PivotShowAs::PercentOfRowTotal => (Some("percentOfRow"), None),
+                PivotShowAs::PercentOf => (Some("percent"), None),
+                PivotShowAs::DifferenceFrom => (Some("difference"), None),
+                PivotShowAs::PercentDifferenceFrom => (Some("percentDiff"), None),
+                PivotShowAs::RunningTotal => (Some("runTotal"), None),
+                PivotShowAs::Index => (Some("index"), None),
+                PivotShowAs::PercentOfParentRowTotal => (None, Some("percentOfParentRow")),
+                PivotShowAs::PercentOfParentColumnTotal => (None, Some("percentOfParentCol")),
+                PivotShowAs::PercentOfParentTotal => (None, Some("percentOfParent")),
+                PivotShowAs::PercentRunningTotal => (None, Some("percentOfRunningTotal")),
+                PivotShowAs::RankAscending => (None, Some("rankAscending")),
+                PivotShowAs::Rank => (None, Some("rankDescending")),
+            };
+            if let Some(a) = data_as {
+                let _ = write!(s, " showDataAs=\"{a}\"");
             }
+            let _ = write!(s, " baseField=\"{base_field}\" baseItem=\"{base_item}\"");
             if let Some(id) = v.number_format.as_deref().and_then(fmt_id) {
                 let _ = write!(s, " numFmtId=\"{id}\"");
             }
-            if v.show_as == PivotShowAs::Rank {
-                let _ = write!(
-                    s,
-                    "><extLst><ext uri=\"{EXT_X14_DATA_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:dataField pivotShowAs=\"rankDescending\"/></ext></extLst></dataField>"
-                );
-            } else {
-                s.push_str("/>");
+            match x14 {
+                Some(x) => {
+                    let _ = write!(
+                        s,
+                        "><extLst><ext uri=\"{EXT_X14_DATA_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:dataField pivotShowAs=\"{x}\"/></ext></extLst></dataField>"
+                    );
+                }
+                None => s.push_str("/>"),
             }
         }
         s.push_str("</dataFields>");
@@ -1369,6 +1393,11 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 .find_map(|e| e.attr("pivotShowAs").map(str::to_string));
             let show_as = match (ext.as_deref(), d.attr("showDataAs")) {
                 (Some("rankDescending"), _) => PivotShowAs::Rank,
+                (Some("rankAscending"), _) => PivotShowAs::RankAscending,
+                (Some("percentOfParentRow"), _) => PivotShowAs::PercentOfParentRowTotal,
+                (Some("percentOfParentCol"), _) => PivotShowAs::PercentOfParentColumnTotal,
+                (Some("percentOfParent"), _) => PivotShowAs::PercentOfParentTotal,
+                (Some("percentOfRunningTotal"), _) => PivotShowAs::PercentRunningTotal,
                 (Some(other), _) => {
                     cx.warn(format!("PivotTable show-values-as {other} is not supported"));
                     PivotShowAs::Normal
@@ -1377,18 +1406,38 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 (None, Some("percentOfTotal")) => PivotShowAs::PercentOfGrandTotal,
                 (None, Some("percentOfCol")) => PivotShowAs::PercentOfColumnTotal,
                 (None, Some("percentOfRow")) => PivotShowAs::PercentOfRowTotal,
+                (None, Some("percent")) => PivotShowAs::PercentOf,
+                (None, Some("difference")) => PivotShowAs::DifferenceFrom,
+                (None, Some("percentDiff")) => PivotShowAs::PercentDifferenceFrom,
                 (None, Some("runTotal")) => PivotShowAs::RunningTotal,
+                (None, Some("index")) => PivotShowAs::Index,
                 (None, Some(other)) => {
                     cx.warn(format!("PivotTable show-values-as {other} is not supported"));
                     PivotShowAs::Normal
                 }
             };
+            // Base field and item, where the transform uses them.
+            let (mut base_field, mut base_item) = (None, None);
+            if show_as.needs_base_field()
+                && let Some(bf) = d.attr_u32("baseField").map(|b| b as usize)
+                && let Some((name, _)) = field_ref(cx, cache, bf)
+            {
+                base_field = Some(name);
+                if show_as.needs_base_item() {
+                    base_item = match d.attr_u32("baseItem") {
+                        Some(1_048_828) => Some(BASE_PREVIOUS.to_string()),
+                        Some(1_048_829) => Some(BASE_NEXT.to_string()),
+                        Some(k) => cache.fields.get(bf).and_then(|f| f.labels().get(k as usize).cloned()),
+                        None => None,
+                    };
+                }
+            }
             let number_format = d
                 .attr_u32("numFmtId")
                 .filter(|id| *id != 0)
                 .and_then(|id| crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).cloned()));
             let name = d.attr("name").map(str::to_string).unwrap_or_else(|| format!("{} of {}", func_caption(func), f.name));
-            pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, number_format });
+            pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, number_format, base_field, base_item });
         }
     }
 

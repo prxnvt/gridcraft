@@ -727,11 +727,69 @@ pub enum PivotShowAs {
     PercentOfGrandTotal,
     PercentOfColumnTotal,
     PercentOfRowTotal,
-    /// Running total in the first row field.
+    /// Running total in the base field (the first row field when none is given).
     RunningTotal,
-    /// Rank largest to smallest among sibling row items.
+    /// Rank largest to smallest among the base field's items.
     Rank,
+    /// As a percentage of the base field's base item.
+    PercentOf,
+    /// As a percentage of the parent row (the row one level up).
+    PercentOfParentRowTotal,
+    /// As a percentage of the parent column.
+    PercentOfParentColumnTotal,
+    /// As a percentage of the total of the base field's item that contains it.
+    PercentOfParentTotal,
+    /// Minus the base field's base item.
+    DifferenceFrom,
+    /// (value − base item) / base item.
+    PercentDifferenceFrom,
+    /// Running total in the base field, as a percentage of the field's total.
+    PercentRunningTotal,
+    /// Rank smallest to largest among the base field's items.
+    RankAscending,
+    /// (value × grand total) / (row total × column total).
+    Index,
 }
+
+impl PivotShowAs {
+    /// Whether the transform needs a base field.
+    pub fn needs_base_field(self) -> bool {
+        matches!(
+            self,
+            PivotShowAs::RunningTotal
+                | PivotShowAs::PercentRunningTotal
+                | PivotShowAs::Rank
+                | PivotShowAs::RankAscending
+                | PivotShowAs::PercentOf
+                | PivotShowAs::PercentOfParentTotal
+                | PivotShowAs::DifferenceFrom
+                | PivotShowAs::PercentDifferenceFrom
+        )
+    }
+    /// Whether it also needs a base item.
+    pub fn needs_base_item(self) -> bool {
+        matches!(self, PivotShowAs::PercentOf | PivotShowAs::DifferenceFrom | PivotShowAs::PercentDifferenceFrom)
+    }
+    /// Whether the result is a percentage.
+    pub fn is_percent(self) -> bool {
+        matches!(
+            self,
+            PivotShowAs::PercentOfGrandTotal
+                | PivotShowAs::PercentOfColumnTotal
+                | PivotShowAs::PercentOfRowTotal
+                | PivotShowAs::PercentOf
+                | PivotShowAs::PercentOfParentRowTotal
+                | PivotShowAs::PercentOfParentColumnTotal
+                | PivotShowAs::PercentOfParentTotal
+                | PivotShowAs::PercentDifferenceFrom
+                | PivotShowAs::PercentRunningTotal
+        )
+    }
+}
+
+/// A base item that means the previous / next item of the base field.
+pub const BASE_PREVIOUS: &str = "(previous)";
+pub const BASE_NEXT: &str = "(next)";
 
 /// A field in the Values area.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -743,6 +801,10 @@ pub struct PivotValue {
     pub name: String,
     pub show_as: PivotShowAs,
     pub number_format: Option<String>,
+    /// Show Values As base field (source column name).
+    pub base_field: Option<String>,
+    /// Show Values As base item: an item label, [`BASE_PREVIOUS`] or [`BASE_NEXT`].
+    pub base_item: Option<String>,
 }
 
 /// A report filter (or, for a field also in Rows/Columns, its hidden-items filter).

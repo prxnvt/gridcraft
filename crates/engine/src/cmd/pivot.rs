@@ -78,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Value Field Settings",
             ["PivotTable Analyze", "Active Field"],
             None,
-            "{pivot?, field: caption or source field | index: n, func?, name?, showAs?: normal|percentOfGrandTotal|percentOfColumnTotal|percentOfRowTotal|runningTotal|rank, numberFormat?: \"#,##0\" | null, replace?}",
+            "{pivot?, field: caption or source field | index: n, func?, name?, showAs?: normal|percentOfGrandTotal|percentOfColumnTotal|percentOfRowTotal|percentOf|percentOfParentRowTotal|percentOfParentColumnTotal|percentOfParentTotal|differenceFrom|percentDifferenceFrom|runningTotal|percentRunningTotal|rankAscending|rankDescending|index, baseField?: row or column field, baseItem?: item label | \"(previous)\" | \"(next)\", numberFormat?: \"#,##0\" | null, replace?}",
             has_doc,
             value_settings
         ),
@@ -260,27 +260,35 @@ fn func_name(f: PivotFunc) -> &'static str {
     }
 }
 
+/// Show Values As modes: (command name, mode).
+const SHOW_AS: &[(&str, PivotShowAs)] = &[
+    ("normal", PivotShowAs::Normal),
+    ("percentOfGrandTotal", PivotShowAs::PercentOfGrandTotal),
+    ("percentOfColumnTotal", PivotShowAs::PercentOfColumnTotal),
+    ("percentOfRowTotal", PivotShowAs::PercentOfRowTotal),
+    ("percentOf", PivotShowAs::PercentOf),
+    ("percentOfParentRowTotal", PivotShowAs::PercentOfParentRowTotal),
+    ("percentOfParentColumnTotal", PivotShowAs::PercentOfParentColumnTotal),
+    ("percentOfParentTotal", PivotShowAs::PercentOfParentTotal),
+    ("differenceFrom", PivotShowAs::DifferenceFrom),
+    ("percentDifferenceFrom", PivotShowAs::PercentDifferenceFrom),
+    ("runningTotal", PivotShowAs::RunningTotal),
+    ("percentRunningTotal", PivotShowAs::PercentRunningTotal),
+    ("rankAscending", PivotShowAs::RankAscending),
+    ("rankDescending", PivotShowAs::Rank),
+    ("index", PivotShowAs::Index),
+];
+
 fn show_as_param(v: &str) -> Option<PivotShowAs> {
-    Some(match v.to_ascii_lowercase().as_str() {
-        "normal" | "none" => PivotShowAs::Normal,
-        "percentofgrandtotal" => PivotShowAs::PercentOfGrandTotal,
-        "percentofcolumntotal" => PivotShowAs::PercentOfColumnTotal,
-        "percentofrowtotal" => PivotShowAs::PercentOfRowTotal,
-        "runningtotal" => PivotShowAs::RunningTotal,
-        "rank" => PivotShowAs::Rank,
-        _ => return None,
-    })
+    match v.to_ascii_lowercase().as_str() {
+        "none" => Some(PivotShowAs::Normal),
+        "rank" => Some(PivotShowAs::Rank),
+        l => SHOW_AS.iter().find(|(n, _)| n.eq_ignore_ascii_case(l)).map(|(_, m)| *m),
+    }
 }
 
 fn show_as_name(v: PivotShowAs) -> &'static str {
-    match v {
-        PivotShowAs::Normal => "normal",
-        PivotShowAs::PercentOfGrandTotal => "percentOfGrandTotal",
-        PivotShowAs::PercentOfColumnTotal => "percentOfColumnTotal",
-        PivotShowAs::PercentOfRowTotal => "percentOfRowTotal",
-        PivotShowAs::RunningTotal => "runningTotal",
-        PivotShowAs::Rank => "rank",
-    }
+    SHOW_AS.iter().find(|(_, m)| *m == v).map(|(n, _)| *n).unwrap_or("normal")
 }
 
 fn layout_name(l: PivotLayout) -> &'static str {
@@ -381,7 +389,7 @@ fn add_to_area(
                 _ => auto_name(f, &field),
             };
             let nm = unique_value_name(pt, &base, None);
-            let v = PivotValue { source_col: field, func: f, name: nm, show_as: PivotShowAs::Normal, number_format: None };
+            let v = PivotValue { source_col: field, func: f, name: nm, ..PivotValue::default() };
             let at = position.unwrap_or(pt.values.len()).min(pt.values.len());
             pt.values.insert(at, v);
         }
@@ -893,6 +901,21 @@ fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(sa) = show {
             v.show_as = sa;
+        }
+        if let Some(b) = str_param(p, "baseField") {
+            if !in_axes(pt, b) {
+                return Err(bad(C, format!("the base field `{b}` must be a row or column field")));
+            }
+            v.base_field = Some(b.to_string());
+        }
+        if let Some(b) = str_param(p, "baseItem") {
+            v.base_item = Some(b.to_string());
+        }
+        if v.show_as.needs_base_field() && v.base_field.is_none() {
+            v.base_field = pt.rows.first().or(pt.columns.first()).map(|f| f.source_col.clone());
+        }
+        if v.show_as.needs_base_item() && v.base_item.is_none() {
+            v.base_item = Some(BASE_PREVIOUS.to_string());
         }
         match &fmt {
             Some(Json::String(f)) if !f.is_empty() && f.len() <= 255 => v.number_format = Some(f.clone()),
@@ -1407,6 +1430,67 @@ mod tests {
         s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$E$5", "destination": "Sheet2!N3", "rows": ["Region"], "values": ["Sales"]}))
             .unwrap();
         assert_eq!(crate::pivot::sharing(&s.doc().unwrap().wb, 0, 2), vec![(0, 2)]);
+    }
+
+    #[test]
+    fn every_show_values_as_mode() {
+        // Sum of Sales, Region down (East, North, West), Product across (Apples, Pears, Plums):
+        //          Apples Pears Plums Total
+        //   East     160   195    60   415
+        //   North     90    30    15   135
+        //   West     170    45    70   285
+        //   Total    420   270   145   835
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        let close = |s: &Session, a: &str, want: f64| {
+            let got = val(s, a).as_f64().unwrap_or_else(|| panic!("{a} = {:?}", val(s, a)));
+            assert!((got - want).abs() < 1e-12, "{a}: {got} vs {want}");
+        };
+        let set = |s: &mut Session, p: serde_json::Value| {
+            let mut p = p;
+            p["field"] = json!("Sum of Sales");
+            s.execute("pivot.valueSettings", p).unwrap();
+        };
+        set(&mut s, json!({"showAs": "percentOf", "baseField": "Region", "baseItem": "East"}));
+        close(&s, "B6", 90.0 / 160.0);
+        close(&s, "B5", 1.0);
+        assert_eq!(val(&s, "B8"), Value::Empty, "the grand total row has no Region item");
+        let st = s.execute("cell.get", json!({"cell": "B6"})).unwrap();
+        assert_eq!(st["style"]["num_fmt"], "0.00%");
+        set(&mut s, json!({"showAs": "differenceFrom", "baseItem": "(previous)"}));
+        close(&s, "B6", 90.0 - 160.0);
+        assert_eq!(val(&s, "B5"), Value::Empty, "East has no previous item");
+        set(&mut s, json!({"showAs": "percentDifferenceFrom", "baseItem": "East"}));
+        close(&s, "C7", (45.0 - 195.0) / 195.0);
+        set(&mut s, json!({"showAs": "runningTotal"}));
+        close(&s, "B7", 160.0 + 90.0 + 170.0);
+        set(&mut s, json!({"showAs": "percentRunningTotal"}));
+        close(&s, "B6", (160.0 + 90.0) / 420.0);
+        set(&mut s, json!({"showAs": "rankAscending"}));
+        close(&s, "B6", 1.0);
+        close(&s, "B7", 3.0);
+        set(&mut s, json!({"showAs": "rankDescending"}));
+        close(&s, "B7", 1.0);
+        set(&mut s, json!({"showAs": "index"}));
+        close(&s, "B5", 160.0 * 835.0 / (415.0 * 420.0));
+        set(&mut s, json!({"showAs": "percentOfParentRowTotal"}));
+        close(&s, "B5", 160.0 / 420.0);
+        set(&mut s, json!({"showAs": "percentOfParentColumnTotal"}));
+        close(&s, "B5", 160.0 / 415.0);
+        // % of Parent Total over nested rows: Region > Product, each product as a share of its
+        // region.
+        s.execute("pivot.moveField", json!({"field": "Product", "from": "columns", "to": "rows"})).unwrap();
+        set(&mut s, json!({"showAs": "percentOfParentTotal", "baseField": "Region"}));
+        let row = find_row(&s, "Apples").unwrap();
+        close(&s, &CellRef::new(row, 1).a1(), 160.0 / 415.0);
+        assert!(s.execute("pivot.valueSettings", json!({"field": "Sum of Sales", "baseField": "Units"})).is_err());
+        // Through xlsx.
+        set(&mut s, json!({"showAs": "percentOf", "baseField": "Region", "baseItem": "North"}));
+        let want = pt(&s).values;
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "p.xlsx", "base64": b64})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        assert_eq!(pt(&s).values, want);
     }
 
     #[test]
