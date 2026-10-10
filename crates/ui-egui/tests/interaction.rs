@@ -696,3 +696,54 @@ fn calculated_field_and_item_dialogs() {
     assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
     assert_eq!(pivot_value(&h, "EW"), Some(Value::Number(170.0)));
 }
+
+/// Presses at `from`, moves in steps and releases at `to`.
+fn drag(h: &mut egui_kittest::Harness<'static, SheetApp>, from: egui::Pos2, to: egui::Pos2) {
+    let button = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.input_mut().events.push(Event::PointerMoved(from));
+    h.run_steps(1);
+    h.input_mut().events.push(button(from, true));
+    h.run_steps(1);
+    for k in 1..=8 {
+        let t = k as f32 / 8.0;
+        h.input_mut().events.push(Event::PointerMoved(from + (to - from) * t));
+        h.run_steps(1);
+    }
+    h.input_mut().events.push(button(to, false));
+    h.run_steps(3);
+}
+
+#[test]
+fn pivot_fields_drag_between_areas() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(pivot_session());
+    let pt = |h: &egui_kittest::Harness<'static, SheetApp>| {
+        h.state().session.active().and_then(|d| d.wb.active()).and_then(|s| s.pivots.last().cloned()).unwrap()
+    };
+    // Region from Rows into Columns.
+    let chip = h.get_by_label("Region ▾").rect().center();
+    let columns = h.get_by_label("Columns").rect();
+    drag(&mut h, chip, egui::pos2(columns.center().x, columns.bottom() + 30.0));
+    let p = pt(&h);
+    assert!(p.rows.is_empty(), "{:?}", h.state().message);
+    assert_eq!(p.columns.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), vec!["Region"]);
+    // Sales from the field list into Rows.
+    let sales = h.get_by_label("Sales").rect().center();
+    let rows = h.get_by_label("Rows").rect();
+    drag(&mut h, sales, egui::pos2(rows.center().x, rows.bottom() + 30.0));
+    assert_eq!(pt(&h).rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), vec!["Sales"]);
+    // Region dragged out of the areas leaves the PivotTable.
+    let chip = h.get_by_label("Region ▾").rect().center();
+    drag(&mut h, chip, egui::pos2(300.0, 400.0));
+    assert!(pt(&h).columns.is_empty());
+    assert_eq!(pt(&h).values.len(), 1, "values stay");
+    // Clicks still reach the checkboxes and the field menus.
+    h.get_by_label("Region").click();
+    h.run_steps(2);
+    assert_eq!(pt(&h).rows.len(), 2, "ticking Region adds it to Rows");
+    h.get_by_label("Region ▾").click();
+    h.run_steps(2);
+    h.get_by_label("Remove Field").click();
+    h.run_steps(2);
+    assert_eq!(pt(&h).rows.len(), 1);
+}

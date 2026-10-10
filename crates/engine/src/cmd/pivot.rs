@@ -951,7 +951,11 @@ fn add_field(s: &mut Session, p: &Json) -> Result<Json> {
     let pos = position_param(p);
     update(s, p, |pt, src, _| {
         add_to_area(C, pt, src, &field, area, func, name.as_deref(), pos)?;
-        Ok(json!({"field": canonical(C, src, &field)?, "area": area}))
+        let shown = match pt.calc_fields.iter().find(|c| c.name.eq_ignore_ascii_case(&field)) {
+            Some(c) => c.name.clone(),
+            None => canonical(C, src, &field)?,
+        };
+        Ok(json!({"field": shown, "area": area}))
     })
 }
 
@@ -2918,6 +2922,9 @@ mod tests {
         // On the sums: East sold 415 over 33 units.
         close(cell_at(&s, "East", 2), 415.0 / 33.0);
         close(cell_at(&s, "Grand Total", 2), 835.0 / 72.0);
+        // A calculated field can go back into Values from the field list.
+        s.execute("pivot.removeField", json!({"field": "Sum of Price"})).unwrap();
+        assert_eq!(s.execute("pivot.addField", json!({"field": "price", "area": "values"})).unwrap()["field"], "Price");
         // Calculated fields can use calculated fields.
         s.execute("pivot.calculatedField", json!({"name": "Double", "formula": "=Price*2", "add": true})).unwrap();
         close(cell_at(&s, "West", 3), 2.0 * 285.0 / 27.0);
