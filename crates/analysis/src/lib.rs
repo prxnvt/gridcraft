@@ -13,6 +13,7 @@
 pub mod fft;
 pub mod linalg;
 pub mod rng;
+pub mod solver;
 pub mod toolpak;
 
 /// What can go wrong in an analysis.

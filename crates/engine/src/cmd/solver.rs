@@ -424,6 +424,17 @@ pub fn specs() -> Vec<CommandSpec> {
             model_save
         ),
         cmd!("data.solverLoadModel", "Load Model", [], None, "{from: \"H1:H6\"} reads a model saved with Save Model", has_doc, model_load),
+        cmd!(
+            "data.solver",
+            "Solver",
+            ["Data", "Analysis"],
+            None,
+            "{objective?: \"$D$10\", goal?: max|min|value, valueOf?, variables?: \"$B$2:$B$5\", constraints?: [{left, op: <=|=|>=|int|bin|dif, right}], nonNegative?, method?: grg|simplex|evolutionary, options?: {maxTime (s), iterations, constraintPrecision, integerOptimality (%), convergence, centralDerivatives, multistart, populationSize, randomSeed, requireBounds, mutationRate, maxTimeWithoutImprovement, ignoreInteger, automaticScaling}, keep?: true} → solves the active sheet's model (fields given update it) and returns {status (Excel's code), message, objective, variables, constraints, sensitivity}; keeps the solution unless `keep: false`",
+            has_doc,
+            solve
+        ),
+        cmd!(noundo "data.solverStart", "Solve", [], None, "{model fields?} starts solving in the background (the Solver Results box follows); `job.status` / `job.stop` follow it", has_doc, start),
+        cmd!(noundo "data.solverRestore", "Restore Original Values", [], None, "{} puts back the variable cells' values from before the last solve", has_doc, restore),
     ]
 }
 
@@ -697,6 +708,607 @@ fn model_load(s: &mut Session, p: &Json) -> Result<Json> {
     serde_json::to_value(&m).map_err(|e| EngineError::Other(e.to_string()))
 }
 
+// ---------------------------------------------------------------- solving
+
+use gridcraft_analysis::solver::{self as sv, Rel, Sense, Spec, Status};
+use gridcraft_calc::Trial;
+use gridcraft_core::Value;
+
+/// A constraint's right side, per cell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Rhs {
+    Const(f64),
+    Cell(usize, CellRef),
+}
+
+/// One cell's share of a user constraint (a constraint over a range covers several cells).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ItemKind {
+    /// A general constraint: row `row` of the problem.
+    Row {
+        row: usize,
+        rel: Rel,
+        rhs: Rhs,
+    },
+    /// A bound on variable `var`.
+    Bound {
+        var: usize,
+        rel: Rel,
+        value: f64,
+    },
+    Integer {
+        var: usize,
+    },
+    Binary {
+        var: usize,
+    },
+    AllDiff,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Item {
+    /// The user's constraint this comes from.
+    pub user: usize,
+    pub cell: CellRef,
+    pub kind: ItemKind,
+}
+
+/// A model resolved against the workbook, ready to solve.
+pub(crate) struct Prepared {
+    pub sheet: usize,
+    pub objective: CellRef,
+    pub vars: Vec<CellRef>,
+    pub items: Vec<Item>,
+    /// General rows: left cell and right side.
+    pub rows: Vec<(CellRef, Rhs)>,
+    pub spec: Spec,
+}
+
+fn abs_a1(c: CellRef) -> String {
+    format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1)
+}
+
+/// Cells of a reference on the model's sheet (a union of areas; other sheets are refused).
+fn cells_on(wb: &Workbook, si: usize, text: &str, what: &str) -> std::result::Result<Vec<CellRef>, String> {
+    let sheet = wb.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
+    let mut out = Vec::new();
+    for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (sh, body) = split_sheet(part);
+        if sh.as_deref().is_some_and(|n| !n.eq_ignore_ascii_case(&sheet)) {
+            return Err(format!("{what} must be on the sheet the model belongs to."));
+        }
+        let r = gridcraft_core::RangeRef::parse(body.trim()).ok_or_else(|| format!("{what} isn't a valid reference: {part}"))?;
+        if r.count() > 10_000 {
+            return Err(format!("{what} covers too many cells."));
+        }
+        for c in r.iter() {
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err(format!("{what} is missing."));
+    }
+    Ok(out)
+}
+
+/// The right side of a relational constraint, per cell.
+fn rhs_of(wb: &Workbook, si: usize, text: &str) -> std::result::Result<Vec<Rhs>, String> {
+    let t = text.trim().trim_start_matches('=');
+    if let Ok(x) = t.parse::<f64>() {
+        return Ok(vec![Rhs::Const(x)]);
+    }
+    if is_reference(t) {
+        let mut out = Vec::new();
+        for part in t.split(',') {
+            let (sh, body) = split_sheet(part.trim());
+            let s2 = match sh {
+                Some(n) => wb.sheet_index(&n).ok_or_else(|| format!("No sheet named {n}."))?,
+                None => si,
+            };
+            let r = gridcraft_core::RangeRef::parse(body.trim()).ok_or_else(|| format!("Not a valid reference: {part}"))?;
+            if r.count() > 10_000 {
+                return Err("A constraint covers too many cells.".into());
+            }
+            out.extend(r.iter().map(|c| Rhs::Cell(s2, c)));
+        }
+        return Ok(out);
+    }
+    // A formula: evaluated once.
+    match gridcraft_calc::evaluate(wb, si, CellRef::new(0, 0), t) {
+        Value::Number(x) if x.is_finite() => Ok(vec![Rhs::Const(x)]),
+        _ => Err(format!("The constraint value {text} isn't a number, a reference or a formula giving a number.")),
+    }
+}
+
+/// Resolves `m` on sheet `si`.
+pub(crate) fn prepare(wb: &Workbook, si: usize, m: &SolverModel) -> std::result::Result<Prepared, (Status, String)> {
+    let bad = |msg: String| (Status::BadModel, msg);
+    let sh = wb.sheet(si).ok_or_else(|| bad("No such sheet.".into()))?;
+    let obj = cells_on(wb, si, &m.objective, "The objective").map_err(bad)?;
+    let [objective] = obj.as_slice() else { return Err(bad("The objective must be a single cell.".into())) };
+    let objective = *objective;
+    let vars = cells_on(wb, si, &m.variables, "The variable cells").map_err(bad)?;
+    if vars.len() > MAX_VARIABLES {
+        return Err((Status::TooLarge, format!("Solver handles at most {MAX_VARIABLES} variable cells.")));
+    }
+    if vars.iter().any(|c| sh.cell(*c).is_some_and(|x| x.formula.is_some())) {
+        return Err(bad("Variable cells must hold values, not formulas.".into()));
+    }
+    if vars.contains(&objective) {
+        return Err(bad("The objective can't also be a variable cell.".into()));
+    }
+    let x0: Vec<f64> = vars.iter().map(|c| sh.value(*c).as_f64().filter(|v| v.is_finite()).unwrap_or(0.0)).collect();
+    let n = vars.len();
+    let mut lower = vec![f64::NEG_INFINITY; n];
+    let mut upper = vec![f64::INFINITY; n];
+    let mut has_lower = vec![false; n];
+    let mut integer = vec![false; n];
+    let mut alldiff: Vec<Vec<usize>> = Vec::new();
+    let mut items = Vec::new();
+    let mut rows: Vec<(CellRef, Rhs)> = Vec::new();
+    let mut rels = Vec::new();
+    for (u, c) in m.constraints.iter().enumerate() {
+        let left = cells_on(wb, si, &c.left, "A constraint's cell reference").map_err(bad)?;
+        let var_of = |cell: &CellRef| vars.iter().position(|v| v == cell);
+        if c.op.keyword().is_some() {
+            let mut group = Vec::new();
+            for cell in &left {
+                let j = var_of(cell).ok_or_else(|| bad(format!("{} must be variable cells for an int, bin or dif constraint.", c.left)))?;
+                match c.op {
+                    Op::Int => {
+                        integer[j] = true;
+                        items.push(Item { user: u, cell: *cell, kind: ItemKind::Integer { var: j } });
+                    }
+                    Op::Bin => {
+                        integer[j] = true;
+                        lower[j] = lower[j].max(0.0);
+                        upper[j] = upper[j].min(1.0);
+                        has_lower[j] = true;
+                        items.push(Item { user: u, cell: *cell, kind: ItemKind::Binary { var: j } });
+                    }
+                    _ => group.push(j),
+                }
+            }
+            if c.op == Op::Dif {
+                if group.len() < 2 {
+                    return Err(bad("An AllDifferent constraint needs at least two variable cells.".into()));
+                }
+                for &j in &group {
+                    has_lower[j] = true;
+                }
+                items.push(Item { user: u, cell: left[0], kind: ItemKind::AllDiff });
+                alldiff.push(group);
+            }
+            continue;
+        }
+        let rel = match c.op {
+            Op::Le => Rel::Le,
+            Op::Ge => Rel::Ge,
+            _ => Rel::Eq,
+        };
+        let rhs = rhs_of(wb, si, &c.right).map_err(bad)?;
+        if rhs.len() != 1 && rhs.len() != left.len() {
+            return Err(bad(format!("The two sides of the constraint on {} have different sizes.", c.left)));
+        }
+        for (k, cell) in left.iter().enumerate() {
+            let r = if rhs.len() == 1 { rhs[0] } else { rhs[k] };
+            match (var_of(cell), r) {
+                (Some(j), Rhs::Const(v)) => {
+                    if matches!(rel, Rel::Ge | Rel::Eq) {
+                        lower[j] = lower[j].max(v);
+                        has_lower[j] = true;
+                    }
+                    if matches!(rel, Rel::Le | Rel::Eq) {
+                        upper[j] = upper[j].min(v);
+                    }
+                    items.push(Item { user: u, cell: *cell, kind: ItemKind::Bound { var: j, rel, value: v } });
+                }
+                _ => {
+                    items.push(Item { user: u, cell: *cell, kind: ItemKind::Row { row: rows.len(), rel, rhs: r } });
+                    rows.push((*cell, r));
+                    rels.push(rel);
+                }
+            }
+        }
+    }
+    if m.method != Method::Simplex && rows.len() > MAX_CONSTRAINTS {
+        return Err((Status::TooLarge, format!("This method handles at most {MAX_CONSTRAINTS} constraints besides bounds.")));
+    }
+    if m.non_negative {
+        for j in 0..n {
+            if !has_lower[j] {
+                lower[j] = lower[j].max(0.0);
+            }
+        }
+    }
+    let o = &m.options;
+    let sense = match m.goal {
+        Goal::Max => Sense::Max,
+        Goal::Min => Sense::Min,
+        Goal::Value => Sense::Target(m.value_of),
+    };
+    let options = sv::Options {
+        precision: o.constraint_precision.max(1e-12),
+        scaling: o.automatic_scaling,
+        ignore_integer: o.ignore_integer,
+        integer_tolerance: (o.integer_optimality / 100.0).max(0.0),
+        max_iterations: o.iterations,
+        max_subproblems: o.max_subproblems,
+        max_feasible: o.max_feasible,
+        convergence: o.convergence.max(1e-15),
+        central: o.central_derivatives,
+        multistart: o.multistart,
+        population: o.population_size.clamp(2, 10_000) as usize,
+        seed: o.random_seed,
+        require_bounds: o.require_bounds,
+        mutation_rate: o.mutation_rate.clamp(0.0, 1.0),
+        patience: 20_000,
+    };
+    let spec = Spec { sense, x0, lower, upper, integer, alldiff, rels, options };
+    Ok(Prepared { sheet: si, objective, vars, items, rows, spec })
+}
+
+/// A number from a cell for Solver: blank is 0; text and errors are errors.
+fn number(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(x) if x.is_finite() => Some(*x),
+        Value::Empty => Some(0.0),
+        _ => None,
+    }
+}
+
+/// The model evaluated by recalculating the workbook with the variable cells replaced.
+pub(crate) struct CellProblem {
+    trial: Trial,
+    sheet: usize,
+    vars: Vec<CellRef>,
+    rows: Vec<(CellRef, Rhs)>,
+    reads: Vec<(usize, CellRef)>,
+    /// Where each row's right-hand cell is in `reads`.
+    rhs_at: Vec<Option<usize>>,
+    pub evaluations: u64,
+}
+
+impl CellProblem {
+    pub(crate) fn new(d: &DocState, p: &Prepared) -> CellProblem {
+        let mut reads = vec![(p.sheet, p.objective)];
+        reads.extend(p.rows.iter().map(|(c, _)| (p.sheet, *c)));
+        let mut rhs_at = Vec::with_capacity(p.rows.len());
+        for (_, r) in &p.rows {
+            match r {
+                Rhs::Cell(s, c) => {
+                    rhs_at.push(Some(reads.len()));
+                    reads.push((*s, *c));
+                }
+                Rhs::Const(_) => rhs_at.push(None),
+            }
+        }
+        CellProblem { trial: Trial::new(&d.wb, &d.calc), sheet: p.sheet, vars: p.vars.clone(), rows: p.rows.clone(), reads, rhs_at, evaluations: 0 }
+    }
+}
+
+impl sv::Problem for CellProblem {
+    fn eval(&mut self, x: &[f64]) -> Option<sv::Eval> {
+        self.evaluations += 1;
+        let sets: Vec<(usize, CellRef, Value)> = self.vars.iter().zip(x).map(|(c, v)| (self.sheet, *c, Value::Number(*v))).collect();
+        let vals = self.trial.run(&sets, &self.reads);
+        let objective = number(vals.first()?)?;
+        let mut cons = Vec::with_capacity(self.rows.len());
+        for (i, (_, r)) in self.rows.iter().enumerate() {
+            let lhs = number(vals.get(1 + i)?)?;
+            let rhs = match (r, self.rhs_at.get(i).copied().flatten()) {
+                (Rhs::Const(v), _) => *v,
+                (Rhs::Cell(..), Some(k)) => number(vals.get(k)?)?,
+                _ => return None,
+            };
+            cons.push(lhs - rhs);
+        }
+        Some(sv::Eval { objective, cons })
+    }
+}
+
+/// The engine for a method.
+fn engine_for(m: &SolverModel, spec: Spec) -> std::result::Result<Box<dyn sv::Engine>, String> {
+    match m.method {
+        Method::Simplex => Ok(Box::new(sv::simplex::Simplex::new(spec))),
+        Method::Grg | Method::Evolutionary => Err("Choose Simplex LP: the GRG Nonlinear and Evolutionary methods aren't available yet.".into()),
+    }
+}
+
+/// A Solver run as a job.
+pub(crate) struct SolverJob {
+    doc: u64,
+    model: SolverModel,
+    prepared: Prepared,
+    problem: CellProblem,
+    engine: Box<dyn sv::Engine>,
+    started: f64,
+    /// 0 = no limit.
+    max_ms: f64,
+    keep: bool,
+    /// Started from the dialog: the solution is one undo step and the results dialog follows.
+    interactive: bool,
+}
+
+impl SolverJob {
+    pub(crate) fn new(s: &Session, m: SolverModel, keep: bool, interactive: bool) -> Result<SolverJob> {
+        let d = s.doc()?;
+        let si = d.wb.active_sheet;
+        let prepared = prepare(&d.wb, si, &m).map_err(|(_, msg)| EngineError::Other(msg))?;
+        let engine = engine_for(&m, prepared.spec.clone()).map_err(EngineError::Other)?;
+        let problem = CellProblem::new(d, &prepared);
+        let max_ms = if m.options.max_time > 0.0 { m.options.max_time * 1000.0 } else { 0.0 };
+        Ok(SolverJob { doc: d.uid, model: m, prepared, problem, engine, started: crate::clock::now_ms(), max_ms, keep, interactive })
+    }
+
+    fn finish(&mut self, s: &mut Session, o: sv::Outcome) -> Result<Json> {
+        let seconds = ((crate::clock::now_ms() - self.started) / 1000.0).max(0.0);
+        let p = &self.prepared;
+        let x = if o.x.len() == p.vars.len() { o.x.clone() } else { p.spec.x0.clone() };
+        let apply = self.keep
+            && (o.status.feasible()
+                || matches!(o.status, Status::Stopped | Status::MaxTime | Status::MaxIterations | Status::MaxFeasible | Status::MaxSubproblems));
+        let final_eval = sv::Problem::eval(&mut self.problem, &x);
+        let at = self.problem.values_at(&x);
+        if apply {
+            let Some(d) = s.doc_by_uid_mut(self.doc) else { return Err(EngineError::NoDocument) };
+            let before = d.wb.clone();
+            let sel = d.selection.clone();
+            let (si, vars) = (p.sheet, p.vars.clone());
+            commit(d, |cx| {
+                for (c, v) in vars.iter().zip(&x) {
+                    let sh = cx.sheet_mut(si)?;
+                    let style = sh.style_id(*c);
+                    sh.cells.set(*c, Cell { value: Value::Number(*v), formula: None, style });
+                    cx.touch(si, *c);
+                }
+                Ok(())
+            })?;
+            if self.interactive {
+                d.undo.push(crate::HistoryEntry { label: "Solver".into(), wb: before, selection: sel });
+                d.redo.clear();
+                d.revision += 1;
+            }
+        }
+        let result = self.report_data(&o, &x, final_eval.as_ref(), &at, seconds, apply);
+        s.solver_last = Some(result.clone());
+        if self.interactive {
+            s.ui_requests.push(crate::UiRequest::Dialog("solverResults".into(), result.clone()));
+        }
+        Ok(result)
+    }
+
+    /// Everything the Solver Results box and the reports need.
+    fn report_data(&self, o: &sv::Outcome, x: &[f64], e: Option<&sv::Eval>, at: &(f64, Vec<(f64, f64)>), seconds: f64, kept: bool) -> Json {
+        let p = &self.prepared;
+        let precision = p.spec.options.precision.max(1e-9);
+        let original_obj = self.original_objective();
+        let variables: Vec<Json> = p
+            .vars
+            .iter()
+            .enumerate()
+            .map(|(j, c)| {
+                let kind = if p.items.iter().any(|it| it.kind == ItemKind::Binary { var: j }) {
+                    "Binary"
+                } else if p.spec.integer.get(j).copied().unwrap_or(false) || p.spec.alldiff.iter().any(|g| g.contains(&j)) {
+                    "Integer"
+                } else {
+                    "Contin"
+                };
+                json!({"cell": abs_a1(*c), "original": p.spec.x0.get(j), "final": x.get(j), "integer": kind})
+            })
+            .collect();
+        let row_value = |row: usize| -> (f64, f64) { at.1.get(row).copied().unwrap_or((f64::NAN, f64::NAN)) };
+        let constraints: Vec<Json> = p
+            .items
+            .iter()
+            .map(|it| {
+                let user = self.model.constraints.get(it.user);
+                let left = abs_a1(it.cell);
+                let (value, formula, binding, slack) = match &it.kind {
+                    ItemKind::Row { row, rel, rhs } => {
+                        let g = e.and_then(|e| e.cons.get(*row)).copied().unwrap_or(f64::NAN);
+                        let (lhs, _) = row_value(*row);
+                        let right = match rhs {
+                            Rhs::Const(v) => gridcraft_core::number_to_text(*v),
+                            Rhs::Cell(_, c) => abs_a1(*c),
+                        };
+                        let slack = if *rel == Rel::Eq { 0.0 } else { g.abs() };
+                        (lhs, format!("{left}{}{right}", sym(*rel)), slack <= precision.max(1e-7 * lhs.abs()), slack)
+                    }
+                    ItemKind::Bound { var, rel, value } => {
+                        let v = x.get(*var).copied().unwrap_or(f64::NAN);
+                        let slack = if *rel == Rel::Eq { 0.0 } else { (v - value).abs() };
+                        (v, format!("{left}{}{}", sym(*rel), gridcraft_core::number_to_text(*value)), slack <= precision.max(1e-7 * v.abs()), slack)
+                    }
+                    ItemKind::Integer { var } => (x.get(*var).copied().unwrap_or(f64::NAN), format!("{left}=Integer"), true, 0.0),
+                    ItemKind::Binary { var } => (x.get(*var).copied().unwrap_or(f64::NAN), format!("{left}=Binary"), true, 0.0),
+                    ItemKind::AllDiff => (f64::NAN, format!("{}=AllDifferent", user.map(|u| u.left.clone()).unwrap_or_default()), true, 0.0),
+                };
+                json!({"cell": left, "value": if value.is_finite() { json!(value) } else { Json::Null }, "formula": formula, "status": if binding { "Binding" } else { "Not Binding" }, "slack": slack})
+            })
+            .collect();
+        let sensitivity = o.lp.as_ref().map(|s| {
+            json!({
+                "kind": "lp",
+                "variables": p.vars.iter().enumerate().map(|(j, c)| json!({
+                    "cell": abs_a1(*c),
+                    "final": x.get(j),
+                    "reducedCost": s.reduced_cost.get(j),
+                    "objectiveCoefficient": s.objective_coef.get(j),
+                    "allowableIncrease": s.coef_increase.get(j),
+                    "allowableDecrease": s.coef_decrease.get(j),
+                })).collect::<Vec<_>>(),
+                "constraints": p.rows.iter().enumerate().map(|(i, (c, _))| {
+                    let (lhs, rhs_v) = row_value(i);
+                    json!({
+                        "cell": abs_a1(*c),
+                        "final": lhs,
+                        "shadowPrice": s.shadow_price.get(i),
+                        "rhs": rhs_v,
+                        "allowableIncrease": s.rhs_increase.get(i),
+                        "allowableDecrease": s.rhs_decrease.get(i),
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        });
+        let method = match self.model.method {
+            Method::Grg => "GRG Nonlinear",
+            Method::Simplex => "Simplex LP",
+            Method::Evolutionary => "Evolutionary",
+        };
+        json!({
+            "status": o.status.code(),
+            "message": o.status.message(),
+            "feasible": o.status.feasible(),
+            "kept": kept,
+            "method": method,
+            "goal": match self.model.goal { Goal::Max => "Max", Goal::Min => "Min", Goal::Value => "Value Of" },
+            "iterations": o.iterations,
+            "subproblems": o.subproblems,
+            "evaluations": self.problem.evaluations,
+            "seconds": seconds,
+            "sheet": self.sheet_name(),
+            "objective": {"cell": abs_a1(p.objective), "original": original_obj, "final": if at.0.is_finite() { json!(at.0) } else { Json::Null }},
+            "variables": variables,
+            "constraints": constraints,
+            "sensitivity": sensitivity,
+            "model": serde_json::to_value(&self.model).unwrap_or(Json::Null),
+        })
+    }
+
+    fn sheet_name(&self) -> String {
+        self.problem.trial_sheet_name(self.prepared.sheet)
+    }
+
+    fn original_objective(&self) -> Option<f64> {
+        self.problem.original(self.prepared.objective)
+    }
+}
+
+impl CellProblem {
+    /// Objective, each row's left side and right side at `x` (NaN where not a number).
+    fn values_at(&mut self, x: &[f64]) -> (f64, Vec<(f64, f64)>) {
+        let sets: Vec<(usize, CellRef, Value)> = self.vars.iter().zip(x).map(|(c, v)| (self.sheet, *c, Value::Number(*v))).collect();
+        let vals = self.trial.run(&sets, &self.reads);
+        let num = |k: usize| vals.get(k).and_then(number).unwrap_or(f64::NAN);
+        let rows = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, (_, r))| {
+                let rhs = match (r, self.rhs_at.get(i).copied().flatten()) {
+                    (Rhs::Const(v), _) => *v,
+                    (Rhs::Cell(..), Some(k)) => num(k),
+                    _ => f64::NAN,
+                };
+                (num(1 + i), rhs)
+            })
+            .collect();
+        (num(0), rows)
+    }
+    fn trial_sheet_name(&self, si: usize) -> String {
+        self.trial.base().sheet(si).map(|s| s.name.clone()).unwrap_or_default()
+    }
+    fn original(&self, c: CellRef) -> Option<f64> {
+        self.trial.base().sheet(self.sheet).map(|s| s.value(c)).and_then(|v| number(&v))
+    }
+}
+
+fn sym(r: Rel) -> &'static str {
+    match r {
+        Rel::Le => "<=",
+        Rel::Eq => "=",
+        Rel::Ge => ">=",
+    }
+}
+
+impl crate::job::Job for SolverJob {
+    fn label(&self) -> String {
+        "Solver".into()
+    }
+
+    fn step(&mut self, s: &mut Session, budget: crate::job::Budget) -> crate::job::Step {
+        let mut units = 0u64;
+        loop {
+            match self.engine.step(&mut self.problem, 4) {
+                sv::Step::Done(o) => return crate::job::Step::Done(self.finish(s, *o)),
+                sv::Step::Running { iteration, objective, .. } => {
+                    if self.max_ms > 0.0 && crate::clock::has_clock() && crate::clock::now_ms() - self.started >= self.max_ms {
+                        let o = self.engine.stop(Status::MaxTime);
+                        return crate::job::Step::Done(self.finish(s, o));
+                    }
+                    units += 4;
+                    if budget.expired(units) {
+                        let text = if objective.is_finite() {
+                            format!("Trial Solution: {iteration}, Objective: {}", gridcraft_core::number_to_text(objective))
+                        } else {
+                            "Setting up the problem…".to_string()
+                        };
+                        return crate::job::Step::Continue(text);
+                    }
+                }
+            }
+        }
+    }
+
+    fn stop(&mut self, s: &mut Session) -> Result<Json> {
+        let o = self.engine.stop(Status::Stopped);
+        self.finish(s, o)
+    }
+}
+
+fn solve(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "data.solver";
+    let si = s.doc()?.wb.active_sheet;
+    let mut m = load_model(&s.doc()?.wb, si);
+    merge_model(&mut m, p, CMD)?;
+    if m.objective.is_empty() || m.variables.is_empty() {
+        return Err(bad(CMD, "give `objective` and `variables` (or set up the model first)"));
+    }
+    edit(s, |cx| {
+        store_model(&mut cx.wb, si, &m);
+        Ok(())
+    })?;
+    let keep = bool_param(p, "keep").unwrap_or(true);
+    let max_ms = if m.options.max_time > 0.0 { m.options.max_time * 1000.0 } else { 120_000.0 };
+    let job = SolverJob::new(s, m, keep, false)?;
+    s.run_job(Box::new(job), max_ms, 5_000_000)
+}
+
+fn start(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "data.solverStart";
+    let si = s.doc()?.wb.active_sheet;
+    let mut m = load_model(&s.doc()?.wb, si);
+    merge_model(&mut m, p, CMD)?;
+    if m.objective.is_empty() || m.variables.is_empty() {
+        return Err(EngineError::Other("Set the objective and the variable cells first.".into()));
+    }
+    edit(s, |cx| {
+        store_model(&mut cx.wb, si, &m);
+        Ok(())
+    })?;
+    let job = SolverJob::new(s, m, true, true)?;
+    s.start_job(Box::new(job))?;
+    Ok(json!({"started": true}))
+}
+
+fn restore(s: &mut Session, _p: &Json) -> Result<Json> {
+    let Some(last) = s.solver_last.clone() else { return Err(EngineError::Other("There is no Solver result to restore.".into())) };
+    if last["kept"] != json!(true) {
+        return Ok(json!({"restored": false}));
+    }
+    if s.doc()?.undo.last().is_some_and(|h| h.label == "Solver") {
+        s.execute("edit.undo", json!({}))?;
+    }
+    if let Some(l) = s.solver_last.as_mut() {
+        l["kept"] = json!(false);
+    }
+    Ok(json!({"restored": true}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -761,6 +1373,117 @@ mod tests {
         assert_eq!(s.execute("data.solverModel", json!({})).unwrap()["objective"], "");
         assert!(s.execute("data.solverSetModel", json!({"constraints": [{"left": "A1", "op": "<>"}]})).is_err());
         assert!(s.execute("data.solverSetModel", json!({"constraints": [{"left": "A1", "op": "<="}]})).is_err());
+    }
+
+    /// The Wyndor model on a sheet: B1:B2 decisions, D1 profit, C1:C3 plant hours.
+    fn wyndor(s: &mut Session) {
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Doors", 0], ["Windows", 0]]})).unwrap();
+        for (c, f) in [("C1", "=B1"), ("C2", "=2*B2"), ("C3", "=3*B1+2*B2"), ("D1", "=3*B1+5*B2")] {
+            s.execute("cell.set", json!({"cell": c, "input": f})).unwrap();
+        }
+        s.execute("range.setValues", json!({"range": "E1", "values": [[4], [12], [18]]})).unwrap();
+    }
+
+    fn n(s: &Session, a1: &str) -> f64 {
+        s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a1).unwrap()).as_f64().unwrap_or(f64::NAN)
+    }
+
+    #[test]
+    fn solves_a_linear_model_in_the_sheet() {
+        let mut s = session();
+        wyndor(&mut s);
+        let r = s
+            .execute(
+                "data.solver",
+                json!({"objective": "$D$1", "goal": "max", "variables": "$B$1:$B$2", "method": "simplex", "constraints": [{"left": "$C$1:$C$3", "op": "<=", "right": "$E$1:$E$3"}]}),
+            )
+            .unwrap();
+        assert_eq!(r["status"], 0, "{r}");
+        assert_eq!((n(&s, "B1"), n(&s, "B2"), n(&s, "D1")), (2.0, 6.0, 36.0));
+        assert_eq!(r["objective"]["original"], 0.0);
+        assert_eq!(r["objective"]["final"], 36.0);
+        assert_eq!(r["constraints"][0]["status"], "Not Binding");
+        assert_eq!(r["constraints"][0]["slack"], 2.0);
+        assert_eq!(r["constraints"][1]["status"], "Binding");
+        assert_eq!(r["sensitivity"]["constraints"][1]["shadowPrice"], 1.5);
+        assert_eq!(r["sensitivity"]["constraints"][2]["rhs"], 18.0);
+        assert_eq!(r["sensitivity"]["variables"][0]["objectiveCoefficient"], 3.0);
+        // One undo step brings back the starting values (and the previous model).
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(n(&s, "B1"), 0.0);
+        assert!(!has_model(&s.doc().unwrap().wb, 0));
+        // keep: false leaves the cells alone.
+        let r = s
+            .execute(
+                "data.solver",
+                json!({"objective": "$D$1", "variables": "$B$1:$B$2", "method": "simplex", "keep": false, "constraints": [{"left": "$C$1:$C$3", "op": "<=", "right": "$E$1:$E$3"}]}),
+            )
+            .unwrap();
+        assert_eq!(r["status"], 0);
+        assert_eq!(n(&s, "B1"), 0.0);
+    }
+
+    #[test]
+    fn integer_bounds_value_of_and_failures() {
+        let mut s = session();
+        wyndor(&mut s);
+        let base = json!({"objective": "$D$1", "variables": "$B$1:$B$2", "method": "simplex", "constraints": [
+            {"left": "$C$1:$C$3", "op": "<=", "right": "$E$1:$E$3"},
+            {"left": "$B$1:$B$2", "op": "int"},
+            {"left": "$B$2", "op": "<=", "right": "5"},
+        ]});
+        let r = s.execute("data.solver", base.clone()).unwrap();
+        assert!(r["status"] == 0 || r["status"] == 14, "{r}");
+        // With y ≤ 5: 3x + 2·5 ≤ 18 ⇒ x ≤ 2.67 → x = 2, y = 5, profit 31.
+        assert_eq!((n(&s, "B1"), n(&s, "B2")), (2.0, 5.0));
+        assert_eq!(r["variables"][0]["integer"], "Integer");
+        assert!(r["sensitivity"].is_null());
+        // Value Of.
+        let r = s.execute("data.solver", json!({"goal": "value", "valueOf": 20, "constraints": []})).unwrap();
+        assert_eq!(r["status"], 0);
+        assert!((n(&s, "D1") - 20.0).abs() < 1e-9);
+        // Infeasible: profit ≥ 100 with the plant limits.
+        let r = s
+            .execute(
+                "data.solver",
+                json!({"goal": "max", "constraints": [{"left": "$C$1:$C$3", "op": "<=", "right": "$E$1:$E$3"}, {"left": "$D$1", "op": ">=", "right": "100"}]}),
+            )
+            .unwrap();
+        assert_eq!(r["status"], 5);
+        // A nonlinear objective is refused by Simplex LP.
+        s.execute("cell.set", json!({"cell": "D1", "input": "=B1*B2"})).unwrap();
+        let r = s.execute("data.solver", json!({"constraints": [{"left": "$C$1:$C$3", "op": "<=", "right": "$E$1:$E$3"}]})).unwrap();
+        assert_eq!(r["status"], 7);
+        // Bad models.
+        assert!(s.execute("data.solver", json!({"objective": "$D$1:$D$2"})).is_err());
+        assert!(s.execute("data.solver", json!({"objective": "$D$1", "variables": "$C$1"})).is_err(), "formula as a variable");
+        assert!(s.execute("data.solver", json!({"objective": "$D$1", "variables": "$B$1", "constraints": [{"left": "$C$1", "op": "int"}]})).is_err());
+    }
+
+    #[test]
+    fn interactive_solve_runs_as_a_job() {
+        let mut s = session();
+        wyndor(&mut s);
+        s.execute(
+            "data.solverStart",
+            json!({"objective": "$D$1", "variables": "$B$1:$B$2", "method": "simplex", "constraints": [{"left": "$C$1:$C$3", "op": "<=", "right": "$E$1:$E$3"}]}),
+        )
+        .unwrap();
+        for _ in 0..100 {
+            s.step_job(10.0);
+            if s.job.is_none() {
+                break;
+            }
+        }
+        let (label, r) = s.take_job_result().unwrap();
+        assert_eq!(label, "Solver");
+        assert_eq!(r.unwrap()["status"], 0);
+        assert_eq!(n(&s, "B2"), 6.0);
+        assert!(s.take_ui_requests().iter().any(|u| matches!(u, crate::UiRequest::Dialog(name, _) if name == "solverResults")));
+        assert_eq!(s.doc().unwrap().undo.last().map(|h| h.label.as_str()), Some("Solver"));
+        // Restore Original Values.
+        s.execute("data.solverRestore", json!({})).unwrap();
+        assert_eq!(n(&s, "B2"), 0.0);
     }
 
     #[test]

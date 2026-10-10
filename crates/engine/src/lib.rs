@@ -209,6 +209,8 @@ pub struct Session {
     /// Long-running work (Solver), advanced by the host a slice at a time.
     pub job: Option<Box<dyn job::Job>>,
     pub job_state: job::JobState,
+    /// The last Solver run's result (for its reports and Restore Original Values).
+    pub solver_last: Option<Json>,
 }
 
 impl Session {
@@ -231,6 +233,10 @@ impl Session {
     }
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.docs.get_mut(self.active)
+    }
+    /// The document with this uid (it may not be the active one any more).
+    pub fn doc_by_uid_mut(&mut self, uid: u64) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.uid == uid)
     }
     pub fn doc(&self) -> Result<&DocState> {
         self.active().ok_or(EngineError::NoDocument)

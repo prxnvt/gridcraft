@@ -960,6 +960,11 @@ impl Trial {
         Trial { base, calc }
     }
 
+    /// The workbook the trials start from.
+    pub fn base(&self) -> &Workbook {
+        &self.base
+    }
+
     /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
     pub fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Vec<Value> {
         let mut wb = self.base.clone();
