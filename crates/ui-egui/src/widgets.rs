@@ -156,6 +156,9 @@ pub fn small_button_accent(ui: &mut Ui, icon: Icon, accent: Option<Color32>, lab
             t.text_dim,
         );
     }
+    if !label.is_empty() {
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    }
     resp.on_hover_text(tr(ui, tip))
 }
 

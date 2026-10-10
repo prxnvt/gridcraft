@@ -5,9 +5,10 @@ use gridcraft_engine::model::{HAlign, Style, VAlign};
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::icons::{self, Icon};
+use crate::function_library;
+use crate::icons::{self, FnGlyph, Icon};
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, color_palette, icon_button, small_button, small_button_accent, small_split_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -805,17 +806,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             if s {
                 act(app, "formulas.autoSum", json!({}));
             }
-            egui::Popup::menu(&sa).show(|ui| {
-                for f in ["SUM", "AVERAGE", "COUNT", "MAX", "MIN"] {
-                    if ui.button(f).clicked() {
-                        act(app, "formulas.autoSum", json!({"function": f}));
-                    }
-                }
-                ui.separator();
-                if ui.button("More Functions…").clicked() {
-                    app.open_dialog("insertFunction", json!({}));
-                }
-            });
+            egui::Popup::menu(&sa).show(|ui| function_library::auto_sum_menu(app, ui));
         });
         let fill = small_button(ui, Icon::FillDown, "", "Fill", true);
         egui::Popup::menu(&fill).show(|ui| {
@@ -1501,42 +1492,71 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// What a Function Library button's menu lists.
+#[derive(Clone, Copy)]
+enum LibraryMenu {
+    AutoSum,
+    Recent,
+    Category(&'static str),
+    More,
+}
+
+/// One Function Library button: label, menu, book glyph and colour (none for AutoSum), keytip.
+struct LibraryItem {
+    label: &'static str,
+    menu: LibraryMenu,
+    book: Option<(FnGlyph, Cat)>,
+    key: &'static str,
+}
+
+/// The Function Library, column by column (three rows each). Every category has its own colour.
+const LIBRARY: [LibraryItem; 9] = [
+    LibraryItem { label: "AutoSum", menu: LibraryMenu::AutoSum, book: None, key: "MU" },
+    LibraryItem { label: "Recently Used", menu: LibraryMenu::Recent, book: Some((FnGlyph::Star, Cat::Amber)), key: "MR" },
+    LibraryItem { label: "Financial", menu: LibraryMenu::Category("Financial"), book: Some((FnGlyph::Coins, Cat::Green)), key: "MI" },
+    LibraryItem { label: "Logical", menu: LibraryMenu::Category("Logical"), book: Some((FnGlyph::Question, Cat::Purple)), key: "ML" },
+    LibraryItem { label: "Text", menu: LibraryMenu::Category("Text"), book: Some((FnGlyph::Letter, Cat::Blue)), key: "MT" },
+    LibraryItem { label: "Date & Time", menu: LibraryMenu::Category("DateTime"), book: Some((FnGlyph::Clock, Cat::Orange)), key: "ME" },
+    LibraryItem { label: "Lookup & Reference", menu: LibraryMenu::Category("Lookup"), book: Some((FnGlyph::Magnifier, Cat::Teal)), key: "MO" },
+    LibraryItem { label: "Math & Trig", menu: LibraryMenu::Category("MathTrig"), book: Some((FnGlyph::Theta, Cat::Red)), key: "MG" },
+    LibraryItem { label: "More Functions", menu: LibraryMenu::More, book: Some((FnGlyph::Dots, Cat::Slate)), key: "MQ" },
+];
+
+/// One Function Library button and its menu. AutoSum is a split button (Σ runs SUM, the arrow
+/// opens the AutoSum menu) in the text colour; the others open their category's menu.
+fn library_button(app: &mut SheetApp, ui: &mut Ui, item: &LibraryItem) {
+    let menu = match item.book {
+        None => {
+            let (main, arrow) = small_split_button(ui, Icon::Sum, None, item.label, "AutoSum (⌘⇧T)");
+            if main.clicked() {
+                act(app, "formulas.autoSum", json!({}));
+            }
+            kt(app, arrow, item.key)
+        }
+        Some((glyph, cat)) => {
+            let accent = Some(Tokens::get(ui.ctx()).cat(cat));
+            kt(app, small_button_accent(ui, Icon::FnBook(glyph), accent, item.label, item.label, true), item.key)
+        }
+    };
+    egui::Popup::menu(&menu).show(|ui| match item.menu {
+        LibraryMenu::AutoSum => function_library::auto_sum_menu(app, ui),
+        LibraryMenu::Recent => function_library::recent_menu(app, ui),
+        LibraryMenu::Category(id) => function_library::category_menu(app, ui, id),
+        LibraryMenu::More => function_library::more_menu(app, ui),
+    });
+}
+
 fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if kt(app, big_button(ui, Icon::Function, "Insert\nFunction", "Insert Function (⇧F3)", false), "MF").clicked() {
         app.open_dialog("insertFunction", json!({}));
     }
-    let s = kt(app, big_button(ui, Icon::Sum, "AutoSum", "AutoSum", true), "MU");
-    if s.clicked() {
-        act(app, "formulas.autoSum", json!({}));
-    }
-    for (label, cat, key) in [
-        ("Financial", "Financial", "MI"),
-        ("Logical", "Logical", "ML"),
-        ("Text", "Text", "MT"),
-        ("Date &\nTime", "DateTime", "ME"),
-        ("Lookup &\nReference", "Lookup", "MO"),
-        ("Math &\nTrig", "MathTrig", "MG"),
-        ("More\nFunctions", "Statistical", "MQ"),
-    ] {
-        let r = kt(app, big_button(ui, Icon::Book, label, label, true), key);
-        egui::Popup::menu(&r).show(|ui| {
-            ui.set_max_height(420.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for f in gridcraft_engine::cmd::formulas::function_list() {
-                    if f["category"].as_str() == Some(cat)
-                        && let Some(n) = f["name"].as_str()
-                    {
-                        let locale = app.ui.language.formula_locale();
-                        let name =
-                            app.session.active().map(|d| crate::formula_locale::completion_name(n, locale, &d.wb, d.wb.active_sheet)).unwrap_or(n);
-                        let desc = crate::formula_locale::description(n, locale).unwrap_or_default();
-                        if ui.button(name).on_hover_text(desc).clicked() {
-                            app.run_or_alert("formulas.insertFunction", json!({"name": n}));
-                            ui.close();
-                        }
-                    }
-                }
-            });
+    // Function Library: three columns of three labelled small buttons and no caption, like
+    // Formula Auditing. Each category book takes its own category colour.
+    for column in LIBRARY.chunks(3) {
+        ui.vertical(|ui| {
+            for item in column {
+                library_button(app, ui, item);
+            }
         });
     }
     sep(ui);
@@ -2083,5 +2103,20 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
     if let Some((id, p)) = id {
         app.run_or_alert(id, p);
         app.grid.ensure_visible = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_function_library_book_has_its_own_category_colour() {
+        let books: Vec<(FnGlyph, Cat)> = LIBRARY.iter().filter_map(|i| i.book).collect();
+        assert_eq!(books.len(), 8, "everything but AutoSum is a coloured book");
+        for (i, (glyph, cat)) in books.iter().enumerate() {
+            assert!(books.iter().skip(i + 1).all(|(g, c)| g != glyph && c != cat), "{glyph:?} / {cat:?} is used twice");
+        }
+        assert!(matches!(LIBRARY.first().map(|i| i.menu), Some(LibraryMenu::AutoSum)));
     }
 }

@@ -16,6 +16,7 @@ pub mod dialogs;
 pub mod editor;
 pub mod formula_bar;
 mod formula_locale;
+pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
@@ -54,6 +55,9 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    /// Formulas › Recently Used and Insert Function's Most Recently Used category, newest first
+    /// (at most [`function_library::RECENT_MAX`]).
+    pub recent_functions: Vec<String>,
     /// Interface language. English by default (so tests and headless renders never depend on the
     /// host's locale); the desktop app starts from [`i18n::Language::system`] when `ui.json` has
     /// no usable language (see [`i18n::saved_language`]). An unknown saved value reads as English
@@ -73,6 +77,7 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            recent_functions: function_library::default_recent(),
             language: i18n::Language::En,
         }
     }

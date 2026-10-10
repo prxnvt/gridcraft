@@ -339,9 +339,10 @@ fn formulas_tab_buttons_all_have_keytips() {
     sequence(&mut h, &[Key::M], true);
     h.run_steps(2);
     let registered = h.state().keytips.reachable().to_vec();
-    for seq in
-        ["MF", "MU", "MI", "ML", "MT", "ME", "MO", "MG", "MQ", "MN", "MM", "MS", "MC", "MP", "MD", "MA", "MH", "MK", "MV", "MW", "MX", "MB", "MJ"]
-    {
+    for seq in [
+        "MF", "MU", "MR", "MI", "ML", "MT", "ME", "MO", "MG", "MQ", "MN", "MM", "MS", "MC", "MP", "MD", "MA", "MH", "MK", "MV", "MW", "MX", "MB",
+        "MJ",
+    ] {
         assert!(registered.iter().any(|s| s == seq), "{seq} is not registered: {registered:?}");
     }
     let mut unique = registered.clone();
