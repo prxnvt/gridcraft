@@ -198,7 +198,8 @@ fn main_view(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut b
             app.run_or_alert("data.solverSetModel", model_params(d));
             *open = false;
         }
-        let solve = ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(egui::Color32::WHITE)).fill(theme::Tokens::get(ui.ctx()).accent));
+        let t = theme::Tokens::get(ui.ctx());
+        let solve = ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(t.on_accent)).fill(t.accent));
         if solve.clicked() {
             match app.session.run("data.solverStart", model_params(d)) {
                 Ok(_) => *open = false,
@@ -519,7 +520,8 @@ pub fn results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut
             app.run_or_alert("data.solverRestore", json!({}));
             *open = false;
         }
-        let ok = ui.add(egui::Button::new(egui::RichText::new("   OK   ").color(egui::Color32::WHITE)).fill(theme::Tokens::get(ui.ctx()).accent));
+        let t = theme::Tokens::get(ui.ctx());
+        let ok = ui.add(egui::Button::new(egui::RichText::new("   OK   ").color(t.on_accent)).fill(t.accent));
         if ok.clicked() {
             if d.values.get("choice").and_then(Json::as_str) == Some("restore") {
                 app.run_or_alert("data.solverRestore", json!({}));

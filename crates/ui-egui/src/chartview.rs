@@ -11,7 +11,7 @@ use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
-use crate::theme;
+use crate::theme::{self, Tokens};
 
 fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
@@ -229,7 +229,8 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
             }
             ShapeKind::Icon => {
                 if let Some(icon) = crate::icons::from_name(&sp.text) {
-                    crate::icons::paint(p, r, icon, if fill == Color32::TRANSPARENT { Color32::BLACK } else { fill });
+                    let t = Tokens::get(p.ctx());
+                    crate::icons::paint_on_sheet(p, r, icon, if fill == Color32::TRANSPARENT { t.cell_text } else { fill });
                 }
                 continue;
             }
@@ -247,7 +248,7 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
             let job = egui::text::LayoutJob::simple(
                 sp.text.clone(),
                 FontId::new(14.0 * geo.z, egui::FontFamily::Name(theme::CELL.into())),
-                if sp.kind == ShapeKind::TextBox { Color32::BLACK } else { Color32::WHITE },
+                if sp.kind == ShapeKind::TextBox { Tokens::get(p.ctx()).cell_text } else { Color32::WHITE },
                 r.width() - 8.0,
             );
             let g = p.layout_job(job);
@@ -277,7 +278,7 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
         if let Some(tex) = cache.get(&key) {
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
-            p.rect_filled(r, 0.0, Color32::from_gray(230));
+            p.rect_filled(r, 0.0, Tokens::get(p.ctx()).sheet_track);
         }
         if app.selected_chart == Some(im.id) {
             selection_frame(p, r);
@@ -290,7 +291,7 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
         }
         // Soft shadow + white card.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
-        p.rect_filled(r, 0.0, Color32::WHITE);
+        p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
         let data = gridcraft_chart::resolve(wb, si, ch);
         let m = EguiMeasure { painter: p, z: geo.z };
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
@@ -303,7 +304,7 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
                     && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
                 {
                     let rr = geo.range_rect(sh, rf.range());
-                    p.rect_stroke(rr, 0.0, Stroke::new(1.5, Color32::from_rgb(0x2E, 0x6F, 0xD8)), StrokeKind::Inside);
+                    p.rect_stroke(rr, 0.0, Stroke::new(1.5, Tokens::get(p.ctx()).ref_color(0, true)), StrokeKind::Inside);
                 }
             }
         }
@@ -311,10 +312,11 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
 }
 
 fn selection_frame(p: &Painter, r: Rect) {
-    p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(120)), StrokeKind::Outside);
+    let t = Tokens::get(p.ctx());
+    p.rect_stroke(r, 0.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Outside);
     for c in [r.left_top(), r.center_top(), r.right_top(), r.left_center(), r.right_center(), r.left_bottom(), r.center_bottom(), r.right_bottom()] {
-        p.circle_filled(c, 4.0, Color32::WHITE);
-        p.circle_stroke(c, 4.0, Stroke::new(1.0, Color32::from_gray(100)));
+        p.circle_filled(c, 4.0, t.sheet_control_bg);
+        p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
     let _ = Align2::CENTER_CENTER;
 }

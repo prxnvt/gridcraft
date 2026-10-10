@@ -6,7 +6,7 @@ use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2,
 use crate::SheetApp;
 use crate::i18n;
 use crate::icons::{self, Icon};
-use crate::theme::{self, Tokens};
+use crate::theme::{self, Cat, Tokens};
 
 /// Translates a label or tooltip for the language of the frame being drawn (English if untranslated).
 /// Ribbon chrome all flows through these widgets, so translating here localises it in one place.
@@ -128,6 +128,7 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
 /// Our colour palette (theme row + tints + standard colours), returns a picked hex colour,
 /// `Some("none")` for No Fill/Automatic.
 pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
+    let t = Tokens::get(ui.ctx());
     let mut picked = None;
     if ui.button(none_label).clicked() {
         picked = Some("none".to_string());
@@ -144,9 +145,9 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
                 let col = Color32::from_rgb(c[0], c[1], c[2]);
                 let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
                 ui.painter().rect_filled(r, 1.0, col);
-                ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
+                ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
                 if resp.hovered() {
-                    ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                    ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, t.cat(Cat::Orange)), StrokeKind::Outside);
                 }
                 if resp.clicked() {
                     picked = Some(format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]));
@@ -188,8 +189,9 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-            ui.painter().circle_filled(r.center(), 16.0, Color32::from_rgb(0xF2, 0xC3, 0x2E));
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), Color32::WHITE);
+            let t = Tokens::get(ui.ctx());
+            ui.painter().circle_filled(r.center(), 16.0, t.warning);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), t.on_warning);
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(title).strong());
                 ui.add(egui::Label::new(msg).wrap());
@@ -219,8 +221,9 @@ pub fn confirm_box(app: &mut SheetApp, ctx: &egui::Context) {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-            ui.painter().circle_filled(r.center(), 16.0, Color32::from_rgb(0xF2, 0xC3, 0x2E));
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, "?", theme::ui_bold(20.0), Color32::WHITE);
+            let t = Tokens::get(ui.ctx());
+            ui.painter().circle_filled(r.center(), 16.0, t.warning);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, "?", theme::ui_bold(20.0), t.on_warning);
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(&q.title).strong());
                 ui.add(egui::Label::new(&q.text).wrap());

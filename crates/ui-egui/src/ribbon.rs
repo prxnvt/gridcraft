@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::SheetApp;
 use crate::icons::{self, Icon};
-use crate::theme::{self, Tokens};
+use crate::theme::{self, Cat, Tokens};
 use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
@@ -36,7 +36,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
             ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
             let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
-            ui.painter().circle_filled(knob, 5.0, if on { Color32::WHITE } else { t.text_dim });
+            ui.painter().circle_filled(knob, 5.0, if on { t.on_accent } else { t.text_dim });
             if resp.on_hover_text("AutoSave: save after every change (workbooks saved to a file)").clicked() {
                 app.grid.toggle_autosave();
             }
@@ -962,7 +962,7 @@ fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
                 let (r, resp) = ui.allocate_exact_size(vec2(54.0, 38.0), Sense::click());
                 paint_table_swatch(ui, r, &wb, &name);
                 if resp.hovered() {
-                    ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                    ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).cat(Cat::Orange)), StrokeKind::Outside);
                 }
                 if resp.on_hover_text(&name).clicked() {
                     act(app, cmd, json!({"style": name}));
@@ -980,7 +980,8 @@ fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model::Workbook, 
     let lk = gridcraft_engine::tables::look(style);
     let res = |c: Option<gridcraft_engine::model::Color>| c.and_then(|c| c.resolve(&wb.theme)).map(theme::color32);
     let p = ui.painter();
-    p.rect_filled(r, 0.0, Color32::WHITE);
+    let t = Tokens::get(ui.ctx());
+    p.rect_filled(r, 0.0, t.grid_bg);
     let rows = 5;
     let rh = r.height() / rows as f32;
     for i in 0..rows {
@@ -1000,14 +1001,15 @@ fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model::Workbook, 
         }
         for k in 0..3 {
             let x = rr.left() + 4.0 + k as f32 * (r.width() - 8.0) / 3.0;
-            let col = if i == 0 { res(Some(lk.header_font)).unwrap_or(Color32::BLACK) } else { Color32::from_gray(120) };
+            let col = if i == 0 { res(Some(lk.header_font)).unwrap_or(t.cell_text) } else { t.sheet_control_border };
             p.line_segment([pos2(x, rr.center().y), pos2(x + 10.0, rr.center().y)], Stroke::new(1.0, col));
         }
     }
-    p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Inside);
+    p.rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
 }
 
 fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
     ui.set_width(520.0);
     let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
     let groups: &[(&str, &[&str])] = &[
@@ -1057,17 +1059,17 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
                     .resolve(&wb.theme)
                     .filter(|_| st.fill.pattern != gridcraft_engine::model::PatternType::None)
                     .map(theme::color32)
-                    .unwrap_or(Color32::WHITE);
+                    .unwrap_or(t.grid_bg);
                 ui.painter().rect_filled(r, 0.0, fill);
-                ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Inside);
+                ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
                 if !st.borders.bottom.is_none() {
-                    let c = st.borders.bottom.color.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::BLACK);
+                    let c = st.borders.bottom.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
                     ui.painter().line_segment(
                         [r.left_bottom() + vec2(0.0, -1.5), r.right_bottom() + vec2(0.0, -1.5)],
                         Stroke::new(st.borders.bottom.style.width(), c),
                     );
                 }
-                let col = st.font.color.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::BLACK);
+                let col = st.font.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
                 let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
                 ui.painter().text(
                     r.left_center() + vec2(4.0, 0.0),
@@ -1077,7 +1079,7 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
                     col,
                 );
                 if resp.hovered() {
-                    ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                    ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).cat(Cat::Orange)), StrokeKind::Outside);
                 }
                 if resp.clicked() {
                     act(app, "home.cellStyle", json!({"name": n}));
@@ -1975,9 +1977,4 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         app.run_or_alert(id, p);
         app.grid.ensure_visible = true;
     }
-}
-
-#[allow(dead_code)]
-fn unused(_: &Tokens, _: Icon) {
-    let _ = icons::GREEN;
 }

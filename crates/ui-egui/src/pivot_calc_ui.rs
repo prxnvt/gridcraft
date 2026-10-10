@@ -123,7 +123,7 @@ fn ok_close(ui: &mut egui::Ui) -> (bool, bool) {
         if ui.button(" Close ").clicked() {
             close = true;
         }
-        if ui.add(egui::Button::new(egui::RichText::new("   OK   ").color(egui::Color32::WHITE)).fill(t.accent)).clicked() {
+        if ui.add(egui::Button::new(egui::RichText::new("   OK   ").color(t.on_accent)).fill(t.accent)).clicked() {
             ok = true;
         }
     });

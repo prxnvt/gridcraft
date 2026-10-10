@@ -1,6 +1,6 @@
 //! Sheet tabs and the status bar.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use gridcraft_engine::model::Visibility;
 use serde_json::json;
 
@@ -170,11 +170,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                     pos2(bar.left() + bar.width() * frac1.max(frac0 + 0.03), bar.bottom()),
                 );
                 let resp = ui.interact(bar, ui.id().with("hscroll"), Sense::click_and_drag());
-                ui.painter().rect_filled(
-                    thumb,
-                    4.0,
-                    if resp.hovered() || resp.dragged() { Color32::from_gray(150) } else { Color32::from_gray(190) },
-                );
+                ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || resp.dragged() { t.scrollbar_hover } else { t.scrollbar });
                 if resp.dragged() {
                     let dx = resp.drag_delta().x / bar.width() * total;
                     if let Some(v) = app.view_mut() {

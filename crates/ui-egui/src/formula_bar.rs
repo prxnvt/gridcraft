@@ -1,10 +1,10 @@
 //! The formula bar (Name Box, ✕ ✓ fx, formula field) and the shared cell editor widget.
 
-use egui::{Color32, FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
+use egui::{FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::{REF_COLORS, formula_refs};
+use crate::editor::formula_refs;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
@@ -248,8 +248,9 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     // The text widget.
     let refs = formula_refs(&ed.text);
-    let text_color = Tokens::get(ui.ctx()).text;
-    let cell_text_color = if id == egui::Id::new("gridcraft.cell_editor") { Color32::BLACK } else { text_color };
+    let t = Tokens::get(ui.ctx());
+    let on_sheet = id == egui::Id::new("gridcraft.cell_editor");
+    let cell_text_color = if on_sheet { t.cell_text } else { t.text };
     let font2 = font.clone();
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();
@@ -262,7 +263,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                 continue;
             }
             job.append(s.get(pos..a).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
-            job.append(s.get(a..b).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), REF_COLORS[idx]));
+            job.append(s.get(a..b).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), t.ref_color(idx, on_sheet)));
             pos = b;
         }
         job.append(s.get(pos..).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
@@ -332,11 +333,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         let g = ui.painter().layout_no_wrap(
             rest.to_string(),
             output.galley.job.sections.first().map(|s| s.format.font_id.clone()).unwrap_or_default(),
-            Color32::WHITE,
+            t.on_accent,
         );
         let r = egui::Rect::from_min_size(pos, g.size());
-        ui.painter().rect_filled(r, 0.0, Color32::from_rgb(0x2E, 0x6F, 0xD8));
-        ui.painter().galley(pos, g, Color32::WHITE);
+        ui.painter().rect_filled(r, 0.0, t.accent);
+        ui.painter().galley(pos, g, t.on_accent);
     }
     // Autocomplete list and argument hint under the editor.
     if mine && (!ed.autocomplete.is_empty() || ed.current_function().is_some()) {

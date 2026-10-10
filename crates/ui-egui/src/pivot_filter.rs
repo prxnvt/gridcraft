@@ -1,7 +1,7 @@
 //! PivotTable field buttons: the sort and filter drop-down on Row Labels, Column Labels, field
 //! headers and report filters, and the Label, Value, Top 10 and Date Filter dialogs.
 
-use egui::{Color32, vec2};
+use egui::vec2;
 use gridcraft_engine::core::CellRef;
 use gridcraft_engine::model::Sheet;
 use serde_json::{Value as Json, json};
@@ -271,7 +271,7 @@ pub fn menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     if ui.button(" Cancel ").clicked() {
                         close = true;
                     }
-                    let ok = egui::Button::new(egui::RichText::new("   OK   ").color(Color32::WHITE)).fill(tokens.accent);
+                    let ok = egui::Button::new(egui::RichText::new("   OK   ").color(tokens.on_accent)).fill(tokens.accent);
                     if ui.add_enabled(!none, ok).clicked() {
                         // A search applies to the matching items only; everything else is hidden.
                         let shown: Vec<String> = st.checks.iter().filter(|c| c.1 && visible(&c.0)).map(|c| c.0.clone()).collect();
