@@ -50,11 +50,13 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
 /// The text a cell shows (full precision General; the grid narrows General to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let v = sheet.value(c);
-    if sheet.show_formulas
-        && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
-        && !formula_hidden(wb, sheet, c)
-    {
-        return format!("={}", f.text);
+    if sheet.show_formulas && !formula_hidden(wb, sheet, c) {
+        if let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref()) {
+            return format!("={}", f.text);
+        }
+        if let Some(t) = sheet.data_table_at(c) {
+            return format!("{{={}}}", t.formula_text());
+        }
     }
     let style = wb.styles.get(sheet.style_id(c));
     let f = format(&v, style.num_fmt.as_str(), wb);

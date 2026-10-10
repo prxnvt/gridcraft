@@ -351,6 +351,16 @@ impl Dialog {
                 vec![Check { key: "header", label: "My data has headers" }, Text { key: "columnsText", label: "Columns (blank = all, e.g. A,C):" }],
                 json!({"header": true}),
             ),
+            "dataTable" => {
+                let range = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
+                Dialog::form(
+                    "dataTable",
+                    "Data Table",
+                    "data.dataTable",
+                    vec![Ref { key: "rowInput", label: "Row input cell:" }, Ref { key: "columnInput", label: "Column input cell:" }],
+                    json!({"range": range, "rowInput": "", "columnInput": ""}),
+                )
+            }
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active_abs, "to": "", "changing": ""})),
             "subtotal" => Dialog::form(
                 "subtotal",

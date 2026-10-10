@@ -150,6 +150,18 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         }
         let expr = parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
         let expr = wb.name_call_case(expr);
+        // TABLE() only comes from What-If Analysis › Data Table.
+        let mut table = false;
+        expr.walk(&mut |e| {
+            if let gridcraft_formula::Expr::Call(n, _) = e
+                && n.eq_ignore_ascii_case("TABLE")
+            {
+                table = true;
+            }
+        });
+        if table {
+            return Err(EngineError::Other("TABLE can't be typed into a cell: create data tables with What-If Analysis › Data Table.".into()));
+        }
         let mut cell = Cell::formula(Formula::from_expr(expr));
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().

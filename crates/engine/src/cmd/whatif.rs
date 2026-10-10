@@ -61,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Data Table…",
             ["Data", "Forecast", "What-If Analysis"],
             None,
-            "{range: \"D2:E10\", rowInput?: \"B1\", columnInput?: \"B2\"} one-variable (values down the first column with columnInput, or across the top row with rowInput; formulas in the other edge) or two-variable (formula in the top-left corner). Computes every result by substitution and writes static values (a snapshot, not a live {=TABLE()}); ≤100,000 cells.",
+            "{range: \"D2:E10\", rowInput?: \"B1\", columnInput?: \"B2\"} creates a live data table ({=TABLE(rowInput,columnInput)}): one-variable (values down the first column with columnInput, or across the top row with rowInput; formulas along the other edge) or two-variable (formula in the top-left corner). Input cells are on the table's sheet, outside it. Results recalculate with the workbook (not in Automatic Except for Data Tables mode until F9); ≤100,000 result cells.",
             has_doc,
             data_table
         ),
@@ -592,82 +592,77 @@ fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- data tables
 
-const MAX_TABLE_CELLS: u64 = 100_000;
+/// The input cell of a data table must be a single cell on the table's sheet, outside it.
+const BAD_INPUT: &str = "The input cell must be a single cell on the data table's sheet, outside the table.";
 
 fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.dataTable";
     let (si, r) = range_arg(s, p, "range", CMD)?;
-    let row_in = if p.get("rowInput").and_then(Json::as_str).is_some_and(|t| !t.is_empty()) { Some(cell_arg(s, p, "rowInput", CMD)?) } else { None };
-    let col_in =
-        if p.get("columnInput").and_then(Json::as_str).is_some_and(|t| !t.is_empty()) { Some(cell_arg(s, p, "columnInput", CMD)?) } else { None };
-    if row_in.is_none() && col_in.is_none() {
+    let input = |key: &str| -> Result<Option<CellRef>> {
+        if !p.get(key).and_then(Json::as_str).is_some_and(|t| !t.trim().is_empty()) {
+            return Ok(None);
+        }
+        let text = str_param(p, key).unwrap_or("");
+        if text.contains(':') || text.contains(',') {
+            return Err(EngineError::Other(BAD_INPUT.into()));
+        }
+        let (isi, c) = cell_arg(s, p, key, CMD)?;
+        if isi != si || r.contains(c) {
+            return Err(EngineError::Other(BAD_INPUT.into()));
+        }
+        Ok(Some(c))
+    };
+    let row_input = input("rowInput")?;
+    let col_input = input("columnInput")?;
+    if row_input.is_none() && col_input.is_none() {
         return Err(bad(CMD, "give `rowInput`, `columnInput` or both"));
     }
     if r.height() < 2 || r.width() < 2 {
-        return Err(bad(CMD, "the table needs at least two rows and two columns"));
+        return Err(EngineError::Other("Select the whole table: the input values, the formulas and the cells for the results.".into()));
     }
-    let body = RangeRef::new(CellRef::new(r.start.row + 1, r.start.col + 1), r.end);
-    if body.count() > MAX_TABLE_CELLS {
-        return Err(bad(CMD, format!("the table body is too large ({MAX_TABLE_CELLS} cells max)")));
+    let table = gridcraft_model::DataTable { range: r, row_input, col_input };
+    let Some(body) = table.body() else { return Err(bad(CMD, "the table is too small")) };
+    if body.count() > gridcraft_calc::MAX_TABLE_CELLS {
+        return Err(EngineError::Other(format!("A data table can have at most {} result cells.", gridcraft_calc::MAX_TABLE_CELLS)));
     }
-    for input in [row_in, col_in].into_iter().flatten() {
-        if input.0 == si && r.contains(input.1) {
-            return Err(EngineError::Other("Input cell reference is not valid.".into()));
+    {
+        let sh = s.doc()?.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+        if sh.data_tables.iter().any(|t| t.range != r && t.range.intersection(&r).is_some()) {
+            return Err(EngineError::Other("The range overlaps another data table.".into()));
+        }
+        if sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|x| x.intersection(&r).is_some())) {
+            return Err(EngineError::Other("A data table can't overlap a PivotTable.".into()));
+        }
+        if sh.merges.iter().any(|m| m.intersection(&body).is_some()) {
+            return Err(EngineError::Other("A data table's results can't include merged cells.".into()));
         }
     }
-    let d = s.doc()?;
-    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let (r0, c0) = (r.start.row, r.start.col);
-    let mut trial = trial(d);
-    let mut out: Vec<(CellRef, Value)> = Vec::with_capacity(body.count() as usize);
-    let mode = match (row_in, col_in) {
-        (None, Some((isi, ic))) => {
-            let reads: Vec<(usize, CellRef)> = (c0 + 1..=r.end.col).map(|c| (si, CellRef::new(r0, c))).collect();
-            for row in r0 + 1..=r.end.row {
-                let v = sh.value(CellRef::new(row, c0));
-                let vals = trial.run(&[(isi, ic, v)], &reads);
-                for (k, val) in vals.into_iter().enumerate() {
-                    out.push((CellRef::new(row, c0 + 1 + k as u32), val));
-                }
-            }
-            "column"
-        }
-        (Some((isi, ic)), None) => {
-            let reads: Vec<(usize, CellRef)> = (r0 + 1..=r.end.row).map(|row| (si, CellRef::new(row, c0))).collect();
-            for col in c0 + 1..=r.end.col {
-                let v = sh.value(CellRef::new(r0, col));
-                let vals = trial.run(&[(isi, ic, v)], &reads);
-                for (k, val) in vals.into_iter().enumerate() {
-                    out.push((CellRef::new(r0 + 1 + k as u32, col), val));
-                }
-            }
-            "row"
-        }
-        (Some((rsi, rc)), Some((csi, cc))) => {
-            let reads = [(si, CellRef::new(r0, c0))];
-            for row in r0 + 1..=r.end.row {
-                let cv = sh.value(CellRef::new(row, c0));
-                for col in c0 + 1..=r.end.col {
-                    let rv = sh.value(CellRef::new(r0, col));
-                    let vals = trial.run(&[(rsi, rc, rv), (csi, cc, cv.clone())], &reads);
-                    out.push((CellRef::new(row, col), vals.into_iter().next().unwrap_or_default()));
-                }
-            }
-            "twoVariable"
-        }
-        (None, None) => return Err(bad(CMD, "give `rowInput`, `columnInput` or both")),
+    let mode = match (row_input, col_input) {
+        (Some(_), Some(_)) => "twoVariable",
+        (Some(_), None) => "row",
+        _ => "column",
     };
-    let n = out.len();
+    let manual = s.doc()?.wb.calc.mode != gridcraft_model::CalcMode::Automatic;
+    let edges = table.edges();
     edit(s, |cx| {
-        for (c, v) in out {
-            let sh = cx.sheet_mut(si)?;
+        let sh = cx.sheet_mut(si)?;
+        // Re-running Data Table over the same range replaces that table.
+        sh.data_tables.retain(|t| t.range != r);
+        for c in body.iter() {
             let style = sh.style_id(c);
-            sh.set_cell(c, Cell { value: v, formula: None, style });
+            sh.set_cell(c, Cell { value: Value::Empty, formula: None, style });
+        }
+        sh.data_tables.push(table);
+        for c in edges {
             cx.touch(si, c);
         }
+        // Outside automatic mode the edit alone wouldn't compute the table.
+        cx.structural = manual;
         Ok(())
     })?;
-    Ok(json!({"range": body.a1(), "cells": n, "mode": mode, "static": true}))
+    Ok(
+        json!({"range": body.a1(), "cells": body.count(), "mode": mode, "formula": format!("{{={}}}", s.doc()?.wb.sheet(si).and_then(|sh| sh.data_table_at(body.start)).map(|t| t.formula_text()).unwrap_or_default())}),
+    )
 }
 
 // ---------------------------------------------------------------- advanced filter
@@ -1247,6 +1242,56 @@ mod tests {
         assert!(s.execute("data.dataTable", json!({"range": "L1:N3"})).is_err());
         assert!(s.execute("data.dataTable", json!({"range": "A1:XFD100000", "columnInput": "B2"})).is_err());
         assert!(s.execute("data.dataTable", json!({"range": "L1:N3", "columnInput": "M2"})).is_err());
+        assert!(s.execute("data.dataTable", json!({"range": "P1:Q3", "columnInput": "Sheet2!B2"})).is_err());
+        assert!(s.execute("data.dataTable", json!({"range": "P1:Q3", "columnInput": "B1:B2"})).is_err());
+        assert!(s.execute("data.dataTable", json!({"range": "E2:G4", "columnInput": "B2"})).is_err(), "overlaps a table");
+    }
+
+    #[test]
+    fn data_tables_are_live_and_guarded() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "B1", "values": [[0.05], [1000]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D3", "values": [[100], [200], [300]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "E2", "input": "=B2*(1+B1)"})).unwrap();
+        s.execute("cell.set", json!({"cell": "H1", "input": "=SUM(E3:E5)"})).unwrap();
+        let r = s.execute("data.dataTable", json!({"range": "$D$2:$E$5", "columnInput": "$B$2"})).unwrap();
+        assert_eq!(r["formula"], "{=TABLE(,$B$2)}");
+        assert!((n(&s, "H1") - 630.0).abs() < 1e-9);
+        // Live: a precedent of the formula changes, the results follow.
+        s.execute("cell.set", json!({"cell": "B1", "input": "0.1"})).unwrap();
+        assert!((n(&s, "E3") - 110.0).abs() < 1e-9);
+        assert!((n(&s, "H1") - 660.0).abs() < 1e-9);
+        let got = s.execute("cell.get", json!({"cell": "E4"})).unwrap();
+        assert_eq!(got["formula"], "{=TABLE(,$B$2)}");
+        // Part of the results can't be changed; a TABLE formula can't be typed.
+        assert!(s.execute("cell.set", json!({"cell": "E4", "input": "5"})).is_err());
+        assert!(s.execute("range.setValues", json!({"range": "E4", "values": [[1], [2]]})).is_err());
+        assert!(s.execute("edit.clearContents", json!({"range": "E3:E4"})).is_err());
+        assert!(s.execute("cell.set", json!({"cell": "K1", "input": "=TABLE(B1,B2)"})).is_err());
+        // Formatting results is fine.
+        s.execute("home.bold", json!({"range": "E3:E5"})).unwrap();
+        // Rows: inserting through the table is refused; above it moves table and input together.
+        assert!(s.execute("home.insertRows", json!({"rows": "4:4"})).is_err());
+        assert!(s.execute("home.deleteRows", json!({"rows": "4:5"})).is_err());
+        s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+        let t = s.doc().unwrap().wb.active().unwrap().data_tables[0].clone();
+        assert_eq!(t.range.a1(), "D3:E6");
+        assert_eq!(t.col_input.map(|c| c.a1()).as_deref(), Some("B3"));
+        s.execute("cell.set", json!({"cell": "B2", "input": "0.2"})).unwrap();
+        assert!((n(&s, "E4") - 120.0).abs() < 1e-9);
+        // Clearing every result removes the table; the cells then take values again.
+        s.execute("edit.clearContents", json!({"range": "E4:E6"})).unwrap();
+        assert!(s.doc().unwrap().wb.active().unwrap().data_tables.is_empty());
+        s.execute("cell.set", json!({"cell": "E5", "input": "7"})).unwrap();
+        // Undo brings the table back.
+        s.execute("edit.undo", json!({"steps": 2})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().data_tables.len(), 1);
+        // Except-tables mode: edits don't refresh tables until F9.
+        s.execute("formulas.calculationOptions", json!({"mode": "automaticExceptTables"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B2", "input": "0.5"})).unwrap();
+        assert!((n(&s, "E4") - 120.0).abs() < 1e-9);
+        s.execute("formulas.calculateNow", json!({})).unwrap();
+        assert!((n(&s, "E4") - 150.0).abs() < 1e-9);
     }
 
     #[test]

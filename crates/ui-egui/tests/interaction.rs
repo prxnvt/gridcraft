@@ -426,3 +426,25 @@ fn jobs_run_per_frame_and_escape_pauses_them() {
     assert!(h.state().session.job.is_none());
     assert!(h.state().message.is_none());
 }
+
+#[test]
+fn data_table_dialog_creates_a_live_table() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "B1", "values": [[2]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "D2", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "=B1*10"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1:E4"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("dataTable", json!({}));
+    h.run_steps(2);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("columnInput".into(), json!("$B$1"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    assert_eq!(value(&h, "E3"), Value::Number(20.0));
+    h.state_mut().session.run("cell.set", json!({"cell": "E1", "input": "=B1*100"})).unwrap();
+    h.run_steps(1);
+    assert_eq!(value(&h, "E4"), Value::Number(300.0));
+}

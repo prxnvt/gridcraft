@@ -216,6 +216,38 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     if let Some(pa) = sh.print.print_area {
         sh.print.print_area = map_range(pa);
     }
+    sh.data_tables = std::mem::take(&mut sh.data_tables)
+        .into_iter()
+        .filter_map(|mut t| {
+            t.range = map_range(t.range)?;
+            t.row_input = t.row_input.and_then(map_cell);
+            t.col_input = t.col_input.and_then(map_cell);
+            (t.row_input.is_some() || t.col_input.is_some()).then_some(t)
+        })
+        .collect();
+}
+
+/// Whether inserting or deleting lines would cut through a data table (Excel refuses that).
+fn splits_data_table(sh: &Sheet, axis: Axis, at: u32, count: u32, insert: bool) -> bool {
+    sh.data_tables.iter().any(|t| {
+        let (lo, hi) = match axis {
+            Axis::Rows => (t.range.start.row, t.range.end.row),
+            Axis::Cols => (t.range.start.col, t.range.end.col),
+        };
+        if insert {
+            at > lo && at <= hi
+        } else {
+            let end = at.saturating_add(count.saturating_sub(1));
+            at <= hi && end >= lo && !(at <= lo && end >= hi)
+        }
+    })
+}
+
+fn check_data_tables(s: &Session, sheet: usize, axis: Axis, at: u32, count: u32, insert: bool) -> Result<()> {
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| splits_data_table(sh, axis, at, count, insert)) {
+        return Err(EngineError::Other(super::DATA_TABLE_PART.into()));
+    }
+    Ok(())
 }
 
 /// Rewrites every formula reference (and chart series) for a structural edit on `target`.
@@ -256,6 +288,7 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
     check_lines_protection(s, p, axis, at, count, true)?;
     let sheet = target_sheet(s, p)?;
+    check_data_tables(s, sheet, axis, at, count, true)?;
     // Refuse to push data off the sheet.
     let limit = if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
@@ -297,6 +330,7 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
     check_lines_protection(s, p, axis, at, count, false)?;
     let sheet = target_sheet(s, p)?;
+    check_data_tables(s, sheet, axis, at, count, false)?;
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         cx.protection_checked = true;

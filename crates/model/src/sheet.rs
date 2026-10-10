@@ -118,6 +118,11 @@ impl Sheet {
         }
     }
 
+    /// The data table whose results area contains `c`.
+    pub fn data_table_at(&self, c: CellRef) -> Option<&DataTable> {
+        self.data_tables.iter().find(|t| t.body().is_some_and(|b| b.contains(c)))
+    }
+
     pub fn cell(&self, c: CellRef) -> Option<&Cell> {
         self.cells.get(c)
     }

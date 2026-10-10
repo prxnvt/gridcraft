@@ -1564,7 +1564,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
             &[
                 ("Goal Seek…", "dialog:goalSeek", json!({})),
                 ("Scenario Manager…", "data.scenarioManager", json!({})),
-                ("Data Table…", "data.dataTable", json!({})),
+                ("Data Table…", "dialog:dataTable", json!({})),
             ],
         );
     });

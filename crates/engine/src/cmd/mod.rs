@@ -260,6 +260,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if !protection_checked {
         check_protection(&d.wb, &wb)?;
     }
+    guard_data_tables(&d.wb, &mut wb)?;
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
@@ -322,6 +323,57 @@ fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::C
         },
         _ => empty(a) && empty(b),
     }
+}
+
+/// Refused edits to a data table's results.
+pub const DATA_TABLE_PART: &str = "These cells are a data table's results. Change the whole table, or clear all of its results to remove it.";
+
+/// Data table results can't be edited cell by cell: an edit that changes some (not all) of a
+/// table's result cells is refused; one that clears all of them removes the table.
+fn guard_data_tables(old: &gridcraft_model::Workbook, new: &mut gridcraft_model::Workbook) -> Result<()> {
+    for si in 0..new.sheets.len() {
+        let Some(new_sh) = new.sheets.get(si) else { continue };
+        if new_sh.data_tables.is_empty() {
+            continue;
+        }
+        let Some(old_sh) = old.sheet_index(&new_sh.name).and_then(|i| old.sheets.get(i)) else { continue };
+        if std::sync::Arc::ptr_eq(old_sh, new_sh) {
+            continue;
+        }
+        let mut cleared: Vec<gridcraft_model::DataTable> = Vec::new();
+        for t in &new_sh.data_tables {
+            // Only tables that existed before, unchanged (new or moved tables are the command's own).
+            if !old_sh.data_tables.contains(t) {
+                continue;
+            }
+            let Some(body) = t.body() else { continue };
+            let content = |sh: &gridcraft_model::Sheet, c: CellRef| sh.cell(c).map(|x| (x.value.clone(), x.formula.as_ref().map(|f| f.text.clone())));
+            let mut changed = false;
+            let mut all_empty = true;
+            for c in body.iter() {
+                let now = content(new_sh, c);
+                if now != content(old_sh, c) {
+                    changed = true;
+                }
+                if now.is_some_and(|(v, f)| !v.is_empty() || f.is_some()) {
+                    all_empty = false;
+                }
+            }
+            if changed {
+                if all_empty {
+                    cleared.push(t.clone());
+                } else {
+                    return Err(EngineError::Other(DATA_TABLE_PART.into()));
+                }
+            }
+        }
+        if !cleared.is_empty()
+            && let Some(sh) = new.sheet_mut(si)
+        {
+            sh.data_tables.retain(|t| !cleared.contains(t));
+        }
+    }
+    Ok(())
 }
 
 /// Recomputes an automatic row height from its content: the largest font, and wrapped or
