@@ -20,6 +20,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keytips;
 pub mod panes;
+pub mod pivot_calc_ui;
 pub mod pivot_filter;
 pub mod pivot_pane;
 pub mod ribbon;

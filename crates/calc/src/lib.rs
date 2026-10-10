@@ -7,7 +7,7 @@ pub mod eval;
 pub mod recalc;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
-pub use recalc::{Calc, Key, MAX_TABLE_CELLS, Trial, evaluate, now_serial};
+pub use recalc::{Calc, Key, MAX_TABLE_CELLS, Trial, evaluate, evaluate_expr, now_serial};
 
 #[cfg(test)]
 mod tests;

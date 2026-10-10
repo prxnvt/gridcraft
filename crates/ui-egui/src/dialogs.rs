@@ -368,6 +368,8 @@ impl Dialog {
             "toolpak" => return crate::toolpak::open(params.get("tool").and_then(Json::as_str).unwrap_or("")),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active_abs, "to": "", "changing": ""})),
             "pivotFilter" => crate::pivot_filter::dialog(&params),
+            "pivotCalcField" => return crate::pivot_calc_ui::open_field(app),
+            "pivotCalcItem" => return crate::pivot_calc_ui::open_item(app),
             "subtotal" => Dialog::form(
                 "subtotal",
                 "Subtotal",
@@ -815,6 +817,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "pivotFilter" => crate::pivot_filter::show(app, ui, &mut d, &mut confirm),
+                "pivotCalcField" => crate::pivot_calc_ui::field_dialog(app, ui, &mut d, &mut confirm),
+                "pivotCalcItem" => crate::pivot_calc_ui::item_dialog(app, ui, &mut d, &mut confirm),
                 "dataAnalysis" => crate::toolpak::list(app, ui, &mut d, &mut open),
                 "solver" => crate::solver_ui::show(app, ui, &mut d, &mut open),
                 "solverResults" => crate::solver_ui::results(app, ui, &mut d, &mut open),

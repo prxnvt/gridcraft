@@ -109,6 +109,8 @@ fn workbook() -> Workbook {
         last_range: Some(rr("A2:H12")),
         options: PivotOptions::default(),
         manual_groups: vec![],
+        calc_fields: vec![],
+        calc_items: vec![],
         buttons: vec![],
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
@@ -182,6 +184,8 @@ fn workbook() -> Workbook {
         last_range: Some(rr("K2:Z30")),
         options: PivotOptions::default(),
         manual_groups: vec![],
+        calc_fields: vec![],
+        calc_items: vec![],
         buttons: vec![],
     };
     // Pivot 3: defaults, defined-name source, compact.

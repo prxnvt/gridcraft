@@ -4,9 +4,10 @@
 //! `pivot?` parameters name a PivotTable (name or numeric id); by default it is the pivot whose
 //! report contains the active cell, else the last pivot on the active sheet.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
@@ -53,6 +54,44 @@ pub fn specs() -> Vec<CommandSpec> {
             "{pivot?, field} → the field's items (name, shown), whether it's a date field, its sort and its label and value filters",
             has_doc,
             items
+        ),
+        cmd!(
+            "pivot.calculatedField",
+            "Calculated Field",
+            ["PivotTable Analyze", "Calculations", "Fields, Items, & Sets"],
+            None,
+            "{pivot?, name, formula: \"=Sales/Units\" (fields by name; 'Two Words' quoted), add?: true, replace?} adds or changes a calculated field (it works on the fields' sums)",
+            has_doc,
+            calculated_field
+        ),
+        cmd!("pivot.deleteCalculatedField", "Delete Calculated Field", [], None, "{pivot?, name, replace?}", has_doc, delete_calculated_field),
+        cmd!(
+            "pivot.calculatedItem",
+            "Calculated Item",
+            ["PivotTable Analyze", "Calculations", "Fields, Items, & Sets"],
+            None,
+            "{pivot?, field, name, formula: \"=East+West\" (items by name, or Field[Item]), replace?} adds or changes a calculated item of a row or column field",
+            has_doc,
+            calculated_item
+        ),
+        cmd!("pivot.deleteCalculatedItem", "Delete Calculated Item", [], None, "{pivot?, field, name, replace?}", has_doc, delete_calculated_item),
+        cmd!(
+            "pivot.solveOrder",
+            "Solve Order",
+            ["PivotTable Analyze", "Calculations", "Fields, Items, & Sets"],
+            None,
+            "{pivot?, order: [{field, name}, ..], replace?} the order calculated items are worked out in",
+            has_doc,
+            solve_order
+        ),
+        cmd!(
+            "pivot.listFormulas",
+            "List Formulas",
+            ["PivotTable Analyze", "Calculations", "Fields, Items, & Sets"],
+            None,
+            "{pivot?} writes the calculated fields and items to a new sheet",
+            has_doc,
+            list_formulas
         ),
         cmd!(query "pivot.list", "PivotTables", [], None, "{} → every PivotTable in the workbook", has_doc, list),
         cmd!(
@@ -472,7 +511,11 @@ fn add_to_area(
     name: Option<&str>,
     position: Option<usize>,
 ) -> Result<()> {
-    let field = canonical(cmd, src, field)?;
+    let field = match pt.calc_fields.iter().find(|c| c.name.eq_ignore_ascii_case(field)) {
+        Some(c) if area == "values" => c.name.clone(),
+        Some(_) => return Err(other("Calculated fields can only go in the Values area.")),
+        None => canonical(cmd, src, field)?,
+    };
     match area {
         "rows" | "columns" => {
             if pt.rows.len() + pt.columns.len() >= pv::MAX_AXIS_FIELDS && !in_axes(pt, &field) {
@@ -498,7 +541,8 @@ fn add_to_area(
             if pt.values.len() >= pv::MAX_VALUE_FIELDS {
                 return Err(other(format!("A PivotTable can have at most {} value fields.", pv::MAX_VALUE_FIELDS)));
             }
-            let numeric = src.col(&field).and_then(|c| src.numeric.get(c).copied()).unwrap_or(false);
+            let calculated = pt.calc_fields.iter().any(|c| c.name.eq_ignore_ascii_case(&field));
+            let numeric = calculated || src.col(&field).and_then(|c| src.numeric.get(c).copied()).unwrap_or(false);
             let f = func.unwrap_or(if numeric { PivotFunc::Sum } else { PivotFunc::Count });
             let base = match name {
                 Some(n) if !n.trim().is_empty() => {
@@ -786,6 +830,8 @@ fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "columns": pt.columns.iter().map(field_json).collect::<Vec<_>>(),
         "values": pt.values.iter().map(|v| json!({"field": v.source_col, "func": func_name(v.func), "name": v.name, "showAs": show_as_name(v.show_as), "baseField": v.base_field, "baseItem": v.base_item, "numberFormat": v.number_format})).collect::<Vec<_>>(),
         "filters": pt.filters.iter().map(|f| json!({"field": f.source_col, "selected": f.selected, "label": f.label, "value": f.value, "report": !in_axes(pt, &f.source_col)})).collect::<Vec<_>>(),
+        "calculatedFields": pt.calc_fields.iter().map(|c| json!({"name": c.name, "formula": c.formula})).collect::<Vec<_>>(),
+        "calculatedItems": pt.calc_items.iter().map(|c| json!({"field": c.field, "name": c.name, "formula": c.formula})).collect::<Vec<_>>(),
         "layout": layout_name(pt.layout),
         "grandTotalsRows": pt.grand_totals_rows,
         "grandTotalsCols": pt.grand_totals_cols,
@@ -855,6 +901,15 @@ fn fields(s: &mut Session, p: &Json) -> Result<Json> {
             .collect(),
         Err(_) => vec![],
     };
+    let mut list = list;
+    if src.is_ok() {
+        for cf in &pt.calc_fields {
+            let areas: Vec<&str> = if pt.values.iter().any(|v| v.source_col.eq_ignore_ascii_case(&cf.name)) { vec!["values"] } else { vec![] };
+            list.push(
+                json!({"name": cf.name, "numeric": true, "date": false, "samples": [], "areas": areas, "calculated": true, "formula": cf.formula}),
+            );
+        }
+    }
     if let Some(m) = out.as_object_mut() {
         m.insert("fields".into(), Json::Array(list));
         if let Ok(src) = &src {
@@ -1376,8 +1431,11 @@ fn items(s: &mut Session, p: &Json) -> Result<Json> {
     let labels = pv::distinct_labels(wb, &src, c, &g, 10_001);
     let filter = pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&field));
     let sel = filter.and_then(|f| f.selected.as_ref());
-    let list: Vec<Json> =
+    let mut list: Vec<Json> =
         labels.iter().take(10_000).map(|l| json!({"name": l, "shown": sel.is_none_or(|v| v.iter().any(|x| x.eq_ignore_ascii_case(l)))})).collect();
+    for ci in pt.calc_items.iter().filter(|c| c.field.eq_ignore_ascii_case(&field)) {
+        list.push(json!({"name": ci.name, "shown": sel.is_none_or(|v| v.iter().any(|x| x.eq_ignore_ascii_case(&ci.name))), "calculated": true}));
+    }
     let name = src.headers.get(c).cloned().unwrap_or(field);
     Ok(json!({
         "field": name,
@@ -1392,6 +1450,252 @@ fn items(s: &mut Session, p: &Json) -> Result<Json> {
         "rows": pt.rows.iter().map(|f| f.source_col.clone()).collect::<Vec<_>>(),
         "columns": pt.columns.iter().map(|f| f.source_col.clone()).collect::<Vec<_>>(),
     }))
+}
+
+/// Whether the calculated field `name` reaches itself through the formulas.
+fn calc_cycle(fields: &[PivotCalcField], headers: &[String], name: &str) -> bool {
+    let names: Vec<String> = headers.iter().cloned().chain(fields.iter().map(|f| f.name.clone())).collect();
+    let uses = |f: &PivotCalcField| -> Vec<usize> {
+        crate::pivot_formula::prepare(&f.formula, &names, None)
+            .map(|p| p.refs.iter().filter_map(|r| r.checked_sub(headers.len())).collect())
+            .unwrap_or_default()
+    };
+    let Some(start) = fields.iter().position(|f| f.name.eq_ignore_ascii_case(name)) else { return false };
+    let mut stack = vec![(start, 0usize)];
+    let mut seen = HashSet::new();
+    while let Some((i, depth)) = stack.pop() {
+        if depth > crate::pivot_formula::MAX_DEPTH {
+            return true;
+        }
+        for j in fields.get(i).map(uses).unwrap_or_default() {
+            if j == start {
+                return true;
+            }
+            if seen.insert(j) {
+                stack.push((j, depth + 1));
+            }
+        }
+    }
+    false
+}
+
+fn formula_text(f: &str) -> String {
+    let t = f.trim();
+    if t.starts_with('=') { t.to_string() } else { format!("={t}") }
+}
+
+fn calculated_field(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.calculatedField";
+    let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(C, "missing `name`"))?.to_string();
+    let formula = formula_text(str_param(p, "formula").ok_or_else(|| bad(C, "missing `formula`"))?);
+    let add = bool_param(p, "add").unwrap_or(true);
+    if name.chars().count() > 255 {
+        return Err(other("That name is too long."));
+    }
+    let (si, pi) = find_pivot(s, p)?;
+    let out = update(s, p, |pt, src, _| {
+        if src.col(&name).is_some() {
+            return Err(other("The source data already has a field with that name."));
+        }
+        if pt.values.iter().any(|v| v.name.eq_ignore_ascii_case(&name)) {
+            return Err(other("A value field already has that name."));
+        }
+        let mut fields = pt.calc_fields.clone();
+        let existing = fields.iter().position(|f| f.name.eq_ignore_ascii_case(&name));
+        match existing.and_then(|i| fields.get_mut(i)) {
+            Some(f) => f.formula = formula.clone(),
+            None => {
+                if fields.len() >= 256 {
+                    return Err(other("A PivotTable can have at most 256 calculated fields."));
+                }
+                fields.push(PivotCalcField { name: name.clone(), formula: formula.clone() });
+            }
+        }
+        let names: Vec<String> = src.headers.iter().cloned().chain(fields.iter().map(|f| f.name.clone())).collect();
+        crate::pivot_formula::prepare(&formula, &names, None).map_err(other)?;
+        if calc_cycle(&fields, &src.headers, &name) {
+            return Err(other("A calculated field can't refer to itself, directly or through other calculated fields."));
+        }
+        pt.calc_fields = fields;
+        let shown = pt.calc_fields.iter().find(|f| f.name.eq_ignore_ascii_case(&name)).map(|f| f.name.clone()).unwrap_or_else(|| name.clone());
+        if existing.is_none() && add && !pt.values.iter().any(|v| v.source_col.eq_ignore_ascii_case(&shown)) {
+            add_to_area(C, pt, src, &shown, "values", Some(PivotFunc::Sum), None, None)?;
+        }
+        Ok(json!({"name": shown, "formula": formula, "modified": existing.is_some()}))
+    })?;
+    // Calculated fields belong to the cache: PivotTables on the same source get them too.
+    let fields = s.doc()?.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).map(|p| p.calc_fields.clone()).unwrap_or_default();
+    update_sharing(s, si, pi, bool_param(p, "replace").unwrap_or(false), move |pt| pt.calc_fields = fields.clone())?;
+    Ok(out)
+}
+
+fn delete_calculated_field(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.deleteCalculatedField";
+    let name = str_param(p, "name").ok_or_else(|| bad(C, "missing `name`"))?.to_string();
+    let (si, pi) = find_pivot(s, p)?;
+    let drop = |pt: &mut PivotTable, name: &str| {
+        pt.calc_fields.retain(|f| !f.name.eq_ignore_ascii_case(name));
+        pt.values.retain(|v| !v.source_col.eq_ignore_ascii_case(name));
+    };
+    update(s, p, |pt, _, _| {
+        if !pt.calc_fields.iter().any(|f| f.name.eq_ignore_ascii_case(&name)) {
+            return Err(bad(C, format!("no calculated field `{name}`")));
+        }
+        drop(pt, &name);
+        Ok(json!({}))
+    })?;
+    update_sharing(s, si, pi, bool_param(p, "replace").unwrap_or(false), move |pt| drop(pt, &name))?;
+    Ok(json!({}))
+}
+
+fn calculated_item(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.calculatedItem";
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
+    let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(C, "missing `name`"))?.to_string();
+    let formula = formula_text(str_param(p, "formula").ok_or_else(|| bad(C, "missing `formula`"))?);
+    let (si, pi) = find_pivot(s, p)?;
+    let out = update(s, p, |pt, src, wb| {
+        let f = pt
+            .rows
+            .iter()
+            .chain(pt.columns.iter())
+            .find(|f| f.source_col.eq_ignore_ascii_case(&field))
+            .cloned()
+            .ok_or_else(|| other("Calculated items go in a row or column field."))?;
+        if f.date_group != PivotDateGroup::None
+            || f.number_group.is_some()
+            || pt.manual_groups.iter().any(|m| m.base.eq_ignore_ascii_case(&field) || m.name.eq_ignore_ascii_case(&field))
+        {
+            return Err(other("Grouped fields can't have calculated items."));
+        }
+        if pt.values.iter().any(|v| matches!(v.func, PivotFunc::Average | PivotFunc::StdDev | PivotFunc::StdDevP | PivotFunc::Var | PivotFunc::VarP))
+        {
+            return Err(other("Calculated items don't work with averages, standard deviations or variances in the Values area."));
+        }
+        let c = src.col(&field).ok_or_else(|| bad(C, format!("no field `{field}` in the source data")))?;
+        let mut labels = pv::distinct_labels(wb, src, c, &pv::Grouping::of(&f), 100_001);
+        if labels.len() > 100_000 {
+            return Err(other("That field has too many items."));
+        }
+        let existing = pt.calc_items.iter().position(|ci| ci.field.eq_ignore_ascii_case(&field) && ci.name.eq_ignore_ascii_case(&name));
+        if existing.is_none() && labels.iter().any(|l| l.eq_ignore_ascii_case(&name)) {
+            return Err(other("The field already has an item with that name."));
+        }
+        // Earlier calculated items of the field can be used too.
+        labels.extend(
+            pt.calc_items.iter().filter(|ci| ci.field.eq_ignore_ascii_case(&field) && !ci.name.eq_ignore_ascii_case(&name)).map(|ci| ci.name.clone()),
+        );
+        let fname = f.source_col.clone();
+        let q = |fl: &str, i: &str| if fl.eq_ignore_ascii_case(&fname) { labels.iter().position(|l| l.eq_ignore_ascii_case(i)) } else { None };
+        crate::pivot_formula::prepare(&formula, &labels, Some(&q)).map_err(other)?;
+        match existing.and_then(|i| pt.calc_items.get_mut(i)) {
+            Some(ci) => ci.formula = formula.clone(),
+            None => {
+                if pt.calc_items.len() >= 1000 {
+                    return Err(other("A PivotTable can have at most 1,000 calculated items."));
+                }
+                pt.calc_items.push(PivotCalcItem { field: fname.clone(), name: name.clone(), formula: formula.clone() });
+            }
+        }
+        Ok(json!({"field": fname, "name": name, "formula": formula, "modified": existing.is_some()}))
+    })?;
+    let items = s.doc()?.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).map(|p| p.calc_items.clone()).unwrap_or_default();
+    update_sharing(s, si, pi, bool_param(p, "replace").unwrap_or(false), move |pt| pt.calc_items = items.clone())?;
+    Ok(out)
+}
+
+fn delete_calculated_item(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.deleteCalculatedItem";
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
+    let name = str_param(p, "name").ok_or_else(|| bad(C, "missing `name`"))?.to_string();
+    let (si, pi) = find_pivot(s, p)?;
+    update(s, p, |pt, _, _| {
+        let before = pt.calc_items.len();
+        pt.calc_items.retain(|c| !(c.field.eq_ignore_ascii_case(&field) && c.name.eq_ignore_ascii_case(&name)));
+        if pt.calc_items.len() == before {
+            return Err(bad(C, format!("no calculated item `{name}` in `{field}`")));
+        }
+        Ok(json!({}))
+    })?;
+    let items = s.doc()?.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).map(|p| p.calc_items.clone()).unwrap_or_default();
+    update_sharing(s, si, pi, bool_param(p, "replace").unwrap_or(false), move |pt| pt.calc_items = items.clone())?;
+    Ok(json!({}))
+}
+
+fn solve_order(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.solveOrder";
+    let order = p.get("order").and_then(Json::as_array).ok_or_else(|| bad(C, "`order` is a list of {field, name}"))?.clone();
+    update(s, p, |pt, _, _| {
+        let mut out: Vec<PivotCalcItem> = Vec::new();
+        for o in order.iter().take(1000) {
+            let (Some(f), Some(n)) = (str_param(o, "field"), str_param(o, "name")) else { return Err(bad(C, "each entry is {field, name}")) };
+            let i = pt
+                .calc_items
+                .iter()
+                .position(|c| c.field.eq_ignore_ascii_case(f) && c.name.eq_ignore_ascii_case(n))
+                .ok_or_else(|| bad(C, format!("no calculated item `{n}` in `{f}`")))?;
+            out.push(pt.calc_items.remove(i));
+        }
+        // Items not named keep their order after the named ones.
+        out.append(&mut pt.calc_items);
+        pt.calc_items = out;
+        Ok(json!({"order": pt.calc_items.iter().map(|c| json!({"field": c.field, "name": c.name})).collect::<Vec<_>>()}))
+    })
+}
+
+fn list_formulas(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.protected_structure {
+        return Err(other("The workbook is protected and cannot be changed."));
+    }
+    let (si, pi) = find_pivot(s, p)?;
+    let pt = s.doc()?.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| other("There's no such PivotTable."))?;
+    if pt.calc_fields.is_empty() && pt.calc_items.is_empty() {
+        return Err(other("This PivotTable has no calculated fields or items."));
+    }
+    let t = |x: &str| Value::text(x.to_string());
+    let mut rows: Vec<Vec<Value>> = Vec::new();
+    if !pt.calc_fields.is_empty() {
+        rows.push(vec![t("Calculated Field")]);
+        rows.push(vec![t("Solve Order"), t("Field"), t("Formula")]);
+        for (i, f) in pt.calc_fields.iter().enumerate() {
+            rows.push(vec![Value::Number((i + 1) as f64), t(&f.name), t(&f.formula)]);
+        }
+        rows.push(vec![]);
+    }
+    if !pt.calc_items.is_empty() {
+        rows.push(vec![t("Calculated Item")]);
+        rows.push(vec![t("Solve Order"), t("Item"), t("Formula")]);
+        for (i, c) in pt.calc_items.iter().enumerate() {
+            rows.push(vec![Value::Number((i + 1) as f64), t(&format!("{}[{}]", c.field, c.name)), t(&c.formula)]);
+        }
+        rows.push(vec![]);
+    }
+    rows.push(vec![t("Note"), t("Calculated fields work on the sums of the fields they name. Calculated items are worked out in solve order.")]);
+    let (at, name) = edit(s, |cx| {
+        let at = (si + 1).min(cx.wb.sheets.len());
+        let nm = cx.wb.next_sheet_name();
+        let mut sheet = Sheet::new(nm.clone());
+        for (r, row) in rows.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                sheet.set_value(CellRef::new(r as u32, c as u32), v.clone());
+            }
+        }
+        cx.wb.sheets.insert(at, Arc::new(sheet));
+        for n in cx.wb.names.iter_mut() {
+            if let Some(sc) = n.scope.as_mut()
+                && *sc >= at
+            {
+                *sc += 1;
+            }
+        }
+        cx.wb.active_sheet = at;
+        cx.structural = true;
+        Ok((at, nm))
+    })?;
+    if let Ok(d) = s.doc_mut() {
+        d.sheet_selections.insert(at.min(d.sheet_selections.len()), crate::Selection::default());
+    }
+    Ok(json!({"sheet": name}))
 }
 
 fn clear_filter(s: &mut Session, p: &Json) -> Result<Json> {
@@ -2593,6 +2897,102 @@ mod tests {
         s.execute("file.open", json!({"name": "f.xlsx", "base64": b64})).unwrap();
         s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
         assert_eq!(pt(&s).filters, want);
+    }
+
+    fn cell_at(s: &Session, row_label: &str, col: u32) -> Value {
+        let row = find_row(s, row_label).expect("row");
+        val(s, &CellRef::new(row, pt(s).last_range.unwrap().start.col + col).a1())
+    }
+    fn close(v: Value, want: f64) {
+        let got = v.as_f64().unwrap_or(f64::NAN);
+        assert!((got - want).abs() < 1e-9, "{got} != {want}");
+    }
+
+    #[test]
+    fn calculated_fields() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let r = s.execute("pivot.calculatedField", json!({"name": "Price", "formula": "Sales/Units"})).unwrap();
+        assert_eq!(r["formula"], "=Sales/Units");
+        assert_eq!(pt(&s).values[1].name, "Sum of Price");
+        // On the sums: East sold 415 over 33 units.
+        close(cell_at(&s, "East", 2), 415.0 / 33.0);
+        close(cell_at(&s, "Grand Total", 2), 835.0 / 72.0);
+        // Calculated fields can use calculated fields.
+        s.execute("pivot.calculatedField", json!({"name": "Double", "formula": "=Price*2", "add": true})).unwrap();
+        close(cell_at(&s, "West", 3), 2.0 * 285.0 / 27.0);
+        // Changing a formula keeps the value field.
+        let r = s.execute("pivot.calculatedField", json!({"name": "price", "formula": "=Sales/Units*100"})).unwrap();
+        assert_eq!(r["modified"], true);
+        close(cell_at(&s, "North", 2), 1125.0);
+        close(cell_at(&s, "North", 3), 2250.0);
+        // Refusals.
+        assert!(s.execute("pivot.calculatedField", json!({"name": "Sales", "formula": "=1"})).is_err(), "a source field's name");
+        assert!(s.execute("pivot.calculatedField", json!({"name": "Bad", "formula": "=Sales+Bogus"})).is_err());
+        assert!(s.execute("pivot.calculatedField", json!({"name": "Cell", "formula": "=A1*2"})).is_err());
+        assert!(s.execute("pivot.calculatedField", json!({"name": "Price", "formula": "=Double/2"})).is_err(), "a cycle");
+        assert!(s.execute("pivot.addField", json!({"field": "Price", "area": "rows"})).is_err());
+        let f = s.execute("pivot.fields", json!({})).unwrap();
+        assert!(f["fields"].as_array().unwrap().iter().any(|x| x["name"] == "Price" && x["calculated"] == true));
+        // List Formulas writes a sheet.
+        let r = s.execute("pivot.listFormulas", json!({"pivot": "PivotTable1"})).unwrap();
+        let sheet = r["sheet"].as_str().unwrap().to_string();
+        assert_eq!(text(&s, "B3"), "Price");
+        assert_eq!(text(&s, "C3"), "=Sales/Units*100");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.doc().unwrap().wb.sheet_index(&sheet).is_none());
+        // Deleting a field takes its value field out.
+        s.execute("pivot.deleteCalculatedField", json!({"pivot": "PivotTable1", "name": "Double"})).unwrap();
+        assert_eq!(pt(&s).values.len(), 2);
+        // Through xlsx.
+        let want = (pt(&s).calc_fields, pt(&s).values);
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "c.xlsx", "base64": b64})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        assert_eq!((pt(&s).calc_fields, pt(&s).values), want);
+        s.execute("pivot.refresh", json!({})).unwrap();
+        close(cell_at(&s, "North", 2), 1125.0);
+    }
+
+    #[test]
+    fn calculated_items() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.calculatedItem", json!({"field": "Region", "name": "Coast", "formula": "=East+West"})).unwrap();
+        // East + West, column by column; totals include it, as in Excel.
+        close(cell_at(&s, "Coast", 1), 160.0 + 170.0);
+        close(cell_at(&s, "Coast", 4), 700.0);
+        close(cell_at(&s, "Grand Total", 4), 835.0 + 700.0);
+        close(cell_at(&s, "Grand Total", 1), 420.0 + 330.0);
+        // Later items can use earlier ones, and Field[Item].
+        s.execute("pivot.calculatedItem", json!({"field": "Region", "name": "Twice", "formula": "=Region[Coast]*2"})).unwrap();
+        close(cell_at(&s, "Twice", 4), 1400.0);
+        // Hiding the item hides it from the totals too.
+        s.execute("pivot.filter", json!({"field": "Region", "selected": ["East", "West", "North", "Coast"]})).unwrap();
+        assert!(find_row(&s, "Twice").is_none());
+        close(cell_at(&s, "Grand Total", 4), 835.0 + 700.0);
+        let items = s.execute("pivot.items", json!({"field": "Region"})).unwrap();
+        assert!(items["items"].as_array().unwrap().iter().any(|i| i["name"] == "Twice" && i["calculated"] == true && i["shown"] == false));
+        s.execute("pivot.filter", json!({"field": "Region", "selected": null})).unwrap();
+        // Refusals.
+        assert!(s.execute("pivot.calculatedItem", json!({"field": "Region", "name": "East", "formula": "=1"})).is_err());
+        assert!(s.execute("pivot.calculatedItem", json!({"field": "Region", "name": "X", "formula": "=South"})).is_err());
+        assert!(s.execute("pivot.calculatedItem", json!({"field": "Units", "name": "X", "formula": "=1"})).is_err(), "not on an axis");
+        s.execute("pivot.solveOrder", json!({"order": [{"field": "Region", "name": "Twice"}]})).unwrap();
+        assert_eq!(pt(&s).calc_items[0].name, "Twice");
+        // Through xlsx.
+        let want = pt(&s).calc_items;
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "c.xlsx", "base64": b64})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        assert_eq!(pt(&s).calc_items, want);
+        s.execute("pivot.deleteCalculatedItem", json!({"field": "Region", "name": "Twice"})).unwrap();
+        s.execute("pivot.deleteCalculatedItem", json!({"field": "Region", "name": "Coast"})).unwrap();
+        assert!(find_row(&s, "Coast").is_none());
+        close(cell_at(&s, "Grand Total", 4), 835.0);
+        // Averages refuse calculated items.
+        s.execute("pivot.valueSettings", json!({"field": "Sum of Sales", "func": "average"})).unwrap();
+        assert!(s.execute("pivot.calculatedItem", json!({"field": "Region", "name": "Coast", "formula": "=East+West"})).is_err());
     }
 
     #[test]

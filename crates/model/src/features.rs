@@ -1030,6 +1030,24 @@ pub enum PivotRule {
     Top { top: bool, count: f64, by: PivotTopBy, field: String },
 }
 
+/// A calculated field: a formula over the sums of other fields.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotCalcField {
+    pub name: String,
+    /// As typed, with `=`; fields by name (`'Unit Price'` when quoted).
+    pub formula: String,
+}
+
+/// A calculated item: a new item of a field, a formula over its other items.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotCalcItem {
+    pub field: String,
+    pub name: String,
+    pub formula: String,
+}
+
 /// A report filter (or, for a field also in Rows/Columns, its hidden-items filter).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -1073,6 +1091,9 @@ pub struct PivotTable {
     pub options: PivotOptions,
     /// Fields made by grouping selected items.
     pub manual_groups: Vec<PivotManualGroup>,
+    pub calc_fields: Vec<PivotCalcField>,
+    /// In solve order.
+    pub calc_items: Vec<PivotCalcItem>,
     /// Cells with a field button, from the last refresh (not saved).
     #[serde(skip)]
     pub buttons: Vec<(CellRef, String)>,
@@ -1099,6 +1120,8 @@ impl Default for PivotTable {
             last_range: None,
             options: PivotOptions::default(),
             manual_groups: vec![],
+            calc_fields: vec![],
+            calc_items: vec![],
             buttons: vec![],
         }
     }

@@ -199,6 +199,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Automate" => automate(app, ui),
                             "Table Design" => table_design(app, ui),
                             "Chart Design" => chart_design(app, ui),
+                            "PivotTable Analyze" => pivot_analyze(app, ui),
                             _ => home(app, ui),
                         }
                     });
@@ -243,6 +244,9 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         }
         if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
             v.push("Chart Design");
+        }
+        if crate::pivot_calc_ui::active(app).is_some() {
+            v.push("PivotTable Analyze");
         }
     }
     v
@@ -1728,6 +1732,66 @@ fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Script, "About\nGridCraft", "Version, contributors and the AI models that helped", false).clicked() {
         app.open_dialog("about", json!({}));
     }
+}
+
+fn pivot_analyze(app: &mut SheetApp, ui: &mut Ui) {
+    let Some((id, _)) = crate::pivot_calc_ui::active(app) else { return };
+    let info = app.session.run("pivot.fields", json!({"pivot": id})).unwrap_or_default();
+    let pname = info["name"].as_str().unwrap_or("").to_string();
+    ui.vertical(|ui| {
+        ui.label(egui::RichText::new("PivotTable Name:").small());
+        let mut name = pname.clone();
+        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(120.0));
+        if r.lost_focus() && name != pname {
+            act(app, "pivot.options", json!({"pivot": id, "name": name}));
+        }
+    });
+    sep(ui);
+    if big_button(ui, Icon::Redo, "Refresh", "Refresh (Alt+F5)", false).clicked() {
+        act(app, "pivot.refresh", json!({"pivot": id}));
+    }
+    sep(ui);
+    let reports: Vec<String> = info["filters"]
+        .as_array()
+        .map(|a| a.iter().filter(|f| f["report"] == true).filter_map(|f| f["field"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    ui.vertical(|ui| {
+        if small_button(ui, Icon::Eraser, "Clear Filters", "Clear every filter", false).clicked() {
+            act(app, "pivot.clearFilters", json!({"pivot": id}));
+        }
+        let pages = ui
+            .add_enabled_ui(!reports.is_empty(), |ui| {
+                small_button(
+                    ui,
+                    Icon::Insert,
+                    "Show Report Filter Pages",
+                    "A copy of the PivotTable on a new sheet for each report filter item",
+                    true,
+                )
+            })
+            .inner;
+        egui::Popup::menu(&pages).show(|ui| {
+            for f in &reports {
+                if ui.add(egui::Button::new(f.as_str()).frame(false).min_size(vec2(160.0, 22.0))).clicked() {
+                    act(app, "pivot.showReportFilterPages", json!({"pivot": id, "field": f}));
+                }
+            }
+        });
+    });
+    sep(ui);
+    let calc = big_button(ui, Icon::Fx, "Fields, Items,\n& Sets", "Fields, Items, & Sets", true);
+    egui::Popup::menu(&calc).show(|ui| {
+        menu_items(
+            app,
+            ui,
+            &[
+                ("Calculated Field…", "dialog:pivotCalcField", json!({})),
+                ("Calculated Item…", "dialog:pivotCalcItem", json!({})),
+                ("-", "", json!({})),
+                ("List Formulas", "pivot.listFormulas", json!({"pivot": id})),
+            ],
+        );
+    });
 }
 
 fn table_design(app: &mut SheetApp, ui: &mut Ui) {

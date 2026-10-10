@@ -15,6 +15,7 @@ pub mod fill;
 pub mod io;
 pub mod job;
 pub mod pivot;
+pub mod pivot_formula;
 pub mod report;
 pub mod sample;
 pub mod selection;

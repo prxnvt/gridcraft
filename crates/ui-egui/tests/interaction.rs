@@ -649,3 +649,50 @@ fn pivot_label_and_top10_dialogs() {
     assert!(h.state().dialog.is_some());
     assert!(h.state().message.is_some());
 }
+
+#[test]
+fn calculated_field_and_item_dialogs() {
+    use egui_kittest::kittest::Queryable;
+    let mut s = pivot_session();
+    s.execute("selection.set", json!({"range": "A4"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("pivotCalcField", json!({}));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.title.clone()).as_deref(), Some("Insert Calculated Field"));
+    // Pick Sales from the list and insert it, then finish the formula and press Add.
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("name".into(), json!("Double"));
+        d.values.insert("pick".into(), json!(1));
+    }
+    h.run_steps(1);
+    h.get_by_label("Insert Field").click();
+    h.run_steps(2);
+    let f = h.state().dialog.as_ref().and_then(|d| d.values.get("formula").and_then(|v| v.as_str()).map(str::to_string));
+    assert_eq!(f.as_deref(), Some("= Sales"));
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("formula".into(), json!("= Sales*2"));
+    }
+    h.run_steps(1);
+    h.get_by_label("  Add  ").click();
+    h.run_steps(2);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    h.get_by_label(" Close ").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+    let pt = h.state().session.active().and_then(|d| d.wb.active()).and_then(|s| s.pivots.last().cloned()).unwrap();
+    assert_eq!(pt.calc_fields.len(), 1);
+    assert_eq!(pivot_value(&h, "East").map(|_| ()), Some(()));
+    // Calculated item through its dialog and OK.
+    h.state_mut().open_dialog("pivotCalcItem", json!({}));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.title.clone()).as_deref(), Some("Insert Calculated Item in \"Region\""));
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("name".into(), json!("EW"));
+        d.values.insert("formula".into(), json!("=East+West"));
+    }
+    h.run_steps(1);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    assert_eq!(pivot_value(&h, "EW"), Some(Value::Number(170.0)));
+}

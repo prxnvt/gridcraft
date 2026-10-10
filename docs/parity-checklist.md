@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 260 / 290 commands implemented (89.7%).**
+**Overall: 261 / 290 commands implemented (90.0%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -21,7 +21,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Table Design | 12 | 13 | 92% |
 | Chart Design | 8 | 8 | 100% |
 | Format | 3 | 3 | 100% |
-| PivotTable Analyze | 12 | 13 | 92% |
+| PivotTable Analyze | 13 | 13 | 100% |
 | PivotTable Design | 4 | 4 | 100% |
 
 ## File (10 / 11, 91%)
@@ -380,13 +380,14 @@ Implemented:
 - `chart.shapeFill` Shape Fill (Shape Styles)
 - `chart.shapeOutline` Shape Outline (Shape Styles)
 
-## PivotTable Analyze (12 / 13, 92%)
+## PivotTable Analyze (13 / 13, 100%)
 
 Implemented:
 
 - `pivot.fieldList` Field List (Show)
 - `pivot.refresh` Refresh (Data)
 - `pivot.changeSource` Change Data Source (Data)
+- `pivot.calculatedField` Fields, Items & Sets (Calculations)
 - `pivot.addField` Add Field (Fields)
 - `pivot.removeField` Remove Field (Fields)
 - `pivot.moveField` Move Field (Fields)
@@ -396,10 +397,6 @@ Implemented:
 - `pivot.group` Group Field (Group)
 - `pivot.collapse` Collapse Field (Active Field)
 - `pivot.delete` Clear All (Actions)
-
-Missing:
-
-- `pivot.calculatedField` Fields, Items & Sets (Calculations)
 
 ## PivotTable Design (4 / 4, 100%)
 

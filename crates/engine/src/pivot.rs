@@ -865,13 +865,109 @@ fn add_empty_items(nodes: &mut Vec<Node>, depth: usize, fields: &[&PivotField], 
 
 type AggMap = HashMap<(Vec<u32>, Vec<u32>), Vec<Acc>>;
 
+/// The column of a value field that is a calculated field (records add nothing to it).
+const CALC_COL: usize = usize::MAX;
+
+/// What a calculated field's formula uses.
+#[derive(Clone, Copy)]
+enum CalcRef {
+    /// The sum of a source field, by its place in `CalcFields::hidden`.
+    Col(usize),
+    /// Another calculated field.
+    Calc(usize),
+}
+
+/// The PivotTable's calculated fields, prepared once per compute.
+struct CalcFields {
+    names: Vec<String>,
+    prepared: Vec<Option<(crate::pivot_formula::Prepared, Vec<CalcRef>)>>,
+    /// Source columns the formulas use, summed alongside the value fields.
+    hidden: Vec<usize>,
+}
+
+impl CalcFields {
+    fn new(pt: &PivotTable, src: &Source) -> CalcFields {
+        let names: Vec<String> = pt.calc_fields.iter().map(|f| f.name.clone()).collect();
+        let all: Vec<String> = src.headers.iter().cloned().chain(names.iter().cloned()).collect();
+        let mut hidden: Vec<usize> = Vec::new();
+        let prepared = pt
+            .calc_fields
+            .iter()
+            .map(|f| {
+                let p = crate::pivot_formula::prepare(&f.formula, &all, None).ok()?;
+                let refs = p
+                    .refs
+                    .iter()
+                    .map(|r| match r.checked_sub(src.headers.len()) {
+                        Some(ci) => CalcRef::Calc(ci),
+                        None => CalcRef::Col(match hidden.iter().position(|h| h == r) {
+                            Some(h) => h,
+                            None => {
+                                hidden.push(*r);
+                                hidden.len() - 1
+                            }
+                        }),
+                    })
+                    .collect();
+                Some((p, refs))
+            })
+            .collect();
+        CalcFields { names, prepared, hidden }
+    }
+    fn index(&self, name: &str) -> Option<usize> {
+        self.names.iter().position(|n| n.eq_ignore_ascii_case(name))
+    }
+}
+
+/// Reads value field results from a cell's accumulators.
+struct CellVals<'a> {
+    vals: &'a [(usize, &'a PivotValue)],
+    calc: &'a CalcFields,
+    /// Number of value fields; hidden sums follow them.
+    k: usize,
+    wb: &'a Workbook,
+    sheet: usize,
+    at: CellRef,
+}
+
+impl CellVals<'_> {
+    fn get(&self, accs: &[Acc], vi: usize, func: Option<PivotFunc>) -> Option<Value> {
+        let (c, v) = self.vals.get(vi)?;
+        if *c == CALC_COL {
+            let i = self.calc.index(&v.source_col)?;
+            return Some(self.calc_value(accs, i, 0));
+        }
+        accs.get(vi).map(|a| a.result(func.unwrap_or(v.func)))
+    }
+    /// A calculated field: its formula on the sums of the fields it names.
+    fn calc_value(&self, accs: &[Acc], i: usize, depth: usize) -> Value {
+        if depth > crate::pivot_formula::MAX_DEPTH {
+            return Value::Error(CellError::Ref);
+        }
+        let Some(Some((p, refs))) = self.calc.prepared.get(i) else { return Value::Error(CellError::Name) };
+        let args: Vec<Value> = refs
+            .iter()
+            .map(|r| match r {
+                CalcRef::Col(h) => accs.get(self.k + h).map(|a| a.result(PivotFunc::Sum)).unwrap_or(Value::Number(0.0)),
+                CalcRef::Calc(j) => self.calc_value(accs, *j, depth + 1),
+            })
+            .collect();
+        crate::pivot_formula::eval(self.wb, self.sheet, self.at, p, &args)
+    }
+}
+
 /// Computes a PivotTable report from the workbook.
 pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Output, String> {
     let src = read_pivot_source(wb, pt, pivot_sheet)?;
     let fmt_of = |c: usize| src.formats.get(c).cloned().unwrap_or_else(|| "General".into());
     let rows: Vec<(usize, &PivotField)> = pt.rows.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
     let cols: Vec<(usize, &PivotField)> = pt.columns.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
-    let vals: Vec<(usize, &PivotValue)> = pt.values.iter().filter_map(|v| src.col(&v.source_col).map(|c| (c, v))).collect();
+    let calc = CalcFields::new(pt, &src);
+    let vals: Vec<(usize, &PivotValue)> = pt
+        .values
+        .iter()
+        .filter_map(|v| src.col(&v.source_col).map(|c| (c, v)).or_else(|| calc.index(&v.source_col).map(|_| (CALC_COL, v))))
+        .collect();
     if rows.len() + cols.len() > MAX_AXIS_FIELDS {
         return Err(format!("A PivotTable can have at most {MAX_AXIS_FIELDS} row and column fields."));
     }
@@ -895,6 +991,10 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     let shown_filters: Vec<&(usize, &PivotFilter, Grouping, bool)> = filters.iter().filter(|f| f.3).collect();
 
     let k = vals.len();
+    // Columns each record adds to: the value fields, then the fields calculated fields use.
+    let add_cols: Vec<usize> = vals.iter().map(|(c, _)| *c).chain(calc.hidden.iter().copied()).collect();
+    let k_all = add_cols.len();
+    let cv = CellVals { vals: &vals, calc: &calc, k, wb, sheet: pivot_sheet, at: pt.anchor };
     let empty = rows.is_empty() && cols.is_empty() && vals.is_empty();
 
     // ---- aggregate
@@ -970,8 +1070,8 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                 let Some(rec) = src.rows.get(*ri) else { continue };
                 for a in 0..=rp.len() {
                     for b in 0..=cp.len() {
-                        let e = aggs.entry((rp[..a].to_vec(), cp[..b].to_vec())).or_insert_with(|| vec![Acc::default(); k]);
-                        for (acc, (c, _)) in e.iter_mut().zip(vals.iter()) {
+                        let e = aggs.entry((rp[..a].to_vec(), cp[..b].to_vec())).or_insert_with(|| vec![Acc::default(); k_all]);
+                        for (acc, c) in e.iter_mut().zip(add_cols.iter()) {
                             acc.add(rec.get(*c).unwrap_or(&Value::Empty));
                         }
                     }
@@ -994,8 +1094,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         let value_index =
             |field: &str| vals.iter().position(|(_, v)| v.name.eq_ignore_ascii_case(field) || v.source_col.eq_ignore_ascii_case(field)).unwrap_or(0);
         let total = |rp: &[u32], cp: &[u32], vi: usize| -> Option<f64> {
-            let (_, v) = vals.get(vi)?;
-            aggs.get(&(rp.to_vec(), cp.to_vec())).and_then(|a| a.get(vi)).and_then(|a| a.result(v.func).as_f64())
+            aggs.get(&(rp.to_vec(), cp.to_vec())).and_then(|a| cv.get(a, vi, None)).and_then(|v| v.as_f64())
         };
         let mut excl_rows = HashSet::new();
         let mut excl_cols = HashSet::new();
@@ -1034,6 +1133,113 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         }
         if !excl_rows.is_empty() || !excl_cols.is_empty() {
             (aggs, row_set, col_set) = aggregate(&excl_rows, &excl_cols)?;
+        }
+    }
+
+    // Calculated items: each of their cells is the item's formula over the same cells of its
+    // sibling items; totals above the field include them, as Excel's do.
+    let mut over: HashMap<(Vec<u32>, Vec<u32>), Vec<Option<Value>>> = HashMap::new();
+    for ci in &pt.calc_items {
+        let (on_rows, d) = match rows.iter().position(|(_, f)| f.source_col.eq_ignore_ascii_case(&ci.field)) {
+            Some(d) => (true, d),
+            None => match cols.iter().position(|(_, f)| f.source_col.eq_ignore_ascii_case(&ci.field)) {
+                Some(d) => (false, d),
+                None => continue,
+            },
+        };
+        // Hidden by the field's own item filter.
+        let hidden = pt
+            .filters
+            .iter()
+            .find(|f| f.source_col.eq_ignore_ascii_case(&ci.field))
+            .and_then(|f| f.selected.as_ref())
+            .is_some_and(|sel| !sel.iter().any(|x| x.eq_ignore_ascii_case(&ci.name)));
+        if hidden || empty {
+            continue;
+        }
+        let fi = match if on_rows { row_items.get_mut(d) } else { col_items.get_mut(d) } {
+            Some(fi) => fi,
+            None => continue,
+        };
+        let labels: Vec<String> = fi.items.iter().map(|i| i.label.clone()).collect();
+        let q = |f: &str, i: &str| if f.eq_ignore_ascii_case(&ci.field) { labels.iter().position(|l| l.eq_ignore_ascii_case(i)) } else { None };
+        let Ok(prep) = crate::pivot_formula::prepare(&ci.formula, &labels, Some(&q)) else { continue };
+        let x = fi.intern(wb, &Value::text(ci.name.clone()), &Grouping::default(), "General", usize::MAX);
+        let side = |key: &(Vec<u32>, Vec<u32>)| if on_rows { key.0.len() } else { key.1.len() };
+        let with_item = |key: &(Vec<u32>, Vec<u32>), item: u32| {
+            let mut k2 = key.clone();
+            if let Some(slot) = if on_rows { k2.0.get_mut(d) } else { k2.1.get_mut(d) } {
+                *slot = item;
+            }
+            k2
+        };
+        let made: HashSet<(Vec<u32>, Vec<u32>)> = aggs.keys().filter(|key| side(key) > d).map(|key| with_item(key, x)).collect();
+        if made.len() > 1_000_000 {
+            return Err("The PivotTable report is too large.".into());
+        }
+        let lookup = |over: &HashMap<(Vec<u32>, Vec<u32>), Vec<Option<Value>>>, key: &(Vec<u32>, Vec<u32>), vi: usize| -> Value {
+            if let Some(v) = over.get(key).and_then(|o| o.get(vi)).cloned().flatten() {
+                return v;
+            }
+            aggs.get(key).and_then(|a| cv.get(a, vi, None)).unwrap_or(Value::Number(0.0))
+        };
+        let mut results: Vec<((Vec<u32>, Vec<u32>), Vec<Option<Value>>)> = Vec::with_capacity(made.len());
+        for key in &made {
+            let cells: Vec<Option<Value>> = (0..k)
+                .map(|vi| {
+                    let args: Vec<Value> = prep.refs.iter().map(|r| lookup(&over, &with_item(key, *r as u32), vi)).collect();
+                    Some(crate::pivot_formula::eval(wb, pivot_sheet, pt.anchor, &prep, &args))
+                })
+                .collect();
+            results.push((key.clone(), cells));
+        }
+        // What each total above the field gains.
+        let additive: Vec<bool> =
+            vals.iter().map(|(c, v)| *c != CALC_COL && matches!(v.func, PivotFunc::Sum | PivotFunc::Count | PivotFunc::CountNumbers)).collect();
+        let mut gains: HashMap<(Vec<u32>, Vec<u32>), Vec<f64>> = HashMap::new();
+        for (key, cells) in &results {
+            if side(key) != d + 1 {
+                continue;
+            }
+            for j in 0..=d {
+                let anc = if on_rows {
+                    (key.0.get(..j).unwrap_or_default().to_vec(), key.1.clone())
+                } else {
+                    (key.0.clone(), key.1.get(..j).unwrap_or_default().to_vec())
+                };
+                let g = gains.entry(anc).or_insert_with(|| vec![0.0; k]);
+                for (vi, c) in cells.iter().enumerate() {
+                    if additive.get(vi).copied().unwrap_or(false)
+                        && let (Some(slot), Some(n)) = (g.get_mut(vi), c.as_ref().and_then(Value::as_f64))
+                    {
+                        *slot += n;
+                    }
+                }
+            }
+        }
+        for (anc, g) in gains {
+            let cells: Vec<Option<Value>> = (0..k)
+                .map(|vi| match lookup(&over, &anc, vi) {
+                    Value::Number(n) if additive.get(vi).copied().unwrap_or(false) => Some(Value::Number(n + g.get(vi).copied().unwrap_or(0.0))),
+                    _ => None,
+                })
+                .collect();
+            let e = over.entry(anc).or_insert_with(|| vec![None; k]);
+            for (slot, c) in e.iter_mut().zip(cells) {
+                if c.is_some() {
+                    *slot = c;
+                }
+            }
+        }
+        for (key, cells) in results {
+            if on_rows && key.0.len() == rows.len() {
+                row_set.insert(key.0.clone());
+            }
+            if !on_rows && key.1.len() == cols.len() {
+                col_set.insert(key.1.clone());
+            }
+            aggs.entry(key.clone()).or_insert_with(|| vec![Acc::default(); k_all]);
+            over.insert(key, cells);
         }
     }
 
@@ -1243,8 +1449,11 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
 
     // ---- body
     let get_with = |rp: &[u32], cp: &[u32], vi: usize, func: Option<PivotFunc>| -> Option<Value> {
-        let (_, v) = vals.get(vi)?;
-        aggs.get(&(rp.to_vec(), cp.to_vec())).and_then(|a| a.get(vi)).map(|a| a.result(func.unwrap_or(v.func)))
+        let key = (rp.to_vec(), cp.to_vec());
+        if let Some(v) = over.get(&key).and_then(|o| o.get(vi)).cloned().flatten() {
+            return Some(v);
+        }
+        aggs.get(&key).and_then(|a| cv.get(a, vi, func))
     };
     let get = |rp: &[u32], cp: &[u32], vi: usize| get_with(rp, cp, vi, None);
     let num = |v: &Option<Value>| v.as_ref().and_then(Value::as_f64);
