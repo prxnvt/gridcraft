@@ -56,6 +56,10 @@ pub enum Icon {
     Chevron,
     ChevronUp,
     Close,
+    /// RefEdit: shrink the dialog to its reference box.
+    Collapse,
+    /// RefEdit: restore the collapsed dialog.
+    Expand,
     Check,
     Fx,
     Plus,
@@ -414,6 +418,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.line(&[(4.0, 4.0), (12.0, 12.0)], c, 1.3);
             g.line(&[(12.0, 4.0), (4.0, 12.0)], c, 1.3);
         }
+        Icon::Collapse | Icon::Expand => {
+            // A small sheet with a selected block and an arrow pointing up (collapse) or down.
+            g.rect(2.0, 6.5, 12.0, 7.5, None, Some(c));
+            g.rect(4.0, 9.0, 4.0, 3.0, Some(c), None);
+            if icon == Icon::Collapse {
+                g.poly(&[(8.0, 1.0), (11.5, 4.5), (4.5, 4.5)], c);
+            } else {
+                g.poly(&[(8.0, 5.5), (11.5, 2.0), (4.5, 2.0)], c);
+            }
+        }
         Icon::Check => g.line(&[(3.0, 8.5), (6.5, 12.0), (13.0, 4.5)], c, 1.3),
         Icon::Fx => g.text(8.0, 8.0, "fx", 10.5, c, false, true),
         Icon::Plus => {
@@ -612,6 +626,8 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
 pub const LIBRARY: &[(&str, Icon)] = &[
     ("check", Icon::Check),
     ("close", Icon::Close),
+    ("collapse", Icon::Collapse),
+    ("expand", Icon::Expand),
     ("plus", Icon::Plus),
     ("minus", Icon::Minus),
     ("chart", Icon::Chart),

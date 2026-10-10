@@ -12,10 +12,28 @@ use crate::theme;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
-    Text { key: &'static str, label: &'static str },
-    Number { key: &'static str, label: &'static str },
-    Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
-    Check { key: &'static str, label: &'static str },
+    Text {
+        key: &'static str,
+        label: &'static str,
+    },
+    /// A range reference picked by selecting on the grid (Excel's RefEdit box).
+    Ref {
+        key: &'static str,
+        label: &'static str,
+    },
+    Number {
+        key: &'static str,
+        label: &'static str,
+    },
+    Choice {
+        key: &'static str,
+        label: &'static str,
+        options: Vec<(&'static str, &'static str)>,
+    },
+    Check {
+        key: &'static str,
+        label: &'static str,
+    },
     Note(String),
 }
 
@@ -33,6 +51,14 @@ pub struct Dialog {
     pub result: Option<Json>,
     picture_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
+    /// The RefEdit box that grid selections currently write into.
+    pub pick: Option<String>,
+    /// Selection reference last written by (or seen while) picking.
+    pub pick_seen: String,
+    /// Sheet, ranges and active cell from before picking, restored when the dialog closes.
+    pub home: Option<(usize, String, String)>,
+    /// RefEdit key the dialog is collapsed to (only that box shows).
+    pub collapsed: Option<String>,
 }
 
 impl Dialog {
@@ -53,6 +79,10 @@ impl Dialog {
             result: None,
             picture_inbox: None,
             picture_target: None,
+            pick: None,
+            pick_seen: String::new(),
+            home: None,
+            collapsed: None,
         }
     }
 
@@ -69,12 +99,17 @@ impl Dialog {
             result: None,
             picture_inbox: None,
             picture_target: None,
+            pick: None,
+            pick_seen: String::new(),
+            home: None,
+            collapsed: None,
         }
     }
 
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
+        let active_abs = app.session.active().map(|d| abs(&gridcraft_engine::core::RangeRef::cell(d.selection.active))).unwrap_or_default();
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
         use Field::*;
         let d = match name {
@@ -316,7 +351,7 @@ impl Dialog {
                 vec![Check { key: "header", label: "My data has headers" }, Text { key: "columnsText", label: "Columns (blank = all, e.g. A,C):" }],
                 json!({"header": true}),
             ),
-            "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
+            "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active_abs, "to": "", "changing": ""})),
             "subtotal" => Dialog::form(
                 "subtotal",
                 "Subtotal",
@@ -596,6 +631,79 @@ fn abs(r: &gridcraft_engine::core::RangeRef) -> String {
     if r.is_single() { a(r.start) } else { format!("{}:{}", a(r.start), a(r.end)) }
 }
 
+// ---------------------------------------------------------------- RefEdit
+
+/// The grid selection as a RefEdit reference: absolute, comma-joined areas, with the sheet name
+/// when it isn't the sheet the dialog was opened on.
+fn selection_ref(app: &SheetApp, home_sheet: Option<usize>) -> String {
+    let Some(doc) = app.session.active() else { return String::new() };
+    let areas: Vec<String> = doc.selection.ranges.iter().map(abs).collect();
+    let text = areas.join(",");
+    let active = doc.wb.active_sheet;
+    match (home_sheet, doc.wb.active()) {
+        (Some(h), Some(sh)) if h != active => {
+            let q = gridcraft_engine::formula::quote_sheet(&sh.name);
+            areas.iter().map(|a| format!("{q}!{a}")).collect::<Vec<_>>().join(",")
+        }
+        _ => text,
+    }
+}
+
+/// Starts picking into `key`: later grid selections are written into the box. The first pick
+/// remembers the selection so closing the dialog can put it back.
+fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
+    if d.home.is_none()
+        && let Some(doc) = app.session.active()
+    {
+        let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
+        d.home = Some((doc.wb.active_sheet, ranges.join(","), doc.selection.active.a1()));
+    }
+    d.pick = Some(key.to_string());
+    d.pick_seen = selection_ref(app, d.home.as_ref().map(|h| h.0));
+}
+
+/// Puts back the selection (and sheet) from before the dialog started picking.
+fn restore_home(app: &mut SheetApp, d: &Dialog) {
+    if let Some((sheet, ranges, active)) = &d.home {
+        let _ = app.session.run("selection.set", json!({"sheet": sheet, "range": ranges, "active": active}));
+    }
+}
+
+/// A RefEdit box: a text field that grid selections fill while it is the pick target, with a
+/// button that collapses the dialog to just this box (and expands it again).
+fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str, width: f32) {
+    let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+    let home = d.home.as_ref().map(|h| h.0);
+    let sel = selection_ref(app, home);
+    let picking = d.pick.as_deref() == Some(key);
+    ui.horizontal(|ui| {
+        let r = ui.add(egui::TextEdit::singleline(&mut s).desired_width(width - 30.0).id_salt(("refedit", key)));
+        if r.gained_focus() || (r.clicked() && !picking) {
+            begin_pick(app, d, key);
+        } else if picking && !r.has_focus() && sel != d.pick_seen {
+            // The user selected on the grid: that selection becomes the reference.
+            s = sel.clone();
+            d.pick_seen = sel;
+        }
+        let collapsed = d.collapsed.as_deref() == Some(key);
+        let t = theme::Tokens::get(ui.ctx());
+        let icon = if collapsed { crate::icons::Icon::Expand } else { crate::icons::Icon::Collapse };
+        let tip = if collapsed { "Expand dialog" } else { "Collapse dialog" };
+        if crate::widgets::icon_button(ui, icon, t.text_dim, tip, vec2(22.0, 20.0)).clicked() {
+            d.collapsed = if collapsed { None } else { Some(key.to_string()) };
+            if !collapsed {
+                begin_pick(app, d, key);
+            }
+        }
+    });
+    d.values.insert(key.into(), json!(s));
+}
+
+/// The collapsed form of a dialog: only the RefEdit being picked into.
+fn collapsed_bar(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str) {
+    ref_edit(app, ui, d, key, 340.0);
+}
+
 /// Builds the command params from form values for dialogs that need translation.
 fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
@@ -670,6 +778,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         .open(&mut win_open);
     let window = if d.name == "insertPicture" { window.default_height(240.0) } else { window };
     window.show(ctx, |ui| {
+            if let Some(key) = d.collapsed.clone() {
+                collapsed_bar(app, ui, &mut d, &key);
+                return;
+            }
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
@@ -846,7 +958,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         open = false;
                     }
                 }
-                _ => form(ui, &mut d, &mut confirm, &mut open),
+                _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         });
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
@@ -885,6 +997,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if open {
         app.dialog = Some(d);
+    } else {
+        restore_home(app, &d);
     }
 }
 
@@ -966,7 +1080,7 @@ fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     });
 }
 
-fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         for f in d.fields.clone() {
             match f {
@@ -984,9 +1098,18 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
                         } else {
                             ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0))
                         };
+                        if r.gained_focus() {
+                            d.pick = None;
+                        }
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
                         }
+                    });
+                }
+                Field::Ref { key, label } => {
+                    ui.vertical(|ui| {
+                        ui.label(label);
+                        ref_edit(app, ui, d, key, 320.0);
                     });
                 }
                 Field::Number { key, label } => {
@@ -1578,26 +1701,32 @@ fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm
 }
 
 fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
-    let (mut set, mut to, mut changing) = (get("set"), get("to"), get("changing"));
     egui::Grid::new("gs").show(ui, |ui| {
         ui.label("Set cell:");
-        ui.text_edit_singleline(&mut set);
+        ref_edit(app, ui, d, "set", 200.0);
         ui.end_row();
         ui.label("To value:");
-        ui.text_edit_singleline(&mut to);
+        let mut to = d.values.get("to").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.add(egui::TextEdit::singleline(&mut to).desired_width(170.0)).gained_focus() {
+            d.pick = None;
+        }
+        d.values.insert("to".into(), json!(to));
         ui.end_row();
         ui.label("By changing cell:");
-        ui.text_edit_singleline(&mut changing);
+        ref_edit(app, ui, d, "changing", 200.0);
         ui.end_row();
     });
-    d.values.insert("set".into(), json!(set.clone()));
-    d.values.insert("to".into(), json!(to.clone()));
-    d.values.insert("changing".into(), json!(changing.clone()));
+    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let (set, to, changing) = (get("set"), get("to"), get("changing"));
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
     if *confirm {
-        match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {
+        let Ok(target) = to.trim().parse::<f64>() else {
+            app.message = Some(("Goal Seek".into(), "Enter a number in To value.".into()));
+            *confirm = false;
+            return;
+        };
+        match app.run("data.goalSeek", json!({"set": set, "to": target, "changing": changing})) {
             Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
             Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
         }

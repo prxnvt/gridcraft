@@ -323,3 +323,37 @@ fn rotated_wrapped_text_is_drawn_rotated_inside_its_cell() {
         assert!(clip.width() < 70.0, "clip spans one 6-character column, got {clip:?}");
     }
 }
+
+#[test]
+fn ref_edit_takes_the_grid_selection_and_restores_it() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("goalSeek", json!({}));
+    h.run_steps(2);
+    let field = |h: &egui_kittest::Harness<'static, SheetApp>, k: &str| {
+        h.state().dialog.as_ref().and_then(|d| d.values.get(k).and_then(|v| v.as_str()).map(str::to_string)).unwrap_or_default()
+    };
+    assert_eq!(field(&h, "set"), "$B$2", "Set cell starts at the active cell");
+    // Clicking into "By changing cell" makes it the pick target; the grid selection then fills it.
+    let app = h.state_mut();
+    if let Some(d) = app.dialog.as_mut() {
+        d.pick = Some("changing".into());
+        d.pick_seen = "$B$2".into();
+        d.home = Some((0, "B2".into(), "B2".into()));
+    }
+    app.session.run("selection.set", json!({"range": "C3:D4"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(field(&h, "changing"), "$C$3:$D$4");
+    assert_eq!(field(&h, "set"), "$B$2", "only the pick target changes");
+    // A selection on another sheet carries the sheet name.
+    h.state_mut().session.run("home.insertSheet", json!({"name": "Data", "before": 1})).unwrap();
+    h.state_mut().session.run("selection.set", json!({"range": "A5"})).unwrap();
+    h.run_steps(2);
+    assert!(field(&h, "changing").ends_with("!$A$5"), "{}", field(&h, "changing"));
+    // Closing puts the original sheet and selection back.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    let d = h.state().session.active().map(|d| (d.wb.active_sheet, d.selection.a1()));
+    assert_eq!(d, Some((0, "B2".to_string())));
+}
