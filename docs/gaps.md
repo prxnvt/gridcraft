@@ -70,9 +70,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   routine in business.
 - **Estimate:** 28–42 h (`.xls` read 20–30, encryption 8–12). [file-format-parity.md](file-format-parity.md)
 
-### 8. PivotTables: no slicers, calculated fields, PivotCharts; unverified in Excel (F)
+### 8. PivotTables: no slicers, timelines, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
-  `insert.pivotChart`, `pivot.calculatedField`, `table.insertSlicer`; GETPIVOTDATA missing.
+  `insert.pivotChart`, `table.insertSlicer`; GETPIVOTDATA and Show Details missing.
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
@@ -97,8 +97,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
   data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
 
-### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
-- `data.solver`, `data.analysisToolPak`, `data.forecastSheet` missing; FORECAST.ETS family missing.
+### 13. Analysis tools: Forecast Sheet (F)
+- `data.forecastSheet` missing; FORECAST.ETS family missing. Solver and the Analysis ToolPak are in.
   **Estimate:** 22–35 h.
 
 ### 14. Page Layout view and print polish (U, F)

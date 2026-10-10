@@ -27,7 +27,7 @@ workflow, would make GridCraft pre-alpha.
 | Build a model: enter data and formulas, recalc, save XLSX, reopen | yes | 492 working functions, dynamic arrays, LET/LAMBDA, names, tables; XLSX round-trip tests (`crates/xlsx/src/tests/roundtrip.rs`). Edge-case bugs (#57 15-digit equality, stale spills #133/#139) give wrong results in specific cases, not in the workflow | 0 (fixes are beta work, gap #6) |
 | Open a colleague's XLSX, edit, save, hand it back | partial, not blocking | Typical workbooks open and save with cells, styles, CF, validation, tables, names and pivots; unmodelled parts are dropped with a warning (gap #3); Excel-side repair prompts unverified (gap #1); ~100 MB files fail (#175) | 0 for alpha (gaps #1–#3 are beta gates) |
 | Format and present: number formats, styles, conditional formatting, print or PDF | yes | Full number-format language, 47 cell styles, all CF kinds, Page Break Preview, PDF export and printing. PDF can't carry non-Latin text (gap #5) | 0 |
-| Analyze: sort, filter, tables, PivotTable | yes | Multi-level sort, AutoFilter, tables with totals, PivotTables with field list, layouts, grouping, refresh and XLSX round-trip. Slicers and calculated fields missing (gap #8) | 0 |
+| Analyze: sort, filter, tables, PivotTable | yes | Multi-level sort, AutoFilter, tables with totals, PivotTables with field list, layouts, grouping, filters, calculated fields, refresh and XLSX round-trip. Slicers missing (gap #8) | 0 |
 | Chart the data | partial, not blocking | Column, bar, line, pie, area, scatter and combo charts are created, edited and survive save and reopen; histogram, box, waterfall, funnel, treemap, sunburst and stock lose their kind in XLSX (fix in PRs #158, #161); no axis options or trendlines (gap #4) | 0 for alpha (2–4 h to merge the kind fixes) |
 | Import and export CSV | yes | Encoding and delimiter detection on read, CSV/TSV write; exports raw rather than displayed values (gap #19) | 0 |
 
@@ -50,7 +50,7 @@ and edge features. Each gate links its gap.
 | Text in every script renders and exports | #5 | 12–20 |
 | Calculation correctness bugs closed; iterative calculation | #6 | 10–15 |
 | `.xls` import, password-protected workbooks | #7 | 28–42 |
-| PivotTables: slicers, calculated fields, PivotCharts, verified in Excel | #8 | 20–30 |
+| PivotTables: slicers, timelines, PivotCharts, verified in Excel | #8 | 20–30 |
 | Keyboard: key tips, shortcut audit, context menus | #9 | 12–20 |
 | Field crashes and freezes closed; autosave/recovery soak | #10 | 8–12 |
 | **Total** | | **~165–255 (≈160–240 after overlap with the PR queue)** |
@@ -66,13 +66,13 @@ to check our files, and Windows machines with the reported GPU drivers.
 | M1 | Excel look: chrome, ribbon, formula bar, grid, tabs, status bar, control channel | done (polish continues) |
 | M2 | Formatting completeness | done |
 | M3 | Editing power (AutoComplete, spelling, drag-move/copy) | done |
-| M4 | Data (advanced filter, consolidate, what-if) | most; Solver, ToolPak and Power Query remain |
+| M4 | Data (advanced filter, consolidate, what-if) | most; Power Query remains |
 | M5 | Formulas tab (trace arrows, watch window, evaluate, error checking) | done |
 | M6 | Conditional formatting manager parity | done |
 | M7 | Charts parity | partial; Format pane in; axes, trendlines, error bars, round-trip remain |
 | M8 | Insert & Review | partial; ink, icons, comments pane in |
 | M9 | Page layout & print | most; Page Layout view remains |
-| M10 | PivotTables, Solver, Analysis ToolPak | PivotTables in; slicers, Solver, ToolPak remain |
+| M10 | PivotTables, Solver, Analysis ToolPak | PivotTables, Solver, ToolPak and data tables in; slicers, timelines and PivotCharts remain |
 | M11 | Automation (record actions, scripts) | done |
 | M12 | Performance, accessibility, i18n | partial; i18n not started |
 | M13 | Release & polish | releases shipping (v0.2.0–v0.4.0, signed) |
@@ -86,7 +86,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 |---|---|---|
 | Localization: catalog past the ribbon, then twelve languages | #11 | 100–165 |
 | Get & Transform and the data model | #12 | 60–100 |
-| Solver, Analysis ToolPak, Forecast Sheet | #13 | 22–35 |
+| Forecast Sheet (Solver and Analysis ToolPak are in) | #13 | 22–35 |
 | Remaining functions, oracle suite | #15 | 18–30 |
 | Collaboration and review | #16 | 35–55 |
 | Insert objects | #17 | 25–40 |
