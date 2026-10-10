@@ -203,6 +203,24 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             fourier
         ),
+        cmd!(
+            "analysis.randomNumberGeneration",
+            "Random Number Generation",
+            [],
+            None,
+            "{variables?: 1, count, distribution: uniform{from, to} | normal{mean, sd} | bernoulli{p} | binomial{p, trials} | poisson{lambda} | patterned{from, to, step, repeatEach, repeatSequence} | discrete{values: two-column range of value and probability}, seed?, output?, overwrite?} → columns of random numbers (the same seed repeats them)",
+            has_doc,
+            random_numbers
+        ),
+        cmd!(
+            "analysis.sampling",
+            "Sampling",
+            [],
+            None,
+            "{input, labels?, method?: periodic|random, period? (periodic), samples? (random, with replacement), seed?, output?, overwrite?} → a column of values taken from the input",
+            has_doc,
+            sampling
+        ),
     ]
 }
 
@@ -715,6 +733,71 @@ fn fourier(s: &mut Session, p: &Json) -> Result<Json> {
     run_with_input(s, p, CMD, &input, |_| toolpak::series::fourier(&values, inverse, label.as_deref()))
 }
 
+fn seed_param(p: &Json, cmd: &str) -> Result<Option<u64>> {
+    match p.get("seed") {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(t)) if t.trim().is_empty() => Ok(None),
+        _ => {
+            let x = num_param(p, "seed", 0.0, cmd)?;
+            if x.is_finite() && x >= 0.0 && x.fract() == 0.0 && x < 1e18 {
+                Ok(Some(x as u64))
+            } else {
+                Err(bad(cmd, "`seed` must be a whole number from 0"))
+            }
+        }
+    }
+}
+
+fn random_numbers(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.randomNumberGeneration";
+    use toolpak::generate::Distribution as D;
+    let num = |k: &str, default: f64| num_param(p, k, default, CMD);
+    let dist = match str_param(p, "distribution").unwrap_or("uniform").to_ascii_lowercase().as_str() {
+        "uniform" => D::Uniform { from: num("from", 0.0)?, to: num("to", 1.0)? },
+        "normal" => D::Normal { mean: num("mean", 0.0)?, sd: num("sd", 1.0)? },
+        "bernoulli" => D::Bernoulli { p: num("p", 0.5)? },
+        "binomial" => D::Binomial { p: num("p", 0.5)?, trials: count_param(p, "trials", CMD)?.unwrap_or(1) as u64 },
+        "poisson" => D::Poisson { lambda: num("lambda", 1.0)? },
+        "patterned" => D::Patterned {
+            from: num("from", 1.0)?,
+            to: num("to", 1.0)?,
+            step: num("step", 1.0)?,
+            repeat_each: count_param(p, "repeatEach", CMD)?.unwrap_or(1),
+            repeat_sequence: count_param(p, "repeatSequence", CMD)?.unwrap_or(1),
+        },
+        "discrete" => {
+            let table = read_input(s, &json!({"values": str_param(p, "values").unwrap_or(""), "groupedBy": "columns"}), "values", CMD, false)?;
+            let (values, probs) = match table.series.as_slice() {
+                [v, pr] => (v.complete().map_err(tool_error)?, pr.complete().map_err(tool_error)?),
+                _ => return Err(EngineError::Other("The value and probability range must have two columns.".into())),
+            };
+            D::Discrete { values, probs }
+        }
+        other => return Err(bad(CMD, format!("unknown distribution `{other}`"))),
+    };
+    let variables = count_param(p, "variables", CMD)?.unwrap_or(1);
+    let count = match &dist {
+        D::Patterned { .. } => 0,
+        _ => count_param(p, "count", CMD)?.ok_or_else(|| bad(CMD, "missing `count` (how many random numbers per variable)"))?,
+    };
+    let seed = seed_param(p, CMD)?;
+    let target = report::parse_output(s, p, CMD)?;
+    let out = toolpak::generate::random_numbers(variables, count, &dist, seed).map_err(tool_error)?;
+    report::write(s, &target, to_report(out), report::overwrite_param(p))
+}
+
+fn sampling(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.sampling";
+    let input = read_input(s, p, "input", CMD, false)?;
+    let values: Vec<f64> = input.series.iter().flat_map(Series::numbers).collect();
+    let how = match str_param(p, "method").unwrap_or("periodic") {
+        "random" => toolpak::generate::Sampling::Random(count_param(p, "samples", CMD)?.ok_or_else(|| bad(CMD, "missing `samples`"))?),
+        _ => toolpak::generate::Sampling::Periodic(count_param(p, "period", CMD)?.ok_or_else(|| bad(CMD, "missing `period`"))?),
+    };
+    let seed = seed_param(p, CMD)?;
+    run_with_input(s, p, CMD, &input, |_| toolpak::generate::sample(&values, how, seed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,6 +949,39 @@ mod tests {
         s.execute("analysis.fourierAnalysis", json!({"input": "M1:M4", "output": "N1"})).unwrap();
         assert_eq!(val(&s, "Sheet1", "N1"), Value::from("10+i"));
         assert!(s.execute("analysis.fourierAnalysis", json!({"input": "M1:M3", "output": "O1"})).is_err());
+    }
+
+    #[test]
+    fn random_numbers_and_sampling() {
+        let mut s = session();
+        s.execute(
+            "analysis.randomNumberGeneration",
+            json!({"variables": 2, "count": 5, "distribution": "uniform", "from": 1, "to": 2, "seed": 42, "output": "A1"}),
+        )
+        .unwrap();
+        let a = val(&s, "Sheet1", "B5").as_f64().unwrap();
+        assert!((1.0..=2.0).contains(&a));
+        // The same seed repeats the numbers.
+        s.execute(
+            "analysis.randomNumberGeneration",
+            json!({"variables": 2, "count": 5, "distribution": "uniform", "from": 1, "to": 2, "seed": 42, "output": "D1"}),
+        )
+        .unwrap();
+        assert_eq!(val(&s, "Sheet1", "E5").as_f64().unwrap(), a);
+        s.execute("range.setValues", json!({"range": "G1", "values": [[1, 0.25], [2, 0.75]]})).unwrap();
+        s.execute("analysis.randomNumberGeneration", json!({"count": 10, "distribution": "discrete", "values": "G1:H2", "output": "J1"})).unwrap();
+        let v = val(&s, "Sheet1", "J10").as_f64().unwrap();
+        assert!(v == 1.0 || v == 2.0);
+        s.execute("analysis.randomNumberGeneration", json!({"distribution": "patterned", "from": 1, "to": 2, "repeatEach": 2, "output": "L1"}))
+            .unwrap();
+        assert_eq!(val(&s, "Sheet1", "L3"), Value::Number(2.0));
+        assert!(s.execute("analysis.randomNumberGeneration", json!({"distribution": "uniform"})).is_err(), "count is required");
+        assert!(s.execute("analysis.randomNumberGeneration", json!({"count": 3, "distribution": "weird"})).is_err());
+        s.execute("range.setValues", json!({"range": "N1", "values": [[10], [20], [30], [40]]})).unwrap();
+        s.execute("analysis.sampling", json!({"input": "N1:N4", "period": 2, "output": "P1"})).unwrap();
+        assert_eq!((val(&s, "Sheet1", "P1"), val(&s, "Sheet1", "P2")), (Value::Number(20.0), Value::Number(40.0)));
+        s.execute("analysis.sampling", json!({"input": "N1:N4", "method": "random", "samples": 3, "seed": 1, "output": "Q1"})).unwrap();
+        assert!([10.0, 20.0, 30.0, 40.0].contains(&val(&s, "Sheet1", "Q3").as_f64().unwrap()));
     }
 
     #[test]

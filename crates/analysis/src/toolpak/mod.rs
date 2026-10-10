@@ -10,6 +10,7 @@ use gridcraft_core::CellError;
 use crate::{Error, Result, input};
 
 pub mod descriptive;
+pub mod generate;
 pub mod hypothesis;
 pub mod regression;
 pub mod series;
