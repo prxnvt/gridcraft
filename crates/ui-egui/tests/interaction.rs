@@ -510,3 +510,55 @@ fn toolpak_forms_build_command_params() {
     v.insert("outputMode".into(), json!("newSheet"));
     assert_eq!(toolpak::params(&f, &v)["output"], "newSheet");
 }
+
+fn wyndor_session() -> Session {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Doors", 0], ["Windows", 0]]})).unwrap();
+    for (c, f) in [("C1", "=B1"), ("C2", "=2*B2"), ("C3", "=3*B1+2*B2"), ("D1", "=3*B1+5*B2")] {
+        s.execute("cell.set", json!({"cell": c, "input": f})).unwrap();
+    }
+    s.execute("range.setValues", json!({"range": "E1", "values": [[4], [12], [18]]})).unwrap();
+    s.execute(
+        "data.solverSetModel",
+        json!({"objective": "$D$1", "variables": "$B$1:$B$2", "method": "simplex", "constraints": [{"left": "$C$1:$C$3", "op": "<=", "right": "$E$1:$E$3"}]}),
+    )
+    .unwrap();
+    s
+}
+
+#[test]
+fn solver_runs_in_the_background_and_shows_results() {
+    let mut h = harness(wyndor_session());
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().map(|d| (d.name.clone(), d.values.get("objective").cloned()));
+    assert_eq!(d, Some(("solver".to_string(), Some(json!("$D$1")))));
+    // Solve (what the Solve button does), then let the job run frame by frame.
+    h.state_mut().dialog = None;
+    h.state_mut().session.run("data.solverStart", json!({})).unwrap();
+    h.run_steps(10);
+    let dlg = h.state().dialog.as_ref().map(|d| (d.name.clone(), d.values.get("status").cloned()));
+    assert_eq!(dlg, Some(("solverResults".to_string(), Some(json!(0)))));
+    assert_eq!(value(&h, "B2"), Value::Number(6.0));
+}
+
+#[test]
+fn show_iteration_results_pauses_with_the_trial_dialog() {
+    let mut s = wyndor_session();
+    s.execute("data.solverSetModel", json!({"method": "grg", "options": {"showIterations": true}})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().session.run("data.solverStart", json!({})).unwrap();
+    for _ in 0..40 {
+        h.run_steps(1);
+        if h.state().dialog.is_some() {
+            break;
+        }
+    }
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.clone()).as_deref(), Some("solverTrial"));
+    // Stop: the best solution so far is offered in Solver Results.
+    h.state_mut().dialog = None;
+    h.state_mut().session.stop_job();
+    h.state_mut().after_engine();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.clone()).as_deref(), Some("solverResults"));
+}

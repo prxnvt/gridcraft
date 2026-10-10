@@ -1572,6 +1572,9 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Analysis, "Data\nAnalysis", "Data Analysis: statistical and engineering analysis tools", false).clicked() {
         app.open_dialog("dataAnalysis", json!({}));
     }
+    if big_button(ui, Icon::Solver, "Solver", "Solver: find the best values for variable cells under constraints", false).clicked() {
+        app.open_dialog("solver", json!({}));
+    }
     sep(ui);
     ui.vertical(|ui| {
         if small_button(ui, Icon::Group, "Group", "Group", false).clicked() {

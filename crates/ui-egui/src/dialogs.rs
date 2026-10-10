@@ -362,6 +362,9 @@ impl Dialog {
                 )
             }
             "dataAnalysis" => Dialog::custom("dataAnalysis", "Data Analysis", json!({})),
+            "solver" => return crate::solver_ui::open(app),
+            "solverResults" => Dialog::custom("solverResults", "Solver Results", params.clone()),
+            "solverTrial" => Dialog::custom("solverTrial", "Show Trial Solution", params.clone()),
             "toolpak" => return crate::toolpak::open(params.get("tool").and_then(Json::as_str).unwrap_or("")),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active_abs, "to": "", "changing": ""})),
             "subtotal" => Dialog::form(
@@ -780,6 +783,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
         "toolpak" => 440.0,
+        "solver" => 520.0,
+        "solverResults" => 480.0,
+        "solverTrial" => 380.0,
         "dataAnalysis" => 340.0,
         _ => 380.0,
     };
@@ -808,6 +814,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "dataAnalysis" => crate::toolpak::list(app, ui, &mut d, &mut open),
+                "solver" => crate::solver_ui::show(app, ui, &mut d, &mut open),
+                "solverResults" => crate::solver_ui::results(app, ui, &mut d, &mut open),
+                "solverTrial" => crate::solver_ui::trial(app, ui, &mut d, &mut open),
                 "toolpak" => crate::toolpak::show(app, ui, &mut d, &mut confirm, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {

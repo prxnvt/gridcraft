@@ -22,6 +22,7 @@ pub mod keytips;
 pub mod panes;
 pub mod pivot_pane;
 pub mod ribbon;
+pub mod solver_ui;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
@@ -639,12 +640,22 @@ impl SheetApp {
         use gridcraft_engine::job::JobState;
         if matches!(self.session.job_state, JobState::Running { .. }) {
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-                self.session.pause_job(json!({"reason": "user"}));
+                // Solver pauses into its Show Trial Solution box; other jobs ask generically.
+                let solver = matches!(&self.session.job_state, JobState::Running { label, .. } if label == "Solver");
+                self.session.pause_job(if solver { json!({"dialog": "solverTrial", "reason": "user"}) } else { json!({"reason": "user"}) });
             } else {
                 self.session.step_job(16.0);
                 self.after_engine();
                 ctx.request_repaint();
             }
+        }
+        // A job paused with a dialog of its own (Solver's Show Trial Solution) shows it.
+        if let JobState::Paused { info, .. } = &self.session.job_state
+            && let Some(name) = info.get("dialog").and_then(Json::as_str)
+            && self.dialog.as_ref().is_none_or(|d| d.name != name)
+        {
+            let (name, info) = (name.to_string(), info.clone());
+            self.open_dialog(&name, info);
         }
         if let Some((label, Err(e))) = self.session.take_job_result() {
             self.message = Some((label, clean_error(&e)));

@@ -58,6 +58,8 @@ pub enum Icon {
     Close,
     /// Data Analysis (the Analysis ToolPak): bars under a bell curve.
     Analysis,
+    /// Solver: a curve with its optimum marked.
+    Solver,
     /// RefEdit: shrink the dialog to its reference box.
     Collapse,
     /// RefEdit: restore the collapsed dialog.
@@ -426,6 +428,11 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.rect(11.0, 8.0, 2.5, 6.0, Some(BLUE), None);
             g.line(&[(1.0, 13.0), (3.5, 10.5), (6.0, 5.0), (8.0, 2.5), (10.0, 5.0), (12.5, 10.5), (15.0, 13.0)], c, 1.2);
         }
+        Icon::Solver => {
+            g.line(&[(1.5, 13.0), (4.0, 8.0), (7.0, 4.5), (9.0, 4.0), (11.5, 6.0), (14.5, 12.0)], c, 1.2);
+            g.circle(8.5, 3.8, 2.0, Some(GREEN), None);
+            g.line(&[(8.5, 6.0), (8.5, 14.0)], GREEN, 1.0);
+        }
         Icon::Collapse | Icon::Expand => {
             // A small sheet with a selected block and an arrow pointing up (collapse) or down.
             g.rect(2.0, 6.5, 12.0, 7.5, None, Some(c));
@@ -635,6 +642,7 @@ pub const LIBRARY: &[(&str, Icon)] = &[
     ("check", Icon::Check),
     ("close", Icon::Close),
     ("analysis", Icon::Analysis),
+    ("solver", Icon::Solver),
     ("collapse", Icon::Collapse),
     ("expand", Icon::Expand),
     ("plus", Icon::Plus),

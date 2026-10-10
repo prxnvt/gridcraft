@@ -1059,6 +1059,11 @@ pub(crate) struct SolverJob {
     /// Evolutionary: best objective seen and when it last improved.
     best_seen: f64,
     improved_at: f64,
+    /// The workbook before solving (Restore and undo go back to it).
+    start_wb: std::sync::Arc<Workbook>,
+    /// Trial solutions shown on the sheet (Show Iteration Results).
+    wrote_trial: bool,
+    last_shown: u64,
 }
 
 impl SolverJob {
@@ -1082,6 +1087,24 @@ impl SolverJob {
             interactive,
             best_seen: f64::NAN,
             improved_at: now,
+            start_wb: d.wb.clone(),
+            wrote_trial: false,
+            last_shown: 0,
+        })
+    }
+
+    /// Puts `x` into the variable cells (no undo step of its own).
+    fn write(&self, s: &mut Session, x: &[f64]) -> Result<()> {
+        let Some(d) = s.doc_by_uid_mut(self.doc) else { return Err(EngineError::NoDocument) };
+        let (si, vars) = (self.prepared.sheet, self.prepared.vars.clone());
+        commit(d, |cx| {
+            for (c, v) in vars.iter().zip(x) {
+                let sh = cx.sheet_mut(si)?;
+                let style = sh.style_id(*c);
+                sh.set_cell(*c, Cell { value: Value::Number(*v), formula: None, style });
+                cx.touch(si, *c);
+            }
+            Ok(())
         })
     }
 
@@ -1095,24 +1118,18 @@ impl SolverJob {
         let final_eval = sv::Problem::eval(&mut self.problem, &x);
         let at = self.problem.values_at(&x);
         if apply {
-            let Some(d) = s.doc_by_uid_mut(self.doc) else { return Err(EngineError::NoDocument) };
-            let before = d.wb.clone();
-            let sel = d.selection.clone();
-            let (si, vars) = (p.sheet, p.vars.clone());
-            commit(d, |cx| {
-                for (c, v) in vars.iter().zip(&x) {
-                    let sh = cx.sheet_mut(si)?;
-                    let style = sh.style_id(*c);
-                    sh.cells.set(*c, Cell { value: Value::Number(*v), formula: None, style });
-                    cx.touch(si, *c);
-                }
-                Ok(())
-            })?;
-            if self.interactive {
-                d.undo.push(crate::HistoryEntry { label: "Solver".into(), wb: before, selection: sel });
+            self.write(s, &x)?;
+            if self.interactive
+                && let Some(d) = s.doc_by_uid_mut(self.doc)
+            {
+                let sel = d.selection.clone();
+                d.undo.push(crate::HistoryEntry { label: "Solver".into(), wb: self.start_wb.clone(), selection: sel });
                 d.redo.clear();
                 d.revision += 1;
             }
+        } else if self.wrote_trial {
+            let x0 = p.spec.x0.clone();
+            self.write(s, &x0)?;
         }
         let result = self.report_data(&o, &x, final_eval.as_ref(), &at, seconds, apply);
         s.solver_last = Some(result.clone());
@@ -1234,6 +1251,9 @@ impl SolverJob {
             "variables": variables,
             "constraints": constraints,
             "sensitivity": sensitivity,
+            "population": o.population.iter().zip(&p.vars).map(|(st, c)| json!({"cell": abs_a1(*c), "mean": st[0], "sd": st[1], "max": st[2], "min": st[3]})).collect::<Vec<_>>(),
+            "integers": p.spec.has_integers(),
+            "solution": x,
             "model": serde_json::to_value(&self.model).unwrap_or(Json::Null),
         })
     }
@@ -1294,8 +1314,17 @@ impl crate::job::Job for SolverJob {
         loop {
             match self.engine.step(&mut self.problem, 4) {
                 sv::Step::Done(o) => return crate::job::Step::Done(self.finish(s, *o)),
-                sv::Step::Running { iteration, objective, .. } => {
+                sv::Step::Running { iteration, objective, x } => {
                     let now = crate::clock::now_ms();
+                    // Show Iteration Results: pause on each new trial solution, shown on the sheet.
+                    if self.interactive && self.model.options.show_iterations && iteration > self.last_shown && x.len() == self.prepared.vars.len() {
+                        self.last_shown = iteration;
+                        if self.write(s, &x).is_ok() {
+                            self.wrote_trial = true;
+                        }
+                        let obj = if objective.is_finite() { json!(objective) } else { Json::Null };
+                        return crate::job::Step::Pause(json!({"dialog": "solverTrial", "iteration": iteration, "objective": obj}));
+                    }
                     if self.max_ms > 0.0 && crate::clock::has_clock() && now - self.started >= self.max_ms {
                         let o = self.engine.stop(Status::MaxTime);
                         return crate::job::Step::Done(self.finish(s, o));

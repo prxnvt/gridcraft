@@ -175,6 +175,20 @@ impl Evolutionary {
         let mut o = Outcome::new(st, x);
         o.iterations = self.generation;
         o.subproblems = self.evaluations;
+        // The final population's spread per variable.
+        if !self.pop.is_empty() {
+            let k = self.pop.len() as f64;
+            o.population = (0..self.spec.n())
+                .map(|j| {
+                    let vals: Vec<f64> = self.pop.iter().filter_map(|m| m.x.get(j).copied()).collect();
+                    let mean = vals.iter().sum::<f64>() / k;
+                    let sd = if vals.len() > 1 { (vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (k - 1.0)).sqrt() } else { 0.0 };
+                    let max = vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    let min = vals.iter().copied().fold(f64::INFINITY, f64::min);
+                    [mean, sd, max, min]
+                })
+                .collect();
+        }
         self.done = Some(Box::new(o.clone()));
         Step::Done(Box::new(o))
     }

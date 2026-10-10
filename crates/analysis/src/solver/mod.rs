@@ -237,11 +237,14 @@ pub struct Outcome {
     pub subproblems: u64,
     pub lp: Option<LpSensitivity>,
     pub nlp: Option<NlpSensitivity>,
+    /// Evolutionary: per variable, the final population's mean, standard deviation, maximum and
+    /// minimum.
+    pub population: Vec<[f64; 4]>,
 }
 
 impl Outcome {
     pub fn new(status: Status, x: Vec<f64>) -> Outcome {
-        Outcome { status, x, iterations: 0, subproblems: 0, lp: None, nlp: None }
+        Outcome { status, x, iterations: 0, subproblems: 0, lp: None, nlp: None, population: vec![] }
     }
 }
 
