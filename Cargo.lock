@@ -1433,6 +1433,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gridcraft-analysis"
+version = "0.4.0"
+dependencies = [
+ "gridcraft-core",
+ "gridcraft-functions",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "gridcraft-calc"
 version = "0.4.0"
 dependencies = [

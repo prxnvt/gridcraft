@@ -63,6 +63,7 @@ macro_rules! f {
 pub(crate) mod criteria;
 pub(crate) mod database;
 pub(crate) mod date;
+pub mod dist;
 pub(crate) mod dynamic;
 pub(crate) mod engineering;
 pub(crate) mod financial;

@@ -13,14 +13,14 @@ type C<'a> = &'a mut dyn Ctx;
 // Basic helpers over number lists
 // ---------------------------------------------------------------------------------------------
 
-fn mean(x: &[f64]) -> R<f64> {
+pub(crate) fn mean(x: &[f64]) -> R<f64> {
     if x.is_empty() {
         return Err(CellError::Div0);
     }
     Ok(x.iter().sum::<f64>() / x.len() as f64)
 }
 
-fn devsq(x: &[f64]) -> f64 {
+pub(crate) fn devsq(x: &[f64]) -> f64 {
     if x.is_empty() {
         return 0.0;
     }
@@ -28,14 +28,14 @@ fn devsq(x: &[f64]) -> f64 {
     x.iter().map(|v| (v - m) * (v - m)).sum()
 }
 
-fn var_s(x: &[f64]) -> R<f64> {
+pub(crate) fn var_s(x: &[f64]) -> R<f64> {
     if x.len() < 2 {
         return Err(CellError::Div0);
     }
     Ok(devsq(x) / (x.len() - 1) as f64)
 }
 
-fn var_p(x: &[f64]) -> R<f64> {
+pub(crate) fn var_p(x: &[f64]) -> R<f64> {
     if x.is_empty() {
         return Err(CellError::Div0);
     }
@@ -47,7 +47,7 @@ fn sorted(mut v: Vec<f64>) -> Vec<f64> {
     v
 }
 
-fn median(v: Vec<f64>) -> R<f64> {
+pub(crate) fn median(v: Vec<f64>) -> R<f64> {
     if v.is_empty() {
         return Err(CellError::Num);
     }
@@ -74,7 +74,7 @@ fn modes(v: &[f64]) -> Vec<f64> {
     counts.into_iter().filter(|e| e.1 == best).map(|e| e.0).collect()
 }
 
-fn mode_sngl(v: &[f64]) -> R<f64> {
+pub(crate) fn mode_sngl(v: &[f64]) -> R<f64> {
     modes(v).first().copied().ok_or(CellError::NA)
 }
 
@@ -113,7 +113,7 @@ fn interp(s: &[f64], pos: f64) -> R<f64> {
     }
 }
 
-fn percentile_inc(v: Vec<f64>, k: f64) -> R<f64> {
+pub(crate) fn percentile_inc(v: Vec<f64>, k: f64) -> R<f64> {
     if v.is_empty() || !(0.0..=1.0).contains(&k) {
         return Err(CellError::Num);
     }
@@ -121,7 +121,7 @@ fn percentile_inc(v: Vec<f64>, k: f64) -> R<f64> {
     interp(&s, k * (s.len() - 1) as f64)
 }
 
-fn percentile_exc(v: Vec<f64>, k: f64) -> R<f64> {
+pub(crate) fn percentile_exc(v: Vec<f64>, k: f64) -> R<f64> {
     let n = v.len() as f64;
     if v.is_empty() || !(k > 0.0 && k < 1.0) {
         return Err(CellError::Num);
@@ -352,7 +352,7 @@ fn trimmean(a: &[Arg], _: C) -> R<Value> {
     num_val(mean(kept)?)
 }
 
-fn kurt(v: &[f64]) -> R<f64> {
+pub(crate) fn kurt(v: &[f64]) -> R<f64> {
     let n = v.len() as f64;
     if v.len() < 4 {
         return Err(CellError::Div0);
@@ -366,7 +366,7 @@ fn kurt(v: &[f64]) -> R<f64> {
     Ok(n * (n + 1.0) / ((n - 1.0) * (n - 2.0) * (n - 3.0)) * sum4 - 3.0 * (n - 1.0).powi(2) / ((n - 2.0) * (n - 3.0)))
 }
 
-fn skew(v: &[f64]) -> R<f64> {
+pub(crate) fn skew(v: &[f64]) -> R<f64> {
     let n = v.len() as f64;
     if v.len() < 3 {
         return Err(CellError::Div0);
@@ -380,7 +380,7 @@ fn skew(v: &[f64]) -> R<f64> {
     Ok(n / ((n - 1.0) * (n - 2.0)) * sum3)
 }
 
-fn skew_p(v: &[f64]) -> R<f64> {
+pub(crate) fn skew_p(v: &[f64]) -> R<f64> {
     let m = mean(v)?;
     let s = var_p(v)?.sqrt();
     if s == 0.0 {
@@ -536,22 +536,22 @@ fn parse_xy(y: &Value, x: Option<&Value>) -> R<Xy> {
     Ok(Xy { y: yv, x: xs, k, y_is_row, y_rows: ya.rows, y_cols: ya.cols })
 }
 
-struct Fit {
-    coef: Vec<f64>,
-    b: f64,
-    se: Vec<f64>,
-    se_b: Option<f64>,
-    r2: R<f64>,
-    sey: R<f64>,
-    f: R<f64>,
-    df: f64,
-    ssreg: f64,
-    ssresid: f64,
+pub(crate) struct Fit {
+    pub(crate) coef: Vec<f64>,
+    pub(crate) b: f64,
+    pub(crate) se: Vec<f64>,
+    pub(crate) se_b: Option<f64>,
+    pub(crate) r2: R<f64>,
+    pub(crate) sey: R<f64>,
+    pub(crate) f: R<f64>,
+    pub(crate) df: f64,
+    pub(crate) ssreg: f64,
+    pub(crate) ssresid: f64,
 }
 
 /// Inverts a symmetric positive semi-definite matrix by Gauss–Jordan on the diagonal, dropping
 /// (zeroing) collinear variables. Returns the inverse and the dropped flags.
-fn sym_inverse(m: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<bool>) {
+pub(crate) fn sym_inverse(m: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<bool>) {
     let p = m.len();
     let mut a: Vec<Vec<f64>> = m.to_vec();
     let mut inv: Vec<Vec<f64>> = (0..p).map(|i| (0..p).map(|j| if i == j { 1.0 } else { 0.0 }).collect()).collect();
@@ -604,7 +604,7 @@ fn sym_inverse(m: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<bool>) {
     (inv, dropped)
 }
 
-fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
+pub(crate) fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
     let n = y.len();
     if n == 0 || x.len() != n {
         return Err(CellError::Value);
@@ -776,56 +776,56 @@ fn ln_comb(n: f64, k: f64) -> f64 {
     ln_gamma(n + 1.0) - ln_gamma(k + 1.0) - ln_gamma(n - k + 1.0)
 }
 
-fn t_upper(t: f64, v: f64) -> f64 {
+pub(crate) fn t_upper(t: f64, v: f64) -> f64 {
     // P(T > t) for t ≥ 0.
     0.5 * reg_inc_beta(v / (v + t * t), v / 2.0, 0.5)
 }
 
-fn t_cdf(t: f64, v: f64) -> f64 {
+pub(crate) fn t_cdf(t: f64, v: f64) -> f64 {
     if t >= 0.0 { 1.0 - t_upper(t, v) } else { t_upper(-t, v) }
 }
 
-fn t_pdf(t: f64, v: f64) -> f64 {
+pub(crate) fn t_pdf(t: f64, v: f64) -> f64 {
     (ln_gamma((v + 1.0) / 2.0) - ln_gamma(v / 2.0) - 0.5 * (v * std::f64::consts::PI).ln() - (v + 1.0) / 2.0 * (1.0 + t * t / v).ln()).exp()
 }
 
 /// t ≥ 0 with P(T > t) = q, q in (0, 0.5].
-fn t_inv_upper(q: f64, v: f64) -> f64 {
+pub(crate) fn t_inv_upper(q: f64, v: f64) -> f64 {
     if q >= 0.5 {
         return 0.0;
     }
     invert(|t| t_upper(t, v), q, 0.0, 1.0, 1e60)
 }
 
-fn chi_inv(p: f64, v: f64) -> f64 {
+pub(crate) fn chi_inv(p: f64, v: f64) -> f64 {
     if p <= 0.0 {
         return 0.0;
     }
     invert(|x| reg_gamma_p(v / 2.0, x / 2.0), p, 0.0, v.max(1.0), 1e60)
 }
 
-fn chi_inv_rt(q: f64, v: f64) -> f64 {
+pub(crate) fn chi_inv_rt(q: f64, v: f64) -> f64 {
     if q >= 1.0 {
         return 0.0;
     }
     invert(|x| reg_gamma_q(v / 2.0, x / 2.0), q, 0.0, v.max(1.0), 1e60)
 }
 
-fn f_cdf(x: f64, d1: f64, d2: f64) -> f64 {
+pub(crate) fn f_cdf(x: f64, d1: f64, d2: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
     reg_inc_beta(d1 * x / (d1 * x + d2), d1 / 2.0, d2 / 2.0)
 }
 
-fn f_upper(x: f64, d1: f64, d2: f64) -> f64 {
+pub(crate) fn f_upper(x: f64, d1: f64, d2: f64) -> f64 {
     if x <= 0.0 {
         return 1.0;
     }
     reg_inc_beta(d2 / (d2 + d1 * x), d2 / 2.0, d1 / 2.0)
 }
 
-fn f_pdf(x: f64, d1: f64, d2: f64) -> f64 {
+pub(crate) fn f_pdf(x: f64, d1: f64, d2: f64) -> f64 {
     if x == 0.0 {
         return if d1 < 2.0 {
             f64::INFINITY
@@ -838,7 +838,7 @@ fn f_pdf(x: f64, d1: f64, d2: f64) -> f64 {
     ((d1 / 2.0) * (d1 / d2).ln() + (d1 / 2.0 - 1.0) * x.ln() - ((d1 + d2) / 2.0) * (1.0 + d1 * x / d2).ln() - ln_beta(d1 / 2.0, d2 / 2.0)).exp()
 }
 
-fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
+pub(crate) fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
     if k < 0.0 || k > n {
         return 0.0;
     }
@@ -851,7 +851,7 @@ fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
     (ln_comb(n, k) + k * p.ln() + (n - k) * (1.0 - p).ln()).exp()
 }
 
-fn binom_cdf(k: f64, n: f64, p: f64) -> f64 {
+pub(crate) fn binom_cdf(k: f64, n: f64, p: f64) -> f64 {
     if k < 0.0 {
         return 0.0;
     }
@@ -876,14 +876,14 @@ fn binom_cdf(k: f64, n: f64, p: f64) -> f64 {
     reg_inc_beta(1.0 - p, n - k, k + 1.0)
 }
 
-fn poisson_pmf(x: f64, m: f64) -> f64 {
+pub(crate) fn poisson_pmf(x: f64, m: f64) -> f64 {
     if m == 0.0 {
         return if x == 0.0 { 1.0 } else { 0.0 };
     }
     (-m + x * m.ln() - ln_gamma(x + 1.0)).exp()
 }
 
-fn poisson_cdf(x: f64, m: f64) -> f64 {
+pub(crate) fn poisson_cdf(x: f64, m: f64) -> f64 {
     if m == 0.0 {
         return 1.0;
     }
