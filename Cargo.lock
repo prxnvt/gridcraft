@@ -1451,6 +1451,7 @@ dependencies = [
  "gridcraft-model",
  "gridcraft-numfmt",
  "log",
+ "rayon",
 ]
 
 [[package]]

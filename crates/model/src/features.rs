@@ -574,6 +574,88 @@ pub struct LineInfo {
     pub custom: bool,
 }
 
+// ---------------------------------------------------------------- data tables
+
+/// A What-If data table (`{=TABLE(row_input, column_input)}`). The range's top row and left
+/// column are its edges: input values along one or both, formulas along the other (or, for a
+/// two-variable table, one formula in the top-left corner). The rest is the body, whose cells
+/// hold the formulas' results with each input value substituted. Input cells are on the same
+/// sheet, outside the range.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataTable {
+    pub range: RangeRef,
+    /// Receives the values across the top row.
+    pub row_input: Option<CellRef>,
+    /// Receives the values down the left column.
+    pub col_input: Option<CellRef>,
+}
+
+/// One substitution of a data table: set each `(input, value_cell)` input to the value in
+/// `value_cell`, then copy each `(formula, out)` formula result into `out`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableTrial {
+    pub inputs: Vec<(CellRef, CellRef)>,
+    pub outputs: Vec<(CellRef, CellRef)>,
+}
+
+impl DataTable {
+    /// The results area (the range without its top row and left column).
+    pub fn body(&self) -> Option<RangeRef> {
+        let r = self.range;
+        (r.height() >= 2 && r.width() >= 2).then(|| RangeRef::new(CellRef::new(r.start.row + 1, r.start.col + 1), r.end))
+    }
+
+    /// Whether `c` is on the top row or left column (the cells the results depend on).
+    pub fn is_edge(&self, c: CellRef) -> bool {
+        self.range.contains(c) && (c.row == self.range.start.row || c.col == self.range.start.col)
+    }
+
+    /// The edge cells: top row and left column.
+    pub fn edges(&self) -> Vec<CellRef> {
+        let r = self.range;
+        let mut v: Vec<CellRef> = (r.start.col..=r.end.col).map(|c| CellRef::new(r.start.row, c)).collect();
+        v.extend((r.start.row + 1..=r.end.row).map(|row| CellRef::new(row, r.start.col)));
+        v
+    }
+
+    /// The `{=TABLE(…)}` text shown for body cells (absolute input references, blank when absent).
+    pub fn formula_text(&self) -> String {
+        let a = |c: Option<CellRef>| c.map(|c| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1)).unwrap_or_default();
+        format!("TABLE({},{})", a(self.row_input), a(self.col_input))
+    }
+
+    /// The trials that fill the body, grouped so each substitution is computed once.
+    pub fn trials(&self) -> Vec<TableTrial> {
+        let Some(body) = self.body() else { return vec![] };
+        let (r0, c0) = (self.range.start.row, self.range.start.col);
+        match (self.row_input, self.col_input) {
+            // Values down the left column, formulas across the top row.
+            (None, Some(ci)) => (body.start.row..=body.end.row)
+                .map(|row| TableTrial {
+                    inputs: vec![(ci, CellRef::new(row, c0))],
+                    outputs: (body.start.col..=body.end.col).map(|col| (CellRef::new(r0, col), CellRef::new(row, col))).collect(),
+                })
+                .collect(),
+            // Values across the top row, formulas down the left column.
+            (Some(ri), None) => (body.start.col..=body.end.col)
+                .map(|col| TableTrial {
+                    inputs: vec![(ri, CellRef::new(r0, col))],
+                    outputs: (body.start.row..=body.end.row).map(|row| (CellRef::new(row, c0), CellRef::new(row, col))).collect(),
+                })
+                .collect(),
+            // One formula in the corner; every body cell is its own trial.
+            (Some(ri), Some(ci)) => body
+                .iter()
+                .map(|c| TableTrial {
+                    inputs: vec![(ri, CellRef::new(r0, c.col)), (ci, CellRef::new(c.row, c0))],
+                    outputs: vec![(CellRef::new(r0, c0), c)],
+                })
+                .collect(),
+            (None, None) => vec![],
+        }
+    }
+}
+
 // ---------------------------------------------------------------- pivot tables
 
 /// How a PivotTable lays out its row fields.

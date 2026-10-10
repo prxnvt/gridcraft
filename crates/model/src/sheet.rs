@@ -63,6 +63,9 @@ pub struct Sheet {
     /// PivotTables whose output lives on this sheet.
     #[serde(default)]
     pub pivots: Vec<PivotTable>,
+    /// What-If data tables (`{=TABLE()}`) whose results live on this sheet.
+    #[serde(default)]
+    pub data_tables: Vec<DataTable>,
     pub protection: Option<SheetProtection>,
     pub print: PrintSettings,
     /// Last selection and scroll position, saved with the file.
@@ -107,6 +110,7 @@ impl Sheet {
             shapes: vec![],
             sparklines: vec![],
             pivots: vec![],
+            data_tables: vec![],
             protection: None,
             print: PrintSettings::default(),
             view_active: CellRef::default(),

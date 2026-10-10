@@ -8,9 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gridcraft_calc::Calc;
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, Cell, DefinedName, StyleId, Workbook};
+use gridcraft_model::{Cell, DefinedName, StyleId, Workbook};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
@@ -181,34 +180,11 @@ fn value_json(v: &Value) -> Json {
 
 // ---------------------------------------------------------------- trials
 
-/// Evaluates a workbook with some input cells replaced, without touching the document.
-pub(crate) struct Trial {
-    base: Workbook,
-    calc: Calc,
-}
+/// What-if trials (shared with data tables and Solver).
+pub(crate) use gridcraft_calc::Trial;
 
-impl Trial {
-    pub(crate) fn new(d: &DocState) -> Trial {
-        let mut base = (*d.wb).clone();
-        // What-if analysis always recalculates, even in manual mode.
-        base.calc.mode = CalcMode::Automatic;
-        Trial { base, calc: d.calc.clone() }
-    }
-
-    /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
-    pub(crate) fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Vec<Value> {
-        let mut wb = self.base.clone();
-        let mut keys = Vec::with_capacity(sets.len());
-        for (si, c, v) in sets {
-            if let Some(sh) = wb.sheet_mut(*si) {
-                let style = sh.style_id(*c);
-                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style });
-                keys.push((*si, *c));
-            }
-        }
-        self.calc.cells_changed(&mut wb, &keys);
-        reads.iter().map(|(si, c)| wb.sheet(*si).map(|s| s.value(*c)).unwrap_or_default()).collect()
-    }
+fn trial(d: &DocState) -> Trial {
+    Trial::new(&d.wb, &d.calc)
 }
 
 // ---------------------------------------------------------------- goal seek
@@ -323,7 +299,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let x0 = d.wb.sheet(csi).map(|sh| sh.value(chg)).and_then(|v| v.as_f64()).unwrap_or(0.0);
     let (max_iter, tol) = (d.wb.calc.max_iterations, d.wb.calc.max_change);
-    let mut trial = Trial::new(d);
+    let mut trial = trial(d);
     let mut f = |x: f64| -> f64 {
         trial.run(&[(csi, chg, Value::number(x))], &[(ssi, set)]).first().and_then(Value::as_f64).map(|v| v - target).unwrap_or(f64::NAN)
     };
@@ -551,7 +527,7 @@ fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let current: Vec<Value> = changing.iter().map(|c| sh.value(*c)).collect();
     let current_results: Vec<Value> = results.iter().map(|c| sh.value(*c)).collect();
-    let mut trial = Trial::new(d);
+    let mut trial = trial(d);
     let reads: Vec<(usize, CellRef)> = results.iter().map(|c| (si, *c)).collect();
     let scenario_results: Vec<Vec<Value>> = per
         .iter()
@@ -642,7 +618,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let (r0, c0) = (r.start.row, r.start.col);
-    let mut trial = Trial::new(d);
+    let mut trial = trial(d);
     let mut out: Vec<(CellRef, Value)> = Vec::with_capacity(body.count() as usize);
     let mode = match (row_in, col_in) {
         (None, Some((isi, ic))) => {
