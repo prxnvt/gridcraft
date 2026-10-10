@@ -4,6 +4,7 @@
 use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::SheetApp;
+pub use crate::code_editor::{Lang, code_editor};
 use crate::i18n;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Cat, Tokens};

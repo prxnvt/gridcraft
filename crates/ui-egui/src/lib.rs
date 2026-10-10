@@ -9,6 +9,7 @@
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod code_editor;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
@@ -162,6 +163,8 @@ pub struct SheetApp {
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
+    /// The formula bar's badge slot (the PY badge in Python mode); empty otherwise.
+    pub formula_badge: Option<formula_bar::FormulaBadge>,
     pub(crate) shots: control::Shots,
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
@@ -224,6 +227,7 @@ impl SheetApp {
             effective_dark: false,
             name_box: None,
             keytips: keytips::KeyTips::default(),
+            formula_badge: None,
             shots: control::Shots::default(),
             selected_chart: None,
             started: now_ms(),
