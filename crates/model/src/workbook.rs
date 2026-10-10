@@ -213,11 +213,17 @@ impl Workbook {
             for c in &s.shapes {
                 m = m.max(c.id);
             }
+            for c in &s.controls {
+                m = m.max(c.id);
+            }
             for c in &s.tables {
                 m = m.max(c.id);
             }
+            for c in &s.pivots {
+                m = m.max(c.id);
+            }
         }
-        m + 1
+        m.saturating_add(1)
     }
 }
 
@@ -248,5 +254,28 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    #[test]
+    fn object_ids_count_every_kind() {
+        let mut wb = Workbook::new();
+        assert_eq!(wb.next_object_id(), 1);
+        let control = crate::FormControl { id: 7, ..Default::default() };
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(control);
+        }
+        assert_eq!(wb.next_object_id(), 8, "controls take ids from the shared pool");
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.clear();
+            sh.shapes.push(crate::Shape {
+                id: u32::MAX,
+                kind: crate::ShapeKind::Equation,
+                anchor: Default::default(),
+                fill: Default::default(),
+                line: Default::default(),
+                text: String::new(),
+            });
+        }
+        assert_eq!(wb.next_object_id(), u32::MAX, "a hostile id saturates instead of overflowing");
     }
 }

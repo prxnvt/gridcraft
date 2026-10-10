@@ -59,6 +59,9 @@ pub struct Sheet {
     pub charts: Vec<Chart>,
     pub images: Vec<Image>,
     pub shapes: Vec<Shape>,
+    /// Form controls. They paint above every other object and take clicks first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<FormControl>,
     pub sparklines: Vec<Sparkline>,
     /// PivotTables whose output lives on this sheet.
     #[serde(default)]
@@ -108,6 +111,7 @@ impl Sheet {
             charts: vec![],
             images: vec![],
             shapes: vec![],
+            controls: vec![],
             sparklines: vec![],
             pivots: vec![],
             data_tables: vec![],
@@ -116,6 +120,84 @@ impl Sheet {
             view_active: CellRef::default(),
             view_top_left: CellRef::default(),
         }
+    }
+
+    /// The object with workbook-unique id `id` on this sheet.
+    pub fn object_ref(&self, id: u32) -> Option<ObjRef> {
+        let kind = if self.charts.iter().any(|c| c.id == id) {
+            ObjKind::Chart
+        } else if self.images.iter().any(|c| c.id == id) {
+            ObjKind::Image
+        } else if let Some(s) = self.shapes.iter().find(|c| c.id == id) {
+            if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape }
+        } else if self.controls.iter().any(|c| c.id == id) {
+            ObjKind::Control
+        } else {
+            return None;
+        };
+        Some(ObjRef::new(kind, id))
+    }
+
+    /// Whether `o` exists on this sheet. `Shape` accepts any shape (an equation included);
+    /// `Equation` only an equation.
+    pub fn has_object(&self, o: ObjRef) -> bool {
+        self.object_anchor(o).is_some()
+    }
+
+    pub fn object_anchor(&self, o: ObjRef) -> Option<Anchor> {
+        match o.kind {
+            ObjKind::Chart => self.charts.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Image => self.images.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Equation => self.shapes.iter().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| c.anchor),
+            ObjKind::Control => self.controls.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+        }
+    }
+
+    pub fn object_anchor_mut(&mut self, o: ObjRef) -> Option<&mut Anchor> {
+        match o.kind {
+            ObjKind::Chart => self.charts.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Image => self.images.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Equation => self.shapes.iter_mut().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| &mut c.anchor),
+            ObjKind::Control => self.controls.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+        }
+    }
+
+    /// Removes `o`; false when there is no such object.
+    pub fn remove_object(&mut self, o: ObjRef) -> bool {
+        fn take<T>(v: &mut Vec<T>, f: impl Fn(&T) -> bool) -> bool {
+            let n = v.len();
+            v.retain(|x| !f(x));
+            v.len() != n
+        }
+        match o.kind {
+            ObjKind::Chart => take(&mut self.charts, |c| c.id == o.id),
+            ObjKind::Image => take(&mut self.images, |c| c.id == o.id),
+            ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
+            ObjKind::Equation => take(&mut self.shapes, |c| c.id == o.id && c.kind == ShapeKind::Equation),
+            ObjKind::Control => take(&mut self.controls, |c| c.id == o.id),
+        }
+    }
+
+    /// Every floating object's anchor, in a fixed order (charts, images, shapes, controls) that
+    /// [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors and write them back.
+    pub fn object_anchors(&self) -> impl Iterator<Item = &Anchor> {
+        self.charts
+            .iter()
+            .map(|o| &o.anchor)
+            .chain(self.images.iter().map(|o| &o.anchor))
+            .chain(self.shapes.iter().map(|o| &o.anchor))
+            .chain(self.controls.iter().map(|o| &o.anchor))
+    }
+
+    pub fn object_anchors_mut(&mut self) -> impl Iterator<Item = &mut Anchor> {
+        self.charts
+            .iter_mut()
+            .map(|o| &mut o.anchor)
+            .chain(self.images.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.shapes.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.controls.iter_mut().map(|o| &mut o.anchor))
     }
 
     /// The data table whose results area contains `c`.

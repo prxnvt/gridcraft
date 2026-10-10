@@ -25,7 +25,8 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |
 | `sheet.read` | `{range?, sheet?, formulas?, formatted?}` | Values (or formulas / displayed text) of a range |
 | `cell.get` | `{cell?}` | One cell: value, formula, displayed text, style, merge, comment, link |
-| `ui.inspect` | | UI state: ribbon tab, editor, open dialog, message, grid rect, scroll, perf |
+| `ui.inspect` | | UI state: ribbon tab, editor, open dialog, message, selected object, grid rect, scroll, perf |
+| `ui.object.select` | `{id?, kind?}` | Selects a floating object on the active sheet (no `id` clears it); replies `{selected, rect}`, the rect in window points |
 | `ui.click` / `ui.drag` / `ui.move` | `{x, y, toX?, toY?, button?, count?, shift?, cmd?, alt?}` | Real pointer input in window points |
 | `ui.cell.click` / `ui.cell.drag` | `{cell}` / `{from, to}` | Pointer input at a cell's centre (works in point mode while editing) |
 | `ui.key` / `ui.text` | `{key, shift?, cmd?, alt?, ctrl?}` / `{text}` | Keyboard input (typing in the grid starts editing) |
@@ -38,6 +39,13 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `app.open` / `app.save` / `app.quit` | `{path}` / `{path?}` | Files and lifetime |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
+
+`ui.inspect` reports the selected floating object as `selectedObject: {kind, id}` (or `null`),
+where `kind` is `chart`, `image`, `shape`, `equation` or `control`; the same names go in the
+`kind` parameter of `object.delete`, `object.move`, `object.setAnchorMode` and the `arrange.*`
+commands. `selectedChart` is kept as an alias: the id when the selection is a chart, otherwise
+`null`. With an object selected, `ui.key {key: "Delete"}` (or Backspace) deletes the object
+instead of clearing cells, and Escape clears the selection.
 
 Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
 to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.

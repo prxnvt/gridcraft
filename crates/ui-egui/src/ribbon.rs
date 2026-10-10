@@ -324,7 +324,7 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if sh.table_at(d.selection.active).is_some() {
             v.push("Table Design");
         }
-        if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
+        if app.selected_chart().is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
             v.push("Chart Design");
         }
         if crate::pivot_calc_ui::active(app).is_some() {
@@ -1957,7 +1957,7 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(id) = app.selected_chart else { return };
+    let Some(id) = app.selected_chart() else { return };
     let ae = big_button(ui, Icon::Chart, "Add Chart\nElement", "Add Chart Element", true);
     egui::Popup::menu(&ae).show(|ui| {
         menu_items(
@@ -2008,7 +2008,7 @@ fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
     }
     if big_button(ui, Icon::Delete, "Delete\nChart", "Delete chart", false).clicked() {
         act(app, "chart.delete", json!({"chart": id}));
-        app.selected_chart = None;
+        app.selected_object = None;
     }
 }
 

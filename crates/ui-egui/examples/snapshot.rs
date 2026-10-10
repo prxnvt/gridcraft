@@ -58,7 +58,8 @@ fn main() {
                 i += 1;
                 pane = args.get(i).cloned();
             }
-            "--chart" => {
+            // Selects the object with this id (any kind); `--chart` is the older spelling.
+            "--object" | "--chart" => {
                 i += 1;
                 chart = args.get(i).and_then(|s| s.parse().ok());
             }
@@ -107,7 +108,7 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 app.grid.pane = pane;
-                app.selected_chart = chart;
+                app.selected_object = chart.and_then(|id| app.session.active().and_then(|d| d.wb.active()).and_then(|sh| sh.object_ref(id)));
                 if let Some(d) = &dialog {
                     let (name, p) =
                         d.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((d.as_str(), json!({})));

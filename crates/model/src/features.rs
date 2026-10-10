@@ -418,6 +418,8 @@ pub enum ShapeKind {
     /// A freehand ink stroke; `Shape::text` holds the points as `x,y;x,y;…` relative to the
     /// anchor (sheet points), `Shape::line` the ink colour and `fill` unused.
     Ink,
+    /// An equation; `Shape::text` holds its LaTeX source.
+    Equation,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -428,6 +430,75 @@ pub struct Shape {
     pub fill: Color,
     pub line: Color,
     pub text: String,
+}
+
+/// What a form control on the sheet is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ControlKind {
+    #[default]
+    Button,
+    Slider,
+    Spin,
+}
+
+/// A form control (button, slider, spin button) floating over the sheet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FormControl {
+    pub id: u32,
+    pub kind: ControlKind,
+    pub anchor: Anchor,
+    /// The caption of a button.
+    #[serde(default)]
+    pub text: String,
+    /// The linked cell as reference text: `$B$2` on the control's own sheet, or `Sheet2!$B$2`.
+    /// Structural edits rewrite it like a formula reference.
+    #[serde(default)]
+    pub link: Option<String>,
+}
+
+/// The kinds of floating object a sheet holds. Equations are stored as shapes
+/// ([`ShapeKind::Equation`]) but select, open and delete as their own kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjKind {
+    Chart,
+    Image,
+    Shape,
+    Equation,
+    Control,
+}
+
+impl ObjKind {
+    pub const ALL: [ObjKind; 5] = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Equation, ObjKind::Control];
+
+    /// The name used in command parameters (`{kind: "chart", id}`).
+    pub fn name(self) -> &'static str {
+        match self {
+            ObjKind::Chart => "chart",
+            ObjKind::Image => "image",
+            ObjKind::Shape => "shape",
+            ObjKind::Equation => "equation",
+            ObjKind::Control => "control",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ObjKind> {
+        ObjKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
+    }
+}
+
+/// One floating object on a sheet: its kind and its workbook-unique id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjRef {
+    pub kind: ObjKind,
+    pub id: u32,
+}
+
+impl ObjRef {
+    pub fn new(kind: ObjKind, id: u32) -> ObjRef {
+        ObjRef { kind, id }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

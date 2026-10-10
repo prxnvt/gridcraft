@@ -20,6 +20,7 @@ pub mod grid;
 pub mod i18n;
 pub mod icons;
 pub mod keytips;
+pub mod objects;
 pub mod panes;
 pub mod pivot_calc_ui;
 pub mod pivot_filter;
@@ -166,8 +167,8 @@ pub struct SheetApp {
     /// The formula bar's badge slot (the PY badge in Python mode); empty otherwise.
     pub formula_badge: Option<formula_bar::FormulaBadge>,
     pub(crate) shots: control::Shots,
-    /// Chart selected on the sheet (id).
-    pub selected_chart: Option<u32>,
+    /// The floating object selected on the sheet (chart, picture, shape, equation or control).
+    pub selected_object: Option<gridcraft_engine::model::ObjRef>,
     pub started: f64,
     /// A command asked before replacing something; OK re-runs it with `overwrite: true`.
     pub confirm: Option<Confirm>,
@@ -229,7 +230,7 @@ impl SheetApp {
             keytips: keytips::KeyTips::default(),
             formula_badge: None,
             shots: control::Shots::default(),
-            selected_chart: None,
+            selected_object: None,
             started: now_ms(),
             confirm: None,
             dialog_next: None,
@@ -408,6 +409,7 @@ impl SheetApp {
 
     /// Picks up requests commands made (dialogs, edit mode…).
     pub fn after_engine(&mut self) {
+        self.prune_selected_object();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),

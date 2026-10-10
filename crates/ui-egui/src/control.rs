@@ -74,12 +74,33 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point()})),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
-        "selectedChart": app.selected_chart,
+        "selectedObject": app.selected_object,
+        // The id when the selection is a chart (kept for older agents).
+        "selectedChart": app.selected_chart(),
         "mode": format!("{:?}", app.session.mode),
         "documents": app.session.documents().iter().map(|d| json!({"title": d.display_title(), "dirty": d.is_dirty()})).collect::<Vec<_>>(),
         "activeDocument": app.session.active_index(),
         "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
     })
+}
+
+/// `ui.object.select {id?, kind?}`: selects the object with that id on the active sheet (the kind
+/// is found from the id when left out, and must match when given); no `id` clears the selection.
+/// Replies with the object and its rect in window points, for `ui.click` / `ui.drag`.
+fn select_object(app: &mut SheetApp, p: &Json) -> Outcome {
+    let Some(id) = p.get("id").and_then(Json::as_u64) else {
+        app.selected_object = None;
+        return ok(Json::Null);
+    };
+    let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return err("no document") };
+    let found = u32::try_from(id).ok().and_then(|id| match p.get("kind").and_then(Json::as_str) {
+        Some(k) => gridcraft_engine::model::ObjKind::parse(k).map(|k| gridcraft_engine::model::ObjRef::new(k, id)).filter(|o| sh.has_object(*o)),
+        None => sh.object_ref(id),
+    });
+    let Some(o) = found else { return err("no such object on the active sheet") };
+    let rect = app.grid.rect.and_then(|r| crate::chartview::object_rect(&crate::grid::Geo::new(sh, r, app.view().scroll), sh, o));
+    app.selected_object = Some(o);
+    ok(json!({"selected": o, "rect": rect.map(|r| [r.left(), r.top(), r.width(), r.height()])}))
 }
 
 fn key_from(name: &str) -> Option<egui::Key> {
@@ -242,6 +263,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             app.dialog = None;
             ok(Json::Null)
         }
+        "ui.object.select" => select_object(app, p),
         "ui.message.dismiss" => {
             app.message = None;
             ok(Json::Null)
