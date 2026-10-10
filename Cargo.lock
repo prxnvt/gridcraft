@@ -1488,6 +1488,7 @@ dependencies = [
 name = "gridcraft-engine"
 version = "0.4.0"
 dependencies = [
+ "gridcraft-analysis",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",

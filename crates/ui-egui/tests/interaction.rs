@@ -448,3 +448,65 @@ fn data_table_dialog_creates_a_live_table() {
     h.run_steps(1);
     assert_eq!(value(&h, "E4"), Value::Number(300.0));
 }
+
+#[test]
+fn data_analysis_runs_a_tool_from_its_form() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Score"], [1], [2], [3], [4]]})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("dataAnalysis", json!({}));
+    h.run_steps(2);
+    // Pick Descriptive Statistics and press OK: its form replaces the list.
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.list_index = 5;
+    }
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().map(|d| (d.name.clone(), d.title.clone()));
+    assert_eq!(d, Some(("toolpak".to_string(), "Descriptive Statistics".to_string())));
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("input".into(), json!("$A$1:$A$5"));
+        d.values.insert("labels".into(), json!(true));
+        d.values.insert("newSheetName".into(), json!("Stats"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let doc = h.state().session.active().unwrap();
+    assert_eq!(doc.wb.active().unwrap().name, "Stats");
+    assert_eq!(doc.wb.active().unwrap().value(CellRef::parse("B2").unwrap()), Value::Number(2.5));
+}
+
+#[test]
+fn toolpak_forms_build_command_params() {
+    use gridcraft_ui_egui::toolpak;
+    // Every tool has a form.
+    for (id, _) in gridcraft_engine::cmd::analysis::TOOLS {
+        assert!(toolpak::form(id).is_some(), "{id}");
+    }
+    let f = toolpak::form("analysis.descriptiveStatistics").unwrap();
+    let mut v = serde_json::Map::new();
+    for (k, x) in [
+        ("input", json!(" $A$1:$B$9 ")),
+        ("groupedBy", json!("columns")),
+        ("labels", json!(true)),
+        ("summary", json!(true)),
+        ("useConfidence", json!(true)),
+        ("confidence", json!("90")),
+        ("useKthLargest", json!(false)),
+        ("kthLargest", json!("2")),
+        ("outputMode", json!("range")),
+        ("outputRange", json!("$D$1")),
+    ] {
+        v.insert(k.into(), x);
+    }
+    let p = toolpak::params(&f, &v);
+    assert_eq!(p["input"], "$A$1:$B$9");
+    assert_eq!(p["confidence"], 90.0);
+    assert_eq!(p["kthLargest"], serde_json::Value::Null);
+    assert_eq!(p["output"], "$D$1");
+    v.insert("outputMode".into(), json!("newWorkbook"));
+    assert_eq!(toolpak::params(&f, &v)["output"], "newWorkbook");
+    v.insert("outputMode".into(), json!("newSheet"));
+    assert_eq!(toolpak::params(&f, &v)["output"], "newSheet");
+}

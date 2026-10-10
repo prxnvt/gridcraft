@@ -1569,6 +1569,10 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
         );
     });
     sep(ui);
+    if big_button(ui, Icon::Analysis, "Data\nAnalysis", "Data Analysis: statistical and engineering analysis tools", false).clicked() {
+        app.open_dialog("dataAnalysis", json!({}));
+    }
+    sep(ui);
     ui.vertical(|ui| {
         if small_button(ui, Icon::Group, "Group", "Group", false).clicked() {
             act(app, "data.group", json!({}));

@@ -25,6 +25,7 @@ pub mod ribbon;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
+pub mod toolpak;
 pub mod widgets;
 
 use std::collections::HashMap;
@@ -164,6 +165,8 @@ pub struct SheetApp {
     pub started: f64,
     /// A command asked before replacing something; OK re-runs it with `overwrite: true`.
     pub confirm: Option<Confirm>,
+    /// Dialog to open when the current one closes (Data Analysis → a tool's form).
+    pub dialog_next: Option<dialogs::Dialog>,
 }
 
 /// A pending "replace it?" question from a command (see [`confirm_text`]).
@@ -222,6 +225,7 @@ impl SheetApp {
             selected_chart: None,
             started: now_ms(),
             confirm: None,
+            dialog_next: None,
         }
     }
 

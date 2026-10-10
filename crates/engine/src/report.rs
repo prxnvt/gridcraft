@@ -95,6 +95,8 @@ pub struct RSeries {
     pub name: Option<String>,
     pub categories: Option<RRange>,
     pub values: RRange,
+    /// On a combo chart: drawn as a line on the secondary axis.
+    pub line: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -309,8 +311,8 @@ fn write_into(s: &mut Session, si: usize, origin: CellRef, report: Report) -> Re
                     values: range_text(&sheet_name, origin, &x.values),
                     bubble_sizes: None,
                     color: None,
-                    secondary: false,
-                    kind: None,
+                    secondary: x.line,
+                    kind: x.line.then_some(ChartKind::Line),
                     smooth: false,
                 })
                 .collect();
@@ -423,6 +425,7 @@ mod tests {
                 name: None,
                 categories: Some(RRange::Text("Sheet1!$A$1:$B$1".into())),
                 values: RRange::Out { row: 1, col: 0, rows: 2, cols: 1 },
+                line: false,
             }],
             row: 4,
             col: 2,

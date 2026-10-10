@@ -86,7 +86,7 @@ impl Dialog {
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -361,6 +361,8 @@ impl Dialog {
                     json!({"range": range, "rowInput": "", "columnInput": ""}),
                 )
             }
+            "dataAnalysis" => Dialog::custom("dataAnalysis", "Data Analysis", json!({})),
+            "toolpak" => return crate::toolpak::open(params.get("tool").and_then(Json::as_str).unwrap_or("")),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active_abs, "to": "", "changing": ""})),
             "subtotal" => Dialog::form(
                 "subtotal",
@@ -681,7 +683,7 @@ fn restore_home(app: &mut SheetApp, d: &Dialog) {
 
 /// A RefEdit box: a text field that grid selections fill while it is the pick target, with a
 /// button that collapses the dialog to just this box (and expands it again).
-fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str, width: f32) {
+pub(crate) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str, width: f32) {
     let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
     let home = d.home.as_ref().map(|h| h.0);
     let sel = selection_ref(app, home);
@@ -777,6 +779,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "formatCells" => 560.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "toolpak" => 440.0,
+        "dataAnalysis" => 340.0,
         _ => 380.0,
     };
     let window = egui::Window::new(d.title.clone())
@@ -803,6 +807,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "manageRules" => manage_rules(app, ui),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
+                "dataAnalysis" => crate::toolpak::list(app, ui, &mut d, &mut open),
+                "toolpak" => crate::toolpak::show(app, ui, &mut d, &mut confirm, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
@@ -1009,6 +1015,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.dialog = Some(d);
     } else {
         restore_home(app, &d);
+        // A dialog that leads to another (Data Analysis → a tool's form).
+        if let Some(next) = app.dialog_next.take() {
+            app.dialog = Some(next);
+        }
     }
 }
 
@@ -1077,7 +1087,7 @@ fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
     });
 }
 
-fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+pub(crate) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let ok = ui.add(egui::Button::new(egui::RichText::new("   OK   ").color(Color32::WHITE)).fill(crate::theme::Tokens::get(ui.ctx()).accent));
