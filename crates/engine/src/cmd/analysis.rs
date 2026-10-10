@@ -167,6 +167,42 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             regression
         ),
+        cmd!(
+            "analysis.movingAverage",
+            "Moving Average",
+            [],
+            None,
+            "{input (one column or row), labels?, interval?: 3, standardErrors?, chartOutput?, output?, overwrite?} → AVERAGE formulas over each interval (#N/A until the first full one), optional standard errors and a chart",
+            has_doc,
+            moving_average
+        ),
+        cmd!(
+            "analysis.exponentialSmoothing",
+            "Exponential Smoothing",
+            [],
+            None,
+            "{input (one column or row), labels?, damping?: 0.3, standardErrors?, chartOutput?, output?, overwrite?} → smoothing formulas (1 − damping)·actual + damping·forecast, optional standard errors and a chart",
+            has_doc,
+            exponential_smoothing
+        ),
+        cmd!(
+            "analysis.histogram",
+            "Histogram",
+            [],
+            None,
+            "{input, bins? (bin upper bounds; default evenly spaced), labels?, pareto?, cumulative?, chartOutput?, output?, overwrite?} → Bin/Frequency table ending in More, optional Pareto (sorted) table, cumulative percentages and chart",
+            has_doc,
+            histogram
+        ),
+        cmd!(
+            "analysis.fourierAnalysis",
+            "Fourier Analysis",
+            [],
+            None,
+            "{input (one column or row of 1, 2, 4 … 4096 numbers or complex text like 3+4i), labels?, inverse?, output?, overwrite?} → the discrete Fourier transform as complex numbers",
+            has_doc,
+            fourier
+        ),
     ]
 }
 
@@ -560,6 +596,125 @@ fn regression(s: &mut Session, p: &Json) -> Result<Json> {
     run_with_input(s, p, CMD, &input, |_| toolpak::regression::regression(&y, &xs, &o, &refs))
 }
 
+/// Reference text for formula tools: input blocks (sheet-qualified when the output is on another
+/// sheet) and output blocks.
+fn formula_refs(s: &Session, input: &Input, target: &Target, cmd: &str) -> Result<(Vec<CellRef>, Option<String>, String)> {
+    let d = s.doc()?;
+    let in_name = d.wb.sheet(input.sheet).map(|x| x.name.clone()).unwrap_or_default();
+    let same = matches!(target.kind, report::OutputKind::Range { sheet } if sheet == input.sheet);
+    if target.kind == report::OutputKind::NewWorkbook {
+        return Err(bad(cmd, "the output must be on a worksheet of this workbook (the formulas refer to the input)"));
+    }
+    let cells = input.cells.first().cloned().unwrap_or_default();
+    let prefix = (!same).then(|| format!("{}!", gridcraft_formula::quote_sheet(&in_name)));
+    let area = match (cells.first(), cells.last()) {
+        (Some(a), Some(b)) => {
+            let abs = |c: &CellRef| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1);
+            format!("{}!{}:{}", gridcraft_formula::quote_sheet(&in_name), abs(a), abs(b))
+        }
+        _ => String::new(),
+    };
+    Ok((cells, prefix, area))
+}
+
+fn smoothing(s: &mut Session, p: &Json, cmd: &str, moving: bool) -> Result<Json> {
+    let input = read_one(s, p, "input", cmd, "")?;
+    let target = report::parse_output(s, p, cmd)?;
+    let (cells, prefix, area) = formula_refs(s, &input, &target, cmd)?;
+    let n = input.series.first().map_or(0, |x| x.values.len());
+    if input.series.first().is_some_and(|x| x.values.iter().any(Option::is_none)) {
+        return Err(EngineError::Other("The input range has blank cells.".into()));
+    }
+    let pre = prefix.unwrap_or_default();
+    let in_ref = |a: usize, b: usize| -> String {
+        let (Some(x), Some(y)) = (cells.get(a), cells.get(b)) else { return String::new() };
+        if a == b { format!("{pre}{}", x.a1()) } else { format!("{pre}{}:{}", x.a1(), y.a1()) }
+    };
+    let origin = target.origin;
+    let out_ref = |r0: u32, c0: u32, r1: u32, c1: u32| -> String {
+        let a = CellRef::new(origin.row + r0, origin.col + c0);
+        let b = CellRef::new(origin.row + r1, origin.col + c1);
+        if a == b { a.a1() } else { format!("{}:{}", a.a1(), b.a1()) }
+    };
+    let refs = toolpak::series::Refs { input: &in_ref, output: &out_ref, input_area: area };
+    let std_err = bool_param(p, "standardErrors").unwrap_or(false);
+    let chart = bool_param(p, "chartOutput").unwrap_or(false);
+    let out = if moving {
+        let interval = count_param(p, "interval", cmd)?.unwrap_or(3);
+        toolpak::series::moving_average(n, interval, std_err, chart, &refs)
+    } else {
+        let damping = num_param(p, "damping", 0.3, cmd)?;
+        toolpak::series::exponential_smoothing(n, damping, std_err, chart, &refs)
+    }
+    .map_err(tool_error)?;
+    check_overlap(&target, &input, &out)?;
+    report::write(s, &target, to_report(out), report::overwrite_param(p))
+}
+
+fn moving_average(s: &mut Session, p: &Json) -> Result<Json> {
+    smoothing(s, p, "analysis.movingAverage", true)
+}
+
+fn exponential_smoothing(s: &mut Session, p: &Json) -> Result<Json> {
+    smoothing(s, p, "analysis.exponentialSmoothing", false)
+}
+
+fn histogram(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.histogram";
+    let input = read_input(s, p, "input", CMD, false)?;
+    let values: Vec<f64> = input.series.iter().flat_map(Series::numbers).collect();
+    let bins = if str_param(p, "bins").is_some_and(|t| !t.trim().is_empty()) {
+        let b = read_input(s, p, "bins", CMD, false)?;
+        Some(b.series.iter().flat_map(Series::numbers).collect::<Vec<f64>>())
+    } else {
+        None
+    };
+    let o = toolpak::series::HistogramOptions {
+        bins,
+        pareto: bool_param(p, "pareto").unwrap_or(false),
+        cumulative: bool_param(p, "cumulative").unwrap_or(false),
+        chart: bool_param(p, "chartOutput").unwrap_or(false),
+    };
+    run_with_input(s, p, CMD, &input, |_| toolpak::series::histogram(&values, &o))
+}
+
+fn fourier(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.fourierAnalysis";
+    let d = s.doc()?;
+    let text = str_param(p, "input").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad(CMD, "missing `input` (the input range)"))?;
+    let (sheet, body) = split_sheet(text);
+    let si = match sheet {
+        Some(n) => d.wb.sheet_index(&n).ok_or_else(|| bad(CMD, format!("no sheet named `{n}`")))?,
+        None => d.wb.active_sheet,
+    };
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    let r = RangeRef::parse(body.trim()).ok_or_else(|| bad(CMD, format!("`input` is not a range: `{text}`")))?;
+    if r.width() > 1 && r.height() > 1 {
+        return Err(EngineError::Other("The input range must be a single column or row.".into()));
+    }
+    if r.count() > gridcraft_analysis::fft::MAX_LEN as u64 + 1 {
+        return Err(EngineError::Other(format!("Fourier Analysis takes at most {} values.", gridcraft_analysis::fft::MAX_LEN)));
+    }
+    let labels = bool_param(p, "labels").unwrap_or(false);
+    let cells: Vec<CellRef> = r.iter().collect();
+    let label = labels.then(|| cells.first().map(|c| sh.value(*c).display()).unwrap_or_default());
+    let data: Vec<CellRef> = cells.iter().skip(usize::from(labels)).copied().collect();
+    let mut values = Vec::with_capacity(data.len());
+    for c in &data {
+        let v = sh.value(*c);
+        if v.is_empty() {
+            return Err(EngineError::Other("The input range has blank cells.".into()));
+        }
+        values.push(
+            gridcraft_functions::dist::complex_of(&v)
+                .map_err(|_| EngineError::Other("The input must hold numbers or complex numbers such as 3+4i.".into()))?,
+        );
+    }
+    let input = Input { sheet: si, series: vec![], cells: vec![cells] };
+    let inverse = bool_param(p, "inverse").unwrap_or(false);
+    run_with_input(s, p, CMD, &input, |_| toolpak::series::fourier(&values, inverse, label.as_deref()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +832,40 @@ mod tests {
         let name = s.doc().unwrap().wb.active().unwrap().name.clone();
         assert_eq!(val(&s, &name, "A18"), Value::from("X Variable 1"));
         assert!(s.execute("analysis.regression", json!({"inputY": "Sheet1!C2:C6", "inputX": "Sheet1!A2:A4"})).is_err());
+    }
+
+    #[test]
+    fn series_tools() {
+        let mut s = session();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Demand"], [10], [12], [14], [13], [15], [18]]})).unwrap();
+        s.execute("analysis.movingAverage", json!({"input": "A1:A7", "labels": true, "standardErrors": true, "chartOutput": true, "output": "C2"}))
+            .unwrap();
+        assert_eq!(val(&s, "Sheet1", "C3"), Value::Error(gridcraft_core::CellError::NA));
+        assert_eq!(val(&s, "Sheet1", "C4"), Value::Number(12.0));
+        let f = s.execute("cell.get", json!({"cell": "C4"})).unwrap();
+        assert_eq!(f["formula"], "=AVERAGE(A2:A4)");
+        // Live: the forecast follows the input.
+        s.execute("cell.set", json!({"cell": "A2", "input": "1"})).unwrap();
+        assert_eq!(val(&s, "Sheet1", "C4"), Value::Number(9.0));
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().charts.len(), 1);
+        s.execute("analysis.exponentialSmoothing", json!({"input": "A2:A7", "output": {"newSheet": "Smooth"}})).unwrap();
+        assert_eq!(val(&s, "Smooth", "A2"), Value::Number(1.0));
+        let f = s.execute("cell.get", json!({"cell": "A3"})).unwrap();
+        assert_eq!(f["formula"], "=0.7*Sheet1!A3+0.3*A2");
+        assert!(s.execute("analysis.movingAverage", json!({"input": "Sheet1!A2:A7", "output": "newWorkbook"})).is_err());
+        // Histogram with bins from the sheet.
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("range.setValues", json!({"range": "H1", "values": [[2], [4]]})).unwrap();
+        s.execute("analysis.histogram", json!({"input": "A2:A7", "bins": "H1:H2", "output": "J1", "chartOutput": true})).unwrap();
+        assert_eq!(val(&s, "Sheet1", "J1"), Value::from("Bin"));
+        assert_eq!(val(&s, "Sheet1", "K2"), Value::Number(1.0));
+        assert_eq!(val(&s, "Sheet1", "J4"), Value::from("More"));
+        assert_eq!(val(&s, "Sheet1", "K4"), Value::Number(5.0));
+        // Fourier of complex text.
+        s.execute("range.setValues", json!({"range": "M1", "values": [["1"], ["2"], ["3+i"], ["4"]]})).unwrap();
+        s.execute("analysis.fourierAnalysis", json!({"input": "M1:M4", "output": "N1"})).unwrap();
+        assert_eq!(val(&s, "Sheet1", "N1"), Value::from("10+i"));
+        assert!(s.execute("analysis.fourierAnalysis", json!({"input": "M1:M3", "output": "O1"})).is_err());
     }
 
     #[test]

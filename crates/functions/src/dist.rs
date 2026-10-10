@@ -195,6 +195,20 @@ pub fn percentile_exc(x: &[f64], k: f64) -> R<f64> {
     stat::percentile_exc(x.to_vec(), k)
 }
 
+/// A complex number from a value, as IMREAL/IMAGINARY read it: a number, or text like `3+4i`,
+/// `-2j` or `5`. Blank is 0.
+pub fn complex_of(v: &gridcraft_core::Value) -> R<(f64, f64)> {
+    crate::engineering::cx_of(v).map(|(z, _)| (z.re, z.im))
+}
+
+/// Text for a complex number, as COMPLEX(re, im) writes it (`3+4i`, `-i`, `2`).
+pub fn complex_text(re: f64, im: f64) -> R<String> {
+    match crate::engineering::fmt_complex(crate::engineering::Cx::new(re, im), 'i')? {
+        gridcraft_core::Value::Text(t) => Ok(t.to_string()),
+        _ => Err(CellError::Value),
+    }
+}
+
 /// A least-squares fit (the numbers LINEST reports).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fit {

@@ -12,6 +12,7 @@ use crate::{Error, Result, input};
 pub mod descriptive;
 pub mod hypothesis;
 pub mod regression;
+pub mod series;
 
 pub(crate) use descriptive::correl as descriptive_correl;
 
