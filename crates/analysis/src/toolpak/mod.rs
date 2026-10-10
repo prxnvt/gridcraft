@@ -10,6 +10,9 @@ use gridcraft_core::CellError;
 use crate::{Error, Result, input};
 
 pub mod descriptive;
+pub mod hypothesis;
+
+pub(crate) use descriptive::correl as descriptive_correl;
 
 /// Most input values a tool accepts.
 pub const MAX_VALUES: usize = 1_000_000;

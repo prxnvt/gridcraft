@@ -86,6 +86,78 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             |s, p| simple(s, p, "analysis.covariance", false, toolpak::descriptive::covariance)
         ),
+        cmd!(
+            "analysis.anovaSingleFactor",
+            "Anova: Single Factor",
+            [],
+            None,
+            "{input, groupedBy?, labels?, alpha?: 0.05, output?, overwrite?} → SUMMARY (count, sum, average, variance per group) and the ANOVA table (between/within groups: SS, df, MS, F, P-value, F crit)",
+            has_doc,
+            anova_single
+        ),
+        cmd!(
+            "analysis.anovaTwoFactorWithReplication",
+            "Anova: Two-Factor With Replication",
+            [],
+            None,
+            "{input (column labels in the first row, sample labels in the first column), rowsPerSample, alpha?: 0.05, output?, overwrite?} → SUMMARY per sample and column, and the ANOVA table (sample, columns, interaction, within)",
+            has_doc,
+            anova_with
+        ),
+        cmd!(
+            "analysis.anovaTwoFactorWithoutReplication",
+            "Anova: Two-Factor Without Replication",
+            [],
+            None,
+            "{input, labels? (first row and column), alpha?: 0.05, output?, overwrite?} → SUMMARY per row and column, and the ANOVA table (rows, columns, error)",
+            has_doc,
+            anova_without
+        ),
+        cmd!(
+            "analysis.fTest",
+            "F-Test Two-Sample for Variances",
+            [],
+            None,
+            "{input1, input2 (one column or row each), labels?, alpha?: 0.05, output?, overwrite?} → means, variances, observations, df, F, one-tailed P and critical F",
+            has_doc,
+            f_test
+        ),
+        cmd!(
+            "analysis.tTestPaired",
+            "t-Test: Paired Two Sample for Means",
+            [],
+            None,
+            "{input1, input2, hypothesizedDifference?: 0, labels?, alpha?: 0.05, output?, overwrite?} → means, variances, Pearson correlation, df, t Stat, one- and two-tailed P and critical t",
+            has_doc,
+            |s, p| t_test(s, p, "analysis.tTestPaired", toolpak::hypothesis::TTest::Paired)
+        ),
+        cmd!(
+            "analysis.tTestEqualVariances",
+            "t-Test: Two-Sample Assuming Equal Variances",
+            [],
+            None,
+            "{input1, input2, hypothesizedDifference?: 0, labels?, alpha?: 0.05, output?, overwrite?} → means, variances, pooled variance, df, t Stat, one- and two-tailed P and critical t",
+            has_doc,
+            |s, p| t_test(s, p, "analysis.tTestEqualVariances", toolpak::hypothesis::TTest::EqualVariances)
+        ),
+        cmd!(
+            "analysis.tTestUnequalVariances",
+            "t-Test: Two-Sample Assuming Unequal Variances",
+            [],
+            None,
+            "{input1, input2, hypothesizedDifference?: 0, labels?, alpha?: 0.05, output?, overwrite?} → means, variances, df (Welch, rounded), t Stat, one- and two-tailed P and critical t",
+            has_doc,
+            |s, p| t_test(s, p, "analysis.tTestUnequalVariances", toolpak::hypothesis::TTest::UnequalVariances)
+        ),
+        cmd!(
+            "analysis.zTest",
+            "z-Test: Two Sample for Means",
+            [],
+            None,
+            "{input1, input2, variance1, variance2 (known variances), hypothesizedDifference?: 0, labels?, alpha?: 0.05, output?, overwrite?} → means, z, one- and two-tailed P and critical z",
+            has_doc,
+            z_test
+        ),
     ]
 }
 
@@ -207,6 +279,69 @@ pub(crate) fn count_param(p: &Json, key: &str, cmd: &str) -> Result<Option<usize
     }
 }
 
+/// One variable from `p[key]` (a single column or row), named `default` unless labelled.
+pub(crate) fn read_one(s: &Session, p: &Json, key: &str, cmd: &str, default: &str) -> Result<Input> {
+    let text = str_param(p, key).unwrap_or("");
+    let (_, body) = split_sheet(text);
+    let row_shaped = RangeRef::parse(body.trim()).is_some_and(|r| r.height() == 1 && r.width() > 1);
+    let mut q = p.clone();
+    if let Some(m) = q.as_object_mut() {
+        m.insert("groupedBy".into(), json!(if row_shaped { "rows" } else { "columns" }));
+    }
+    let mut input = read_input(s, &q, key, cmd, false)?;
+    if input.series.len() != 1 {
+        return Err(EngineError::Other("Each variable range must be a single column or row.".into()));
+    }
+    if !bool_param(p, "labels").unwrap_or(false)
+        && let Some(x) = input.series.first_mut()
+    {
+        x.label = default.to_string();
+    }
+    Ok(input)
+}
+
+/// Two inputs as one (for the overlap check).
+fn merge(mut a: Input, b: Input) -> (Input, Series, Series) {
+    let sa = a.series.first().cloned().unwrap_or_else(|| Series::new("", vec![]));
+    let sb = b.series.first().cloned().unwrap_or_else(|| Series::new("", vec![]));
+    a.cells.extend(b.cells);
+    (a, sa, sb)
+}
+
+/// A table of numbers with optional labels in the first row and column (two-factor ANOVA).
+pub(crate) fn read_grid(s: &Session, p: &Json, cmd: &str, labels: bool) -> Result<(Input, toolpak::hypothesis::Grid)> {
+    let text = str_param(p, "input").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad(cmd, "missing `input` (the input range)"))?;
+    let (sheet, body) = split_sheet(text);
+    let r = RangeRef::parse(body.trim()).ok_or_else(|| bad(cmd, format!("`input` is not a range: `{text}`")))?;
+    if labels && r.height() < 2 {
+        return Err(EngineError::Other("The input range has no values below its labels.".into()));
+    }
+    // The rows below the column labels, each labelled by its first cell.
+    let data = if labels { RangeRef::new(CellRef::new(r.start.row + 1, r.start.col), r.end) } else { r };
+    let prefix = sheet.as_deref().map(|n| format!("{}!", gridcraft_formula::quote_sheet(n))).unwrap_or_default();
+    let mut q = p.clone();
+    if let Some(m) = q.as_object_mut() {
+        m.insert("input".into(), json!(format!("{prefix}{}", data.a1())));
+        m.insert("groupedBy".into(), json!("rows"));
+        m.insert("labels".into(), json!(labels));
+    }
+    let input = read_input(s, &q, "input", cmd, true)?;
+    let width = input.series.first().map_or(0, |x| x.values.len());
+    let col_labels: Vec<String> = if labels {
+        let d = s.doc()?;
+        let sh = d.wb.sheet(input.sheet).ok_or(EngineError::NoDocument)?;
+        (0..width as u32).map(|j| sh.value(CellRef::new(r.start.row, r.start.col + 1 + j)).display()).collect()
+    } else {
+        (0..width).map(|j| toolpak::default_label(false, j, true)).collect()
+    };
+    let mut rows = Vec::with_capacity(input.series.len());
+    for x in &input.series {
+        rows.push(x.complete().map_err(|_| EngineError::Other("Every cell of the input must hold a number.".into()))?);
+    }
+    let row_labels = input.series.iter().map(|x| x.label.clone()).collect();
+    Ok((input, toolpak::hypothesis::Grid { row_labels, col_labels, data: rows }))
+}
+
 // ---------------------------------------------------------------- output
 
 fn tool_error(e: gridcraft_analysis::Error) -> EngineError {
@@ -313,6 +448,61 @@ fn descriptive_statistics(s: &mut Session, p: &Json) -> Result<Json> {
     run_with_input(s, p, CMD, &input, |_| toolpak::descriptive::descriptive_statistics(&input.series, &o))
 }
 
+fn anova_single(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.anovaSingleFactor";
+    let input = read_input(s, p, "input", CMD, true)?;
+    let alpha = num_param(p, "alpha", 0.05, CMD)?;
+    run_with_input(s, p, CMD, &input, |_| toolpak::hypothesis::anova_single_factor(&input.series, alpha))
+}
+
+fn anova_without(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.anovaTwoFactorWithoutReplication";
+    let (input, grid) = read_grid(s, p, CMD, bool_param(p, "labels").unwrap_or(false))?;
+    let alpha = num_param(p, "alpha", 0.05, CMD)?;
+    run_with_input(s, p, CMD, &input, |_| toolpak::hypothesis::anova_two_factor_without(&grid, alpha))
+}
+
+fn anova_with(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.anovaTwoFactorWithReplication";
+    let per = count_param(p, "rowsPerSample", CMD)?.ok_or_else(|| bad(CMD, "missing `rowsPerSample`"))?;
+    // The input always has labels: column labels on top, sample labels down the left.
+    let (input, mut grid) = read_grid(s, p, CMD, true)?;
+    // One label per sample: the label beside its first row.
+    grid.row_labels = grid.row_labels.iter().step_by(per.max(1)).cloned().collect();
+    let alpha = num_param(p, "alpha", 0.05, CMD)?;
+    run_with_input(s, p, CMD, &input, |_| toolpak::hypothesis::anova_two_factor_with(&grid, per, alpha))
+}
+
+fn two_inputs(s: &Session, p: &Json, cmd: &str) -> Result<(Input, Series, Series)> {
+    let a = read_one(s, p, "input1", cmd, "Variable 1")?;
+    let b = read_one(s, p, "input2", cmd, "Variable 2")?;
+    Ok(merge(a, b))
+}
+
+fn f_test(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.fTest";
+    let (input, a, b) = two_inputs(s, p, CMD)?;
+    let alpha = num_param(p, "alpha", 0.05, CMD)?;
+    run_with_input(s, p, CMD, &input, |_| toolpak::hypothesis::f_test(&a, &b, alpha))
+}
+
+fn t_test(s: &mut Session, p: &Json, cmd: &str, kind: toolpak::hypothesis::TTest) -> Result<Json> {
+    let (input, a, b) = two_inputs(s, p, cmd)?;
+    let alpha = num_param(p, "alpha", 0.05, cmd)?;
+    let diff = num_param(p, "hypothesizedDifference", 0.0, cmd)?;
+    run_with_input(s, p, cmd, &input, |_| toolpak::hypothesis::t_test(kind, &a, &b, diff, alpha))
+}
+
+fn z_test(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "analysis.zTest";
+    let (input, a, b) = two_inputs(s, p, CMD)?;
+    let alpha = num_param(p, "alpha", 0.05, CMD)?;
+    let diff = num_param(p, "hypothesizedDifference", 0.0, CMD)?;
+    let v1 = num_param(p, "variance1", f64::NAN, CMD)?;
+    let v2 = num_param(p, "variance2", f64::NAN, CMD)?;
+    run_with_input(s, p, CMD, &input, |_| toolpak::hypothesis::z_test(&a, &b, diff, v1, v2, alpha))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,6 +542,52 @@ mod tests {
         assert_eq!(val(&s, "Sheet1", "E10"), Value::from("Column1"));
         assert_eq!(val(&s, "Sheet1", "D11"), Value::Number(4.0));
         assert_eq!(val(&s, "Sheet1", "E11"), Value::Number(9.0));
+    }
+
+    #[test]
+    fn anova_and_two_sample_tests() {
+        let mut s = session();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["A", "B", "C"], [4, 6, 9], [5, 7, 10], [6, 8, 11]]})).unwrap();
+        s.execute("analysis.anovaSingleFactor", json!({"input": "A1:C4", "labels": true, "output": {"newSheet": "Anova"}})).unwrap();
+        assert_eq!(val(&s, "Anova", "A1"), Value::from("Anova: Single Factor"));
+        assert_eq!(val(&s, "Anova", "A5"), Value::from("A"));
+        assert_eq!(val(&s, "Anova", "A12"), Value::from("Between Groups"));
+        assert!((val(&s, "Anova", "B12").as_f64().unwrap() - 38.0).abs() < 1e-9);
+        // Two-factor without replication on the same block (labels in first row and column).
+        s.execute("range.setValues", json!({"range": "Sheet1!A10", "values": [[null, "C1", "C2"], ["R1", 1, 3], ["R2", 2, 5], ["R3", 4, 8]]}))
+            .unwrap();
+        s.execute("analysis.anovaTwoFactorWithoutReplication", json!({"input": "Sheet1!A10:C13", "labels": true, "output": {"newSheet": "Two"}}))
+            .unwrap();
+        assert_eq!(val(&s, "Two", "A4"), Value::from("R1"));
+        assert_eq!(val(&s, "Two", "A8"), Value::from("C1"));
+        // With replication: two samples of two rows.
+        s.execute(
+            "range.setValues",
+            json!({"range": "Sheet1!A20", "values": [[null, "A", "B"], ["Low", 1, 4], [null, 3, 6], ["High", 5, 6], [null, 7, 10]]}),
+        )
+        .unwrap();
+        s.execute("analysis.anovaTwoFactorWithReplication", json!({"input": "Sheet1!A20:C24", "rowsPerSample": 2, "output": {"newSheet": "Rep"}}))
+            .unwrap();
+        assert_eq!(val(&s, "Rep", "A4"), Value::from("Low"));
+        assert!(s.execute("analysis.anovaTwoFactorWithReplication", json!({"input": "Sheet1!A20:C24"})).is_err());
+        // Two-sample tests.
+        s.execute("range.setValues", json!({"range": "Sheet1!E1", "values": [["Before", "After"], [10, 8], [12, 9], [9, 7], [15, 10], [11, 9]]}))
+            .unwrap();
+        for cmd in ["analysis.fTest", "analysis.tTestPaired", "analysis.tTestEqualVariances", "analysis.tTestUnequalVariances"] {
+            s.execute(cmd, json!({"input1": "Sheet1!E1:E6", "input2": "Sheet1!F1:F6", "labels": true, "output": "newSheet"})).unwrap();
+            let name = s.doc().unwrap().wb.active().unwrap().name.clone();
+            assert_eq!(val(&s, &name, "B3"), Value::from("Before"), "{cmd}");
+            assert_eq!(val(&s, &name, "B4"), Value::Number(11.4), "{cmd}");
+        }
+        s.execute(
+            "analysis.zTest",
+            json!({"input1": "Sheet1!E2:E6", "input2": "Sheet1!F2:F6", "variance1": 5, "variance2": 1, "output": "newSheet"}),
+        )
+        .unwrap();
+        let name = s.doc().unwrap().wb.active().unwrap().name.clone();
+        assert_eq!(val(&s, &name, "B3"), Value::from("Variable 1"));
+        assert!(s.execute("analysis.zTest", json!({"input1": "Sheet1!E2:E6", "input2": "Sheet1!F2:F6"})).is_err(), "variances are required");
+        assert!(s.execute("analysis.fTest", json!({"input1": "Sheet1!E2:F6", "input2": "Sheet1!F2:F6"})).is_err(), "one column each");
     }
 
     #[test]

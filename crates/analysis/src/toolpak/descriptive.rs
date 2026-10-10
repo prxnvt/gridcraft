@@ -131,7 +131,7 @@ fn pairs(a: &Series, b: &Series) -> (Vec<f64>, Vec<f64>) {
     a.values.iter().zip(&b.values).filter_map(|(x, y)| Some(((*x)?, (*y)?))).unzip()
 }
 
-fn correl(x: &[f64], y: &[f64]) -> std::result::Result<f64, CellError> {
+pub(crate) fn correl(x: &[f64], y: &[f64]) -> std::result::Result<f64, CellError> {
     let (mx, my) = (dist::mean(x)?, dist::mean(y)?);
     let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
     for (a, b) in x.iter().zip(y) {
