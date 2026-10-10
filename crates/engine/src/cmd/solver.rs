@@ -1013,7 +1013,8 @@ impl sv::Problem for CellProblem {
 fn engine_for(m: &SolverModel, spec: Spec) -> std::result::Result<Box<dyn sv::Engine>, String> {
     match m.method {
         Method::Simplex => Ok(Box::new(sv::simplex::Simplex::new(spec))),
-        Method::Grg | Method::Evolutionary => Err("Choose Simplex LP: the GRG Nonlinear and Evolutionary methods aren't available yet.".into()),
+        Method::Grg => Ok(Box::new(sv::grg::Grg::new(spec))),
+        Method::Evolutionary => Err("Choose Simplex LP or GRG Nonlinear: the Evolutionary method isn't available yet.".into()),
     }
 }
 
@@ -1152,6 +1153,23 @@ impl SolverJob {
                         "allowableDecrease": s.rhs_decrease.get(i),
                     })
                 }).collect::<Vec<_>>(),
+            })
+        });
+        let sensitivity = sensitivity.or_else(|| {
+            o.nlp.as_ref().map(|s| {
+                json!({
+                    "kind": "nlp",
+                    "variables": p.vars.iter().enumerate().map(|(j, c)| json!({
+                        "cell": abs_a1(*c),
+                        "final": x.get(j),
+                        "reducedGradient": s.reduced_gradient.get(j),
+                    })).collect::<Vec<_>>(),
+                    "constraints": p.rows.iter().enumerate().map(|(i, (c, _))| json!({
+                        "cell": abs_a1(*c),
+                        "final": row_value(i).0,
+                        "lagrangeMultiplier": s.lagrange.get(i),
+                    })).collect::<Vec<_>>(),
+                })
             })
         });
         let method = match self.model.method {
@@ -1458,6 +1476,27 @@ mod tests {
         assert!(s.execute("data.solver", json!({"objective": "$D$1:$D$2"})).is_err());
         assert!(s.execute("data.solver", json!({"objective": "$D$1", "variables": "$C$1"})).is_err(), "formula as a variable");
         assert!(s.execute("data.solver", json!({"objective": "$D$1", "variables": "$B$1", "constraints": [{"left": "$C$1", "op": "int"}]})).is_err());
+    }
+
+    #[test]
+    fn nonlinear_model_with_grg() {
+        let mut s = session();
+        // Max area x·y with fence 2x + 2y ≤ 40 → a 10 × 10 square.
+        s.execute("range.setValues", json!({"range": "B1", "values": [[1], [1]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "C1", "input": "=B1*B2"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C2", "input": "=2*B1+2*B2"})).unwrap();
+        let r = s
+            .execute(
+                "data.solver",
+                json!({"objective": "$C$1", "goal": "max", "variables": "$B$1:$B$2", "constraints": [{"left": "$C$2", "op": "<=", "right": "40"}]}),
+            )
+            .unwrap();
+        assert!(r["status"] == 0 || r["status"] == 1, "{r}");
+        assert!((n(&s, "B1") - 10.0).abs() < 1e-3 && (n(&s, "B2") - 10.0).abs() < 1e-3, "{r}");
+        assert_eq!(r["method"], "GRG Nonlinear");
+        assert_eq!(r["sensitivity"]["kind"], "nlp");
+        let lm = r["sensitivity"]["constraints"][0]["lagrangeMultiplier"].as_f64().unwrap();
+        assert!((lm - 5.0).abs() < 1e-2, "{lm}");
     }
 
     #[test]
