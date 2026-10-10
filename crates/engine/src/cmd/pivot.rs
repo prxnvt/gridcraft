@@ -1007,7 +1007,18 @@ fn group(s: &mut Session, p: &Json) -> Result<Json> {
         f.date_group = by;
         f.collapsed_items.clear();
         Ok(json!({}))
-    })
+    })?;
+    // Grouping belongs to the cache: every PivotTable on the same source groups the field too.
+    let (si, pi) = find_pivot(s, p)?;
+    let (names, errors) = update_sharing(s, si, pi, bool_param(p, "replace").unwrap_or(false), |pt| {
+        for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+            if f.source_col.eq_ignore_ascii_case(&field) {
+                f.date_group = by;
+                f.collapsed_items.clear();
+            }
+        }
+    })?;
+    Ok(json!({"alsoGrouped": names, "errors": errors}))
 }
 
 fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1118,8 +1129,34 @@ fn grand_totals(s: &mut Session, p: &Json) -> Result<Json> {
     layout(s, &Json::Object(q))
 }
 
+/// Applies `change` to the other PivotTables sharing (sheet, idx)'s cache and refreshes them.
+/// Returns their names and any errors (a report that no longer fits, say).
+fn update_sharing(s: &mut Session, si: usize, pi: usize, replace: bool, change: impl Fn(&mut PivotTable)) -> Result<(Vec<String>, Vec<Json>)> {
+    edit(s, |cx| {
+        let others: Vec<(usize, usize)> = pv::sharing(&cx.wb, si, pi).into_iter().filter(|x| *x != (si, pi)).collect();
+        let (mut names, mut errors) = (vec![], vec![]);
+        for (osi, opi) in others {
+            if let Some(pt) = cx.sheet_mut(osi)?.pivots.get_mut(opi) {
+                change(pt);
+                names.push(pt.name.clone());
+            }
+            if let Err(e) = pv::refresh(&mut cx.wb, osi, opi, replace) {
+                errors.push(json!({"pivot": names.last(), "error": e}));
+            }
+        }
+        cx.structural = !names.is_empty();
+        Ok((names, errors))
+    })
+}
+
+/// Refreshing a PivotTable refreshes every PivotTable on the same source (its cache).
 fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
-    update(s, p, |_, src, _| Ok(json!({"records": src.rows.len()})))
+    let (si, pi) = find_pivot(s, p)?;
+    let mut out = update(s, p, |_, src, _| Ok(json!({"records": src.rows.len()})))?;
+    let (names, errors) = update_sharing(s, si, pi, bool_param(p, "replace").unwrap_or(false), |_| {})?;
+    out["alsoRefreshed"] = json!(names);
+    out["errors"] = json!(errors);
+    Ok(out)
 }
 
 fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1342,6 +1379,34 @@ mod tests {
         // One undo step removes it.
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    }
+
+    #[test]
+    fn pivots_on_one_source_refresh_and_group_together() {
+        let mut s = sales();
+        // Two reports on the same range, side by side on a new sheet.
+        s.execute("insert.pivotTable", json!({"rows": ["Date"], "values": ["Sales"]})).unwrap();
+        let src = pt(&s).source.clone();
+        s.execute("insert.pivotTable", json!({"source": src, "destination": "Sheet2!H3", "rows": ["Date"], "values": ["Units"]})).unwrap();
+        let wb = &s.doc().unwrap().wb;
+        assert_eq!(crate::pivot::sharing(wb, 0, 0), vec![(0, 0), (0, 1)]);
+        // Grouping the date field in one groups it in both.
+        let r = s.execute("pivot.group", json!({"pivot": "PivotTable1", "field": "Date", "by": "quarters"})).unwrap();
+        assert_eq!(r["alsoGrouped"], json!(["PivotTable2"]));
+        let d = s.doc().unwrap();
+        let p2 = &d.wb.active().unwrap().pivots[1];
+        assert_eq!(p2.rows[0].date_group, gridcraft_model::PivotDateGroup::Quarters);
+        assert_eq!(text(&s, "H4"), "Qtr1");
+        // A change in the source shows in both after one refresh.
+        s.execute("range.setValues", json!({"range": "Sheet1!E2", "values": [[1100]]})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        let r = s.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
+        assert_eq!(r["alsoRefreshed"], json!(["PivotTable2"]));
+        assert_eq!(val(&s, "B4"), Value::Number(1100.0 + 50.0 + 120.0));
+        // A report on a different range has its own cache.
+        s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$E$5", "destination": "Sheet2!N3", "rows": ["Region"], "values": ["Sales"]}))
+            .unwrap();
+        assert_eq!(crate::pivot::sharing(&s.doc().unwrap().wb, 0, 2), vec![(0, 2)]);
     }
 
     #[test]

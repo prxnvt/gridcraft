@@ -115,6 +115,38 @@ fn resolve_inner(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) ->
     Err(INVALID.into())
 }
 
+/// What identifies a pivot's cache: the resolved source plus how it was named (a table, a
+/// defined name or a range). PivotTables with the same key share grouping and refresh together,
+/// as PivotTables on one PivotCache do in Excel.
+pub fn cache_key(wb: &Workbook, text: &str, default_sheet: usize) -> Option<(usize, RangeRef, String)> {
+    let (si, r) = resolve_source(wb, text, default_sheet).ok()?;
+    let t = text.trim().trim_start_matches('=').trim();
+    let kind = if wb.table(t).is_some() {
+        format!("table:{}", t.to_lowercase())
+    } else if RangeRef::parse(split_sheet(t).1).is_some() {
+        "range".to_string()
+    } else {
+        format!("name:{}", t.to_lowercase())
+    };
+    Some((si, r, kind))
+}
+
+/// Every PivotTable sharing a cache with the one at (sheet, idx), itself included.
+pub fn sharing(wb: &Workbook, sheet: usize, idx: usize) -> Vec<(usize, usize)> {
+    let Some(key) = wb.sheet(sheet).and_then(|s| s.pivots.get(idx)).and_then(|pt| cache_key(wb, &pt.source, sheet)) else {
+        return vec![(sheet, idx)];
+    };
+    let mut out = Vec::new();
+    for (si, sh) in wb.sheets.iter().enumerate() {
+        for (pi, pt) in sh.pivots.iter().enumerate() {
+            if (si, pi) == (sheet, idx) || cache_key(wb, &pt.source, si).as_ref() == Some(&key) {
+                out.push((si, pi));
+            }
+        }
+    }
+    out
+}
+
 const FIELD_NAME_ERR: &str =
     "The PivotTable field name is not valid. To create a PivotTable, you must use data that is organized as a list with labeled columns.";
 

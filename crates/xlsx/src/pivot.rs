@@ -249,18 +249,21 @@ impl CField {
 /// A cache built from a PivotTable's source.
 struct Cache {
     fields: Vec<CField>,
-    /// Pivot field → cache field, by the pivot field's position in rows, then columns.
-    axis_map: Vec<Option<usize>>,
     source_xml: String,
     records: Option<(u64, String)>,
 }
 
 /// PivotTables being written; the tables themselves are finished after the styles part (their
-/// value number formats need style number-format ids).
+/// value number formats need style number-format ids). PivotTables on the same source share one
+/// cache, as in Excel: its fields cover every member's axis fields and groupings.
 #[derive(Default)]
 pub struct PivotWriter {
     /// (cache id, workbook-relative part name).
     caches: Vec<(u32, String)>,
+    /// The shared caches, by cache id − 1.
+    built: Vec<Cache>,
+    /// (sheet, pivot index) → cache id.
+    cache_of: HashMap<(usize, usize), u32>,
     pending: Vec<Pending>,
     tables: u32,
 }
@@ -270,16 +273,46 @@ struct Pending {
     sheet: usize,
     idx: usize,
     cache_id: u32,
-    cache: Cache,
+    axis_map: Vec<Option<usize>>,
 }
 
 impl PivotWriter {
-    /// Writes the caches of a sheet's PivotTables and adds the sheet's relationships to its
-    /// PivotTable parts. Pivots whose source can't be resolved are not written.
-    pub fn add_sheet(&mut self, wb: &Workbook, si: usize, out: &mut Out, rels: &mut Rels) {
-        let Some(sheet) = wb.sheet(si) else { return };
-        for (idx, pt) in sheet.pivots.iter().enumerate() {
-            let Some(cache) = build_cache(wb, pt, si) else { continue };
+    /// Builds and writes one cache per distinct source. Call before [`PivotWriter::add_sheet`].
+    pub fn prepare(&mut self, wb: &Workbook, out: &mut Out) {
+        // Group the pivots by source: the same range (or the same table or name) shares a cache;
+        // a table and a range over the same cells don't.
+        let mut groups: Vec<((usize, RangeRef, String), Vec<(usize, usize)>)> = Vec::new();
+        for (si, sheet) in wb.sheets.iter().enumerate() {
+            for (idx, pt) in sheet.pivots.iter().enumerate() {
+                let Some(key) = resolve_source(wb, &pt.source, si, 0) else { continue };
+                match groups.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, members)) => members.push((si, idx)),
+                    None => groups.push((key, vec![(si, idx)])),
+                }
+            }
+        }
+        for (_, members) in groups {
+            let Some(&(si0, i0)) = members.first() else { continue };
+            let Some(first) = wb.sheet(si0).and_then(|s| s.pivots.get(i0)) else { continue };
+            // A stand-in pivot with every member's axis fields and filters.
+            let mut union = first.clone();
+            union.rows.clear();
+            union.columns.clear();
+            union.filters.clear();
+            for &(si, idx) in &members {
+                let Some(pt) = wb.sheet(si).and_then(|s| s.pivots.get(idx)) else { continue };
+                for f in pt.rows.iter().chain(pt.columns.iter()) {
+                    if !union.rows.iter().any(|u| same(&u.source_col, &f.source_col) && u.date_group == f.date_group) {
+                        union.rows.push(f.clone());
+                    }
+                }
+                for f in &pt.filters {
+                    if !union.filters.iter().any(|u| same(&u.source_col, &f.source_col)) {
+                        union.filters.push(f.clone());
+                    }
+                }
+            }
+            let Some(cache) = build_cache(wb, &union, si0) else { continue };
             let n = self.caches.len() as u32 + 1;
             let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
             let rec_rid = if let Some((count, xml)) = &cache.records {
@@ -294,13 +327,28 @@ impl PivotWriter {
             };
             out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
             self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
+            self.built.push(cache);
+            for m in members {
+                self.cache_of.insert(m, n);
+            }
+        }
+    }
+
+    /// Adds the sheet's relationships to its PivotTable parts. Pivots whose source couldn't be
+    /// resolved (no cache) are not written.
+    pub fn add_sheet(&mut self, wb: &Workbook, si: usize, out: &mut Out, rels: &mut Rels) {
+        let Some(sheet) = wb.sheet(si) else { return };
+        for (idx, pt) in sheet.pivots.iter().enumerate() {
+            let Some(&n) = self.cache_of.get(&(si, idx)) else { continue };
+            let Some(cache) = self.built.get(n as usize - 1) else { continue };
+            let axis_map = axis_map_for(&cache.fields, pt);
             self.tables += 1;
             let t = self.tables;
             rels.add("pivotTable", &format!("../pivotTables/pivotTable{t}.xml"));
             let mut tr = Rels::default();
             tr.add("pivotCacheDefinition", &format!("../pivotCache/pivotCacheDefinition{n}.xml"));
             out.part(&format!("xl/pivotTables/_rels/pivotTable{t}.xml.rels"), None, tr.xml().into_bytes());
-            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: n, cache });
+            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: n, axis_map });
         }
     }
 
@@ -338,9 +386,10 @@ impl PivotWriter {
 
     /// Writes the PivotTable parts. `fmt_id` maps a number format code to its styles id.
     pub fn finish(self, wb: &Workbook, out: &mut Out, fmt_id: &dyn Fn(&str) -> Option<u32>) {
-        for p in self.pending {
+        for p in &self.pending {
             let Some(pt) = wb.sheet(p.sheet).and_then(|s| s.pivots.get(p.idx)) else { continue };
-            let xml = table_xml(pt, p.idx, p.cache_id, &p.cache, fmt_id);
+            let Some(cache) = self.built.get(p.cache_id as usize - 1) else { continue };
+            let xml = table_xml(pt, p.idx, p.cache_id, cache, &p.axis_map, fmt_id);
             out.part(&p.part, Some(CT_PIVOT_TABLE), xml.into_bytes());
         }
     }
@@ -532,23 +581,14 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             prev = new;
         }
     }
-    let mut axis_map: Vec<Option<usize>> = Vec::with_capacity(axis.len());
     for pf in &axis {
-        let Some(b) = find(&fields, &pf.source_col) else {
-            axis_map.push(None);
-            continue;
-        };
-        let grouped = fields.iter().position(|f| f.group.as_ref().is_some_and(|g| g.base == b && g.by == pf.date_group));
-        match grouped {
-            Some(i) if pf.date_group != PivotDateGroup::None => axis_map.push(Some(i)),
-            _ => {
-                if let Some(f) = fields.get_mut(b)
-                    && f.group.is_none()
-                {
-                    f.itemized = true;
-                }
-                axis_map.push(Some(b));
-            }
+        let Some(b) = find(&fields, &pf.source_col) else { continue };
+        let grouped = fields.iter().any(|f| f.group.as_ref().is_some_and(|g| g.base == b && g.by == pf.date_group));
+        if !(grouped && pf.date_group != PivotDateGroup::None)
+            && let Some(f) = fields.get_mut(b)
+            && f.group.is_none()
+        {
+            f.itemized = true;
         }
     }
     // Page fields (filters not on an axis) need items too.
@@ -606,7 +646,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     } else {
         None
     };
-    Some(Cache { fields, axis_map, source_xml, records })
+    Some(Cache { fields, source_xml, records })
 }
 
 fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec<String> {
@@ -738,11 +778,29 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
     s
 }
 
-fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
+/// Where each of `pt`'s axis fields (rows, then columns) is among the cache fields.
+fn axis_map_for(fields: &[CField], pt: &PivotTable) -> Vec<Option<usize>> {
+    let find = |name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    pt.rows
+        .iter()
+        .chain(pt.columns.iter())
+        .map(|pf| {
+            let b = find(&pf.source_col)?;
+            if pf.date_group != PivotDateGroup::None
+                && let Some(i) = fields.iter().position(|f| f.group.as_ref().is_some_and(|g| g.base == b && g.by == pf.date_group))
+            {
+                return Some(i);
+            }
+            Some(b)
+        })
+        .collect()
+}
+
+fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[Option<usize>], fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
     let nf = c.fields.len();
     let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
-    let row_idx: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
-    let col_idx: Vec<usize> = c.axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
+    let row_idx: Vec<usize> = axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
+    let col_idx: Vec<usize> = axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
     // Filters: on an axis field → hidden items there; otherwise a page field.
     let mut hidden: HashMap<usize, &PivotFilter> = HashMap::new();
     let mut pages: Vec<(usize, &PivotFilter)> = Vec::new();
@@ -750,7 +808,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let axis_pos = pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, &f.source_col));
         match axis_pos {
             Some(p) => {
-                if let Some(Some(i)) = c.axis_map.get(p) {
+                if let Some(Some(i)) = axis_map.get(p) {
                     hidden.insert(*i, f);
                 }
             }
@@ -766,7 +824,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     }
     let vals: Vec<(usize, &PivotValue)> = pt.values.iter().filter_map(|v| find_db(&v.source_col).map(|i| (i, v))).collect();
     let axis_field = |i: usize| -> Option<&PivotField> {
-        let p = c.axis_map.iter().position(|x| *x == Some(i))?;
+        let p = axis_map.iter().position(|x| *x == Some(i))?;
         pt.rows.iter().chain(pt.columns.iter()).nth(p)
     };
 

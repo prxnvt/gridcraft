@@ -479,3 +479,32 @@ fn cache_found_by_workbook_cache_id() {
     assert_eq!(pts[0].values[0].func, PivotFunc::Average);
     assert_eq!(pts[0].rows[0].source_col, "K");
 }
+
+#[test]
+fn pivots_on_one_source_share_a_cache() {
+    let mut wb = workbook();
+    let p1 = wb.sheet(1).unwrap().pivots[0].clone();
+    // A second report on the same range, with different fields and a date grouping.
+    let p4 = PivotTable {
+        id: 4,
+        name: "Same Source".into(),
+        anchor: at("AE1"),
+        rows: vec![PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Quarters, ..PivotField::default() }],
+        columns: vec![],
+        filters: vec![],
+        last_range: Some(rr("AE1:AF6")),
+        ..p1
+    };
+    std::sync::Arc::make_mut(&mut wb.sheets[1]).pivots.push(p4);
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let caches = parts.keys().filter(|k| k.starts_with("xl/pivotCache/pivotCacheDefinition")).count();
+    assert_eq!(caches, 3, "the two reports on Data!A1:F9 share one cache");
+    let t4 = String::from_utf8(parts.get("xl/pivotTables/pivotTable4.xml").unwrap().clone()).unwrap();
+    assert!(t4.contains("cacheId=\"1\""), "{t4}");
+    let c1 = String::from_utf8(parts.get("xl/pivotCache/pivotCacheDefinition1.xml").unwrap().clone()).unwrap();
+    assert!(c1.contains("groupBy=\"quarters\""), "the shared cache carries every member's grouping");
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    assert_eq!(back.sheet(1).unwrap().pivots, wb.sheet(1).unwrap().pivots);
+}
