@@ -164,6 +164,10 @@ pub struct SheetApp {
     pub dialog: Option<dialogs::Dialog>,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
+    /// How long the toast with the same time stays, and the button it offers (a pane to open).
+    pub toast_extra: Option<ToastExtra>,
+    /// Package installs whose outcome was already shown ([`Session::python_installs_ended`]).
+    pub installs_shown: u64,
     pub services: Services,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -238,6 +242,8 @@ impl SheetApp {
             dialog: None,
             message: None,
             toast: None,
+            toast_extra: None,
+            installs_shown: 0,
             services,
             synthetic: Default::default(),
             control_rx: None,
@@ -809,6 +815,8 @@ impl SheetApp {
             self.session.step_python();
             ctx.request_repaint_after(std::time::Duration::from_millis(15));
         }
+        // A package install that ended: say how, once.
+        python_ui::install_toast(self);
         // Formulas entered since the last frame, from any source, feed Recently Used.
         function_library::harvest(self);
         // Files read asynchronously (web file picker, dropped files).
@@ -1002,6 +1010,16 @@ pub fn clean_error(e: &str) -> String {
         return rest.to_string();
     }
     e.to_string()
+}
+
+/// More about the toast shown at `at`: how long it stays, whether it reports a failure, and a
+/// button that opens a pane (`(label, pane)`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToastExtra {
+    pub at: f64,
+    pub ms: f64,
+    pub danger: bool,
+    pub action: Option<(String, String)>,
 }
 
 #[allow(clippy::disallowed_methods)] // the clock is read only off wasm

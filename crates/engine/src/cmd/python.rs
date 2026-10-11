@@ -57,7 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Diagnostics",
             ["Formulas", "Python"],
             None,
-            "{sheet?, errorsOnly?: bool} → {backend: {kind, summary, path?, version?, pandas?, numpy?, rejected}, packages: [{requirement, name, found, version?}], runs: [{seq, sheet, cell, status, ms, count, timeMs, stdout, stderr, error?, line?, missing?}]}: which Python runs cells, the workbook's packages found or missing in it, and the last 500 rows of runs, oldest first (runs of a cell that end as its last one did share a row, with a count)",
+            "{sheet?, errorsOnly?: bool} → {backend: {kind, summary, path?, version?, pandas?, numpy?, rejected}, packages: [{requirement, name, found, version?}], runs: [{seq, sheet, cell, status, ms, count, timeMs, stdout, stderr, error?, line?, missing?, packages?, target?, summary?}]}: which Python runs cells, the workbook's packages found or missing in it, and the last 500 rows of runs, oldest first (runs of a cell that end as its last one did share a row, with a count). Package installs are rows with no sheet or cell (status installed, installFailed or cancelled; stdout is the installer's output), kept whatever `sheet` says",
             has_doc,
             diagnostics
         ),
@@ -104,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Install Status",
             [],
             None,
-            "{} → {state: idle|running|installed|installFailed|cancelled, packages?, target?, message?, output?}: the running or last package install",
+            "{} → {state: idle|running|installed|installFailed|cancelled, packages?, target?, message?, summary?, versions?: [{name, version}], ms?, output?}: the running or last package install (`summary`: \"Installed scikit-learn 1.9.1\")",
             always,
             install_status
         ),
@@ -269,9 +269,16 @@ fn diagnostics(s: &mut Session, p: &Json) -> Result<Json> {
         Some(_) => Some(target_sheet(s, p)?),
     };
     let sheet_name = sheet.and_then(|i| d.wb.sheet(i)).map(|sh| sh.name.clone());
+    // Rows of the whole workbook (package installs, the initialization code) show whatever the
+    // sheet: an install that worked must never look as if nothing happened.
     let errors_only = bool_param(p, "errorsOnly").unwrap_or(false);
-    let runs: Vec<crate::python::PyRunLog> =
-        d.py_log.iter().filter(|r| sheet_name.as_ref().is_none_or(|n| r.sheet == *n)).filter(|r| !errors_only || r.status != "ok").cloned().collect();
+    let runs: Vec<crate::python::PyRunLog> = d
+        .py_log
+        .iter()
+        .filter(|r| r.cell.is_empty() || sheet_name.as_ref().is_none_or(|n| r.sheet == *n))
+        .filter(|r| !errors_only || r.status != "ok")
+        .cloned()
+        .collect();
     let backend = s.python_backend();
     let packages = s.python_declared_status();
     Ok(json!({"backend": backend, "packages": packages, "runs": runs}))

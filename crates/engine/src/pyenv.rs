@@ -23,6 +23,15 @@ use serde_json::{Value as Json, json};
 use crate::python::{PyRunLog, push_log};
 use crate::{EngineError, Result, Session, clock};
 
+/// The last `max` bytes of `text` (on a character boundary), for the log.
+fn tail(text: &str, max: usize) -> &str {
+    let mut start = text.len().saturating_sub(max);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    text.get(start..).unwrap_or_default()
+}
+
 /// The hidden-data key of the packages a workbook declares.
 pub const PACKAGES_KEY: &str = "py_packages";
 
@@ -89,6 +98,8 @@ pub(crate) struct InstallJob {
     uid: Option<u64>,
     packages: Vec<String>,
     target: String,
+    /// GridCraft's environment folder, or the person's environment, for the versions installed.
+    env: Option<PathBuf>,
     runner: Install,
     started_ms: f64,
 }
@@ -100,6 +111,37 @@ pub(crate) struct InstallState {
     last: Option<Json>,
     /// Whether installs may use `uv` when it is on PATH (`None`: yes).
     uv: Option<bool>,
+    /// Installs that have ended in this session (hosts compare it to show each outcome once).
+    ended: u64,
+}
+
+/// "scikit-learn 1.9.1, numpy 2.5.4": the requested packages with the versions now there
+/// (a name alone when its version isn't known).
+fn with_versions(packages: &[String], versions: &[(String, String)]) -> String {
+    packages
+        .iter()
+        .map(|req| {
+            let name = env::requirement_name(req);
+            match versions.iter().find(|(n, _)| env::normalize(n) == env::normalize(name)) {
+                Some((_, v)) => format!("{name} {v}"),
+                None => name.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One line saying how an install ended, for the toast, the status bar and Diagnostics.
+fn summary(status: &str, packages: &[String], versions: &[(String, String)], message: &str) -> String {
+    let names = packages.iter().map(|p| env::requirement_name(p)).collect::<Vec<_>>().join(", ");
+    match status {
+        "installed" if packages.is_empty() => "Made GridCraft's Python environment".into(),
+        "installed" => format!("Installed {}", with_versions(packages, versions)),
+        "cancelled" if packages.is_empty() => "Cancelled making GridCraft's Python environment".into(),
+        "cancelled" => format!("Cancelled installing {names}"),
+        _ if packages.is_empty() => format!("Couldn't make GridCraft's Python environment: {message}"),
+        _ => format!("Couldn't install {names}: {message}"),
+    }
 }
 
 impl Session {
@@ -177,15 +219,15 @@ impl Session {
         let described = target.describe();
         let uv = if self.python.install.uv.unwrap_or(true) { env::find_uv() } else { None };
         let plan = Plan { target, packages: packages.clone(), uv, os: Os::current() };
-        let uid = self.doc().ok().map(|d| d.uid);
-        self.python.install.job = Some(InstallJob {
-            uid,
-            packages: packages.clone(),
-            target: described.clone(),
-            runner: Install::start(plan, create),
-            started_ms: clock::now_ms(),
-        });
-        self.python.install.last = None;
+        let env = match &plan.target {
+            Target::GridCraft { dir, .. } => Some(dir.clone()),
+            Target::Own { python, .. } => env::env_root(python),
+        };
+        if create {
+            log::info!("python environment to be made at {described}");
+        }
+        let runner = Install::start(plan, create);
+        self.python_track_install(packages.clone(), described.clone(), env, runner);
         if self.python.background {
             return Ok(json!({"state": "running", "target": described, "packages": packages, "create": create}));
         }
@@ -195,6 +237,23 @@ impl Session {
         } else {
             Err(EngineError::Other(result["message"].as_str().unwrap_or("The install failed").to_string()))
         }
+    }
+
+    /// Follows `runner`, an install of `packages` into `target` (an environment folder or
+    /// program, as shown to the person) that the host started itself or that already ended
+    /// ([`Install::finished`], in tests), exactly as `python.install` follows its own: the status
+    /// bar, Diagnostics, the log and the cells that run again. `env` is the environment folder
+    /// whose packages are listed for the versions installed.
+    pub fn python_track_install(&mut self, packages: Vec<String>, target: String, env: Option<PathBuf>, runner: Install) {
+        let uid = self.doc().ok().map(|d| d.uid);
+        log::info!("python install started: {} into {target}", if packages.is_empty() { "(no packages)".to_string() } else { packages.join(", ") });
+        self.python.install.job = Some(InstallJob { uid, packages, target, env, runner, started_ms: clock::now_ms() });
+        self.python.install.last = None;
+    }
+
+    /// How many installs have ended in this session; a host shows each new outcome once.
+    pub fn python_installs_ended(&self) -> u64 {
+        self.python.install.ended
     }
 
     /// Waits for a running install to end, and finishes it.
@@ -224,8 +283,9 @@ impl Session {
         true
     }
 
-    /// Logs the ended install in Diagnostics and, when it worked, restarts Python on the new
-    /// environment and runs the cells again.
+    /// Logs the ended install in Diagnostics (of the workbook it started from, or the active one
+    /// when that one has closed) and in the app log, and, when it worked, restarts Python on the
+    /// new environment and runs the cells again.
     fn finish_install(&mut self) -> Option<Json> {
         let mut job = self.python.install.job.take()?;
         let outcome = job.runner.poll()?.clone();
@@ -236,38 +296,77 @@ impl Session {
         } else {
             "installFailed"
         };
+        let ms = (clock::now_ms() - job.started_ms).max(0.0);
+        // The versions now there: what the installer printed, else the environment's listing
+        // (an install of something already there prints no version with uv).
+        let mut versions = env::installed_versions(&outcome.output);
+        if outcome.ok
+            && job.packages.iter().any(|p| !versions.iter().any(|(n, _)| env::normalize(n) == env::normalize(env::requirement_name(p))))
+            && let Some(dir) = &job.env
+        {
+            for (n, v) in env::packages_in(dir) {
+                if !versions.iter().any(|(m, _)| env::normalize(m) == env::normalize(&n)) {
+                    versions.push((n, v));
+                }
+            }
+        }
+        let summary = summary(status, &job.packages, &versions, &outcome.message);
+        let requested: Vec<Json> = job
+            .packages
+            .iter()
+            .map(|req| {
+                let name = env::requirement_name(req);
+                let version = versions.iter().find(|(n, _)| env::normalize(n) == env::normalize(name)).map(|(_, v)| v.clone());
+                json!({"name": name, "version": version})
+            })
+            .collect();
+        self.python.install.ended = self.python.install.ended.saturating_add(1);
         let result = json!({
             "state": status,
             "ok": outcome.ok,
             "message": outcome.message,
+            "summary": summary,
             "packages": job.packages,
+            "versions": requested,
             "target": job.target,
+            "ms": ms,
             "output": outcome.output,
+            "seq": self.python.install.ended,
         });
-        let uid = job.uid.or_else(|| self.doc().ok().map(|d| d.uid));
+        match status {
+            "installed" => log::info!("python install finished: {summary} into {} in {:.1} s", job.target, ms / 1000.0),
+            "cancelled" => log::info!("python install cancelled: {} into {} after {:.1} s", job.packages.join(", "), job.target, ms / 1000.0),
+            _ => log::warn!(
+                "python install failed: {} into {} after {:.1} s: {}\n{}",
+                job.packages.join(", "),
+                job.target,
+                ms / 1000.0,
+                outcome.message,
+                tail(&outcome.output, 2_000)
+            ),
+        }
+        // The workbook it started from; if that one closed meanwhile, the active one.
+        let uid = job.uid.filter(|u| self.docs.iter().any(|d| d.uid == *u)).or_else(|| self.doc().ok().map(|d| d.uid));
         if let Some(d) = self.docs.iter_mut().find(|d| Some(d.uid) == uid) {
             push_log(
                 d,
                 PyRunLog {
-                    seq: 0,
-                    sheet: String::new(),
-                    cell: String::new(),
                     status,
-                    ms: (clock::now_ms() - job.started_ms).max(0.0),
+                    ms,
                     stdout: outcome.output.clone(),
-                    stderr: String::new(),
                     error: (!outcome.ok).then(|| outcome.message.clone()),
-                    line: None,
-                    missing: None,
                     count: 1,
-                    time_ms: 0.0,
+                    packages: std::mem::take(&mut job.packages),
+                    target: Some(job.target.clone()),
+                    summary: Some(summary),
+                    ..PyRunLog::default()
                 },
             );
         }
         self.python.install.last = Some(result.clone());
         if outcome.ok {
             // Python starts again on what the search finds now (the environment), and every
-            // workbook's Python cells run again on it.
+            // workbook's Python cells run again on it (those that couldn't import a module too).
             self.python_detect();
             let uids: Vec<u64> = self
                 .docs
@@ -283,7 +382,7 @@ impl Session {
     }
 
     /// The install's state: `{state: idle|running|installed|installFailed|cancelled, packages?,
-    /// target?, message?, output?}`.
+    /// target?, message?, summary?, versions?: [{name, version}], ms?, output?, seq?}`.
     pub fn python_install_status(&self) -> Json {
         match &self.python.install.job {
             Some(j) => json!({"state": "running", "packages": j.packages, "target": j.target, "output": j.runner.output()}),

@@ -421,19 +421,53 @@ pub fn job_paused(app: &mut SheetApp, ctx: &egui::Context) {
 
 pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((msg, at)) = app.toast.clone() else { return };
-    if crate::now_ms() - at > 2500.0 {
+    let extra = app.toast_extra.clone().filter(|e| e.at == at);
+    if crate::now_ms() - at > extra.as_ref().map_or(2500.0, |e| e.ms) {
         app.toast = None;
+        app.toast_extra = None;
         return;
     }
     let Some(rect) = app.grid.rect else { return };
+    let t = Tokens::get(ctx);
+    let mut open_pane = None;
+    let mut close = false;
     egui::Area::new(egui::Id::new("toast")).fixed_pos(pos2(rect.center().x - 160.0, rect.bottom() - 48.0)).order(egui::Order::Tooltip).show(
         ctx,
         |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(320.0);
-                ui.label(msg);
+            let mut frame = egui::Frame::popup(ui.style());
+            if extra.as_ref().is_some_and(|e| e.danger) {
+                frame = frame.stroke(Stroke::new(1.0, t.danger));
+            }
+            frame.show(ui, |ui| {
+                ui.set_max_width(if extra.is_some() { 420.0 } else { 320.0 });
+                match &extra {
+                    Some(e) => {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(msg.as_str()).wrap());
+                            if let Some((label, pane)) = &e.action
+                                && ui.button(label.as_str()).clicked()
+                            {
+                                open_pane = Some(pane.clone());
+                            }
+                            if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(18.0, 18.0)).clicked() {
+                                close = true;
+                            }
+                        });
+                    }
+                    None => {
+                        ui.label(msg);
+                    }
+                }
             });
         },
     );
+    if let Some(pane) = open_pane {
+        app.grid.pane = Some(pane);
+        close = true;
+    }
+    if close {
+        app.toast = None;
+        app.toast_extra = None;
+    }
     ctx.request_repaint_after(std::time::Duration::from_millis(200));
 }

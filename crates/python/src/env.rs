@@ -149,6 +149,54 @@ pub fn packages_in(dir: &Path) -> Vec<(String, String)> {
     }
 }
 
+/// The packages (name, version) an installer's output says it installed or found already
+/// there: uv's ` + name==version` lines, pip's `Successfully installed name-version …` and
+/// `Requirement already satisfied: name in … (version)`. Later mentions of a name win.
+pub fn installed_versions(output: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut add = |name: &str, version: &str| {
+        let (name, version) = (name.trim(), version.trim());
+        if name.is_empty() || version.is_empty() || name.len() > MAX_REQUIREMENT_CHARS || version.len() > 64 {
+            return;
+        }
+        out.retain(|(n, _)| normalize(n) != normalize(name));
+        out.push((name.to_string(), version.to_string()));
+    };
+    for line in output.lines().take(20_000) {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("+ ")
+            && let Some((name, version)) = rest.split_once("==")
+        {
+            // uv: ` + six==1.17.0` (a URL install has `@` instead; it has no version to show).
+            add(name, version.split_whitespace().next().unwrap_or_default());
+        } else if let Some(rest) = line.strip_prefix("Successfully installed ") {
+            for item in rest.split_whitespace() {
+                if let Some((name, version)) = item.rsplit_once('-') {
+                    add(name, version);
+                }
+            }
+        } else if let Some(rest) = line.strip_prefix("Requirement already satisfied: ")
+            && let Some(name) = rest.split_whitespace().next()
+            && let Some(version) = rest.rsplit_once('(').and_then(|(_, v)| v.strip_suffix(')'))
+        {
+            // The requirement may carry a specifier (`six>=1`): the name is before it.
+            let name = name.split(['<', '>', '=', '!', '~', '[']).next().unwrap_or(name);
+            add(name, version);
+        }
+    }
+    out
+}
+
+/// The environment folder a Python program belongs to: the folder above `bin` (or `Scripts`),
+/// else the program's own folder (a conda `python.exe` on Windows).
+pub fn env_root(python: &Path) -> Option<PathBuf> {
+    let parent = python.parent()?;
+    match parent.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()) {
+        Some(n) if n == "bin" || n == "scripts" => parent.parent().map(Path::to_path_buf),
+        _ => Some(parent.to_path_buf()),
+    }
+}
+
 /// Import names whose pip package is called something else.
 pub const PIP_NAMES: &[(&str, &str)] = &[
     ("sklearn", "scikit-learn"),
@@ -826,6 +874,20 @@ mod tests {
         let many: Vec<String> = (0..=MAX_PACKAGES).map(|i| format!("p{i}")).collect();
         assert!(check_requirements(&many).unwrap_err().contains("At most 32"));
         assert_eq!(check_requirements(&["pandas", "Pandas>=2", "numpy"]).unwrap(), ["pandas", "numpy"], "duplicates by name go");
+    }
+
+    #[test]
+    fn installed_versions_come_from_uv_and_pip_output() {
+        let uv =
+            "Resolved 7 packages in 386ms\nDownloading scipy (19.5MiB)\nInstalled 7 packages in 33ms\n + joblib==1.6.0\n + scikit-learn==1.9.1\n";
+        assert_eq!(installed_versions(uv), [("joblib".to_string(), "1.6.0".to_string()), ("scikit-learn".to_string(), "1.9.1".to_string())]);
+        let pip = "Collecting six\nInstalling collected packages: six, threadpoolctl\nSuccessfully installed six-1.17.0 threadpool_ctl-3.7.0\n";
+        assert_eq!(installed_versions(pip), [("six".to_string(), "1.17.0".to_string()), ("threadpool_ctl".to_string(), "3.7.0".to_string())]);
+        let already = "Requirement already satisfied: six>=1 in /e/lib/python3.14/site-packages (1.17.0)\n";
+        assert_eq!(installed_versions(already), [("six".to_string(), "1.17.0".to_string())]);
+        assert!(installed_versions("Audited 1 package in 2ms\n + \n+ x==\nSuccessfully installed\n").is_empty());
+        assert_eq!(norm(&env_root(Path::new("/e/bin/python")).unwrap()), "/e");
+        assert_eq!(norm(&env_root(Path::new("/c/envs/x/python")).unwrap()), "/c/envs/x");
     }
 
     #[test]

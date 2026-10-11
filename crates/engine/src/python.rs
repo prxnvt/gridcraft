@@ -37,8 +37,8 @@ pub const INIT_KEY: &str = "py_init";
 /// Changed cells on one sheet above which every reference to the sheet counts as changed.
 const MANY_CHANGES: usize = 20_000;
 
-/// One Python run, for `python.diagnostics`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// One Python run, or one package install, for `python.diagnostics`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PyRunLog {
     /// Increases with every run in the workbook.
@@ -47,7 +47,8 @@ pub struct PyRunLog {
     /// The cell (`A1`), or empty for the initialization code.
     pub cell: String,
     /// `ok`, `error`, `timeout`, `memory`, `stopped` (the worker stopped), `blocked`, `cycle` or
-    /// `refused` (the cell stopped the worker last time and hasn't changed since).
+    /// `refused` (the cell stopped the worker last time and hasn't changed since); for a package
+    /// install (no sheet or cell), `installed`, `installFailed` or `cancelled`.
     pub status: &'static str,
     pub ms: f64,
     pub stdout: String,
@@ -60,6 +61,20 @@ pub struct PyRunLog {
     pub count: u32,
     /// When the latest of them ended ([`crate::clock::now_ms`]).
     pub time_ms: f64,
+    /// A package install: the packages asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<String>,
+    /// A package install: the environment (folder or program) installed into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// A package install: one line saying how it ended ("Installed scikit-learn 1.9.1").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+/// The statuses of a package install's row.
+pub fn is_install_status(status: &str) -> bool {
+    matches!(status, "installed" | "installFailed" | "cancelled")
 }
 
 /// The Python workers and the work queued for them.
@@ -394,7 +409,9 @@ fn failure_status(kind: FailureKind) -> &'static str {
     }
 }
 
-pub(crate) fn push_log(d: &mut DocState, mut entry: PyRunLog) {
+/// Adds `entry` to the workbook's Diagnostics (numbered, timed, collapsed into the cell's last row when it
+/// ended the same way, and trimmed to [`LOG_LIMIT`]).
+pub fn push_log(d: &mut DocState, mut entry: PyRunLog) {
     d.py_log_seq = d.py_log_seq.saturating_add(1);
     entry.seq = d.py_log_seq;
     entry.time_ms = crate::clock::now_ms();
@@ -409,8 +426,17 @@ pub(crate) fn push_log(d: &mut DocState, mut entry: PyRunLog) {
         entry.count = prev.count.max(1).saturating_add(1);
     }
     d.py_log.push_back(entry);
+    // The oldest runs go first; install rows stay while there are runs to drop (installs are
+    // rare, and their row is the record of what changed in the environment).
     while d.py_log.len() > LOG_LIMIT {
-        d.py_log.pop_front();
+        match d.py_log.iter().position(|r| !is_install_status(r.status)) {
+            Some(i) => {
+                d.py_log.remove(i);
+            }
+            None => {
+                d.py_log.pop_front();
+            }
+        }
     }
 }
 
@@ -428,6 +454,7 @@ fn log_entry(wb: &Workbook, (si, c): Key, status: &'static str) -> PyRunLog {
         missing: None,
         count: 1,
         time_ms: 0.0,
+        ..PyRunLog::default()
     }
 }
 

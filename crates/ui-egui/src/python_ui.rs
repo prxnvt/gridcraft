@@ -94,8 +94,9 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
     for r in &runs {
         egui::Frame::NONE.fill(t.menu_bg).corner_radius(6.0).inner_margin(8.0).stroke(egui::Stroke::new(1.0, t.separator)).show(ui, |ui| {
             ui.set_width(ui.available_width());
+            let install = r.cell.is_empty() && gridcraft_engine::python::is_install_status(r.status);
             ui.horizontal(|ui| {
-                if r.cell.is_empty() && matches!(r.status, "installed" | "installFailed" | "cancelled") {
+                if install {
                     ui.label(RichText::new("Package install").strong());
                 } else if r.cell.is_empty() {
                     ui.label(RichText::new("Initialization").strong());
@@ -123,9 +124,14 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let age = ago(gridcraft_engine::clock::now_ms() - r.time_ms);
-                    ui.label(RichText::new(format!("{:.1} ms, {age}", r.ms)).color(t.text_dim).font(theme::ui_font(12.0)));
+                    let took = if install { format!("{:.1} s", r.ms / 1000.0) } else { format!("{:.1} ms", r.ms) };
+                    ui.label(RichText::new(format!("{took}, {age}")).color(t.text_dim).font(theme::ui_font(12.0)));
                 });
             });
+            if install {
+                install_row(ui, &t, r, &runs);
+                return;
+            }
             if let Some(e) = &r.error {
                 let text = match r.line {
                     Some(l) => format!("Line {l}: {e}"),
@@ -133,7 +139,18 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
                 };
                 ui.add(egui::Label::new(RichText::new(text).color(t.danger)).wrap());
             }
-            if let Some((label, params)) = install_offer(r)
+            // A package installed since this run isn't offered again.
+            let installed_since = |pkg: &str| {
+                let pkg = gridcraft_engine::pyenv::env::normalize(pkg);
+                runs.iter().any(|x| {
+                    x.status == "installed"
+                        && x.seq > r.seq
+                        && x.packages
+                            .iter()
+                            .any(|p| gridcraft_engine::pyenv::env::normalize(gridcraft_engine::pyenv::env::requirement_name(p)) == pkg)
+                })
+            };
+            if let Some((label, params)) = install_offer(r).filter(|_| !r.missing.as_deref().is_some_and(installed_since))
                 && ui.button(label).on_hover_text("Install the package that provides this module, after you approve").clicked()
             {
                 offer = Some(params);
@@ -157,6 +174,46 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
         }
         app.run_or_alert("selection.set", json!({"cell": cell}));
         app.grid.ensure_visible = true;
+    }
+}
+
+/// The body of a package install's row in Diagnostics: how it ended (with the versions), where
+/// it installed, whether cells still fail after it (for another reason), and the installer's
+/// output, folded.
+fn install_row(ui: &mut Ui, t: &Tokens, r: &gridcraft_engine::python::PyRunLog, runs: &[gridcraft_engine::python::PyRunLog]) {
+    let summary = r.summary.clone().or_else(|| r.error.clone()).unwrap_or_default();
+    let color = match r.status {
+        "installed" => t.text,
+        "installFailed" => t.danger,
+        _ => t.text_dim,
+    };
+    ui.add(egui::Label::new(RichText::new(summary).color(color).font(theme::ui_bold(12.5))).wrap());
+    if let Some(target) = &r.target {
+        ui.add(egui::Label::new(RichText::new(format!("Into {target}")).color(t.text_dim).font(theme::ui_font(12.0))).wrap());
+    }
+    if r.status == "installed" {
+        // Cells that failed after it, for a reason other than a missing module: the install
+        // itself worked.
+        let mut failing: Vec<String> = runs
+            .iter()
+            .filter(|x| x.seq > r.seq && !x.cell.is_empty() && x.status != "ok" && x.missing.is_none())
+            .map(|x| format!("{}!{}", gridcraft_engine::formula::quote_sheet(&x.sheet), x.cell))
+            .collect();
+        failing.dedup();
+        if !failing.is_empty() {
+            let shown = failing.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+            let more = if failing.len() > 3 { format!(" and {} more", failing.len() - 3) } else { String::new() };
+            let verb = if failing.len() == 1 { "still fails" } else { "still fail" };
+            let text = format!("The install worked. {shown}{more} {verb} for another reason: see their rows.");
+            ui.add(egui::Label::new(RichText::new(text).color(t.text_dim).font(theme::ui_font(12.0))).wrap());
+        }
+    }
+    if !r.stdout.trim().is_empty() {
+        egui::CollapsingHeader::new(RichText::new("Installer output").color(t.text_dim).font(theme::ui_font(11.5)))
+            .id_salt(("python.install.output", r.seq))
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(RichText::new(r.stdout.trim_end()).font(crate::code_editor::font()).color(t.text)).wrap());
+            });
     }
 }
 
@@ -477,17 +534,19 @@ pub fn busy_status(app: &mut SheetApp, ui: &mut Ui) {
     if app.session.python_busy() {
         ui.add_space(12.0);
         ui.add(egui::Spinner::new().size(12.0).color(t.text_dim));
-        let (text, tip) = if state == "running" {
+        let installing = state == "running";
+        let (text, tip) = if installing {
             let p = packages();
             let text = if p.is_empty() { "Making the Python environment…".to_string() } else { format!("Installing {p}…") };
-            (text, "Stop the install (Esc)")
+            (text, "Cancel the install (Esc)")
         } else {
             (app.ui.language.tr("Running Python…").to_string(), app.ui.language.tr("Stop the Python cells that are running (Esc)"))
         };
         let tip = tip.to_string();
-        ui.label(RichText::new(text).font(theme::ui_font(12.5)).color(t.text_dim));
-        let stop =
-            ui.add(egui::Button::new(RichText::new(app.ui.language.tr("Stop")).font(theme::ui_font(12.0)).color(t.text)).min_size(vec2(44.0, 18.0)));
+        // An install is the one thing running: its line is in the normal text colour.
+        ui.label(RichText::new(text).font(theme::ui_font(12.5)).color(if installing { t.text } else { t.text_dim }));
+        let label = if installing { "Cancel" } else { app.ui.language.tr("Stop") };
+        let stop = ui.add(egui::Button::new(RichText::new(label).font(theme::ui_font(12.0)).color(t.text)).min_size(vec2(44.0, 18.0)));
         if stop.on_hover_text(tip).clicked() {
             app.run_or_alert("python.stop", json!({}));
         }
@@ -497,7 +556,7 @@ pub fn busy_status(app: &mut SheetApp, ui: &mut Ui) {
         return;
     }
     // The result shows for 20 seconds from when it first appeared.
-    let message = install["message"].as_str().unwrap_or_default().to_string();
+    let message = install["summary"].as_str().or(install["message"].as_str()).unwrap_or_default().to_string();
     let key = egui::Id::new("python.install.shown").with(&message).with(&state);
     let now = ui.input(|i| i.time);
     let since: f64 = ui.ctx().data_mut(|m| *m.get_temp_mut_or_insert_with(key, || now));
@@ -512,6 +571,31 @@ pub fn busy_status(app: &mut SheetApp, ui: &mut Ui) {
     if r.on_hover_text(format!("{message}\nClick for Diagnostics")).clicked() {
         app.grid.pane = Some(PANE.into());
     }
+}
+
+/// The toast for a package install that ended since the last one shown: "Installed
+/// scikit-learn 1.9.1"; on failure the short reason and See Diagnostics; "Cancelled installing …".
+pub fn install_toast(app: &mut SheetApp) {
+    let ended = app.session.python_installs_ended();
+    if ended == app.installs_shown {
+        return;
+    }
+    app.installs_shown = ended;
+    let status = app.session.python_install_status();
+    let state = status["state"].as_str().unwrap_or_default();
+    if !matches!(state, "installed" | "installFailed" | "cancelled") {
+        return;
+    }
+    let text = status["summary"].as_str().or(status["message"].as_str()).unwrap_or("The install ended").to_string();
+    let at = crate::now_ms();
+    let failed = state == "installFailed";
+    app.toast = Some((text, at));
+    app.toast_extra = Some(crate::ToastExtra {
+        at,
+        ms: if failed { 15_000.0 } else { 6_000.0 },
+        danger: failed,
+        action: failed.then(|| ("See Diagnostics".to_string(), PANE.to_string())),
+    });
 }
 
 /// Opens the Install Python Packages dialog for `{packages: [pip names], declare?}`, or says
