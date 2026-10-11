@@ -360,6 +360,14 @@ impl Session {
         self.active = self.docs.len() - 1;
         self.active
     }
+    /// The only document is a new workbook nobody has changed (Book1 at start-up): opening a
+    /// file replaces it, as in Excel.
+    pub fn untouched_blank(&self) -> bool {
+        self.docs.len() == 1
+            && self
+                .active()
+                .is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
+    }
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
             let d = self.docs.remove(i);

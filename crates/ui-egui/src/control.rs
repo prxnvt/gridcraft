@@ -391,6 +391,16 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ok(Json::Null)
         }
+        "ui.close" => {
+            // Like the window's close button: unsaved changes are asked about first.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            ok(Json::Null)
+        }
+        // eframe draws a second window inside the first one's frame and never captures it: say so
+        // at once rather than time out.
+        "ui.screenshot" if ctx.viewport_id() != egui::ViewportId::ROOT => {
+            err("ui.screenshot captures the first window only; this request went to another window in front")
+        }
         "ui.screenshot" => return Outcome::Screenshot { path: s("path").map(str::to_string) },
         "app.open" => {
             let Some(path) = s("path") else { return err("missing `path`") };
@@ -402,9 +412,14 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
         "app.quit" => {
-            // Automation quits without asking.
+            // Automation quits without asking: every window when the host has several.
             app.quit_confirmed = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if app.multi_window {
+                app.quit_all_request = true;
+                app.quit_all_discard = true;
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             ok(Json::Null)
         }
         // Anything else that names a command runs it.

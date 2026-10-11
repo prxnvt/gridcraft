@@ -38,10 +38,18 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.pythonEditor` (through `engine.execute`) | `{cell?, sheet?, close?}` | Open the Python editor window on a cell (default: the active cell, or the Python cell being edited; a selected Python cell starts being edited in it); `close: true` closes it and keeps any edit. Replies `{open, sheet, cell, editing, dirty, python}`, which `ui.inspect` also reports as `pythonEditor` |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path) |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?}` | UI preferences |
-| `ui.resize` / `ui.focus` | `{width, height}` | Window control |
+| `ui.resize` / `ui.focus` / `ui.close` | `{width, height}` | Window control; `ui.close` closes the window like its close button (asking to save unsaved changes) |
 | `app.open` / `app.save` / `app.quit` | `{path}` / `{path?}` | Files and lifetime |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
+
+The desktop app can show several workbook windows in one process (File > New Workbook, Cmd+N,
+which `ui.key {key: "N", cmd: true}` also sends). The control channel belongs to the app and
+follows the window in front: requests act on, and `ui.screenshot` captures, that window. A new
+window comes to the front, so requests after Cmd+N go to it; when it closes, the channel moves to
+the window in front then. `app.quit` closes every window without asking about unsaved changes.
+`ui.screenshot` works only while the first window is in front: eframe draws the other windows
+inside the first one's frame and does not capture them, so the request fails at once there.
 
 `ui.inspect` reports the selected floating object as `selectedObject: {kind, id}` (or `null`),
 where `kind` is `chart`, `image`, `shape`, `equation` or `control`; the same names go in the

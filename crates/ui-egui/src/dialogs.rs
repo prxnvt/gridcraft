@@ -986,13 +986,16 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                 }
                 "quit" => {
-                    let names: Vec<String> = app.session.documents().iter().filter(|x| x.is_dirty()).map(|x| x.display_title()).collect();
+                    let names = app.unsaved_titles();
                     if names.is_empty() {
                         app.quit_confirmed = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         open = false;
                     } else {
-                        let what = if names.len() == 1 { format!("\u{201c}{}\u{201d}", names[0]) } else { format!("{} workbooks", names.len()) };
+                        let what = match names.as_slice() {
+                            [one] => format!("\u{201c}{one}\u{201d}"),
+                            _ => format!("{} workbooks", names.len()),
+                        };
                         ui.label(egui::RichText::new(format!("Do you want to save the changes you made to {what}?")).strong());
                         ui.label("Your changes will be lost if you don't save them.");
                         ui.horizontal(|ui| {
@@ -1005,7 +1008,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                                 open = false;
                             }
                             if ui.button("Save").clicked() {
-                                if app.save_all() {
+                                // An uncommitted Python edit is committed first, so it is saved
+                                // too (a refused commit keeps the window open with its message).
+                                let committed = !app.pending_python_edit() || app.commit_edit(0, 0, false, false);
+                                if committed && app.save_all() {
                                     app.quit_confirmed = true;
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 }

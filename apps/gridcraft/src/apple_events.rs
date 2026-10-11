@@ -10,7 +10,6 @@
 //! that leaves winit's delegate alone, behind a safe main-thread API.
 
 use fmv_macos_events::{Event, Inbox, Registration};
-use gridcraft_ui_egui::SheetApp;
 
 /// Keeps the Apple-event handlers registered; hold it until the event loop returns.
 pub struct AppleEvents {
@@ -26,7 +25,7 @@ impl AppleEvents {
         Self { _registration: registration, inbox }
     }
 
-    /// The queue the app drains every frame ([`poll`]); events arriving later wake `ctx`.
+    /// The queue the app drains every frame ([`take`]); events arriving later wake `ctx`.
     pub fn connect(&self, ctx: &egui::Context) -> Inbox {
         let ctx = ctx.clone();
         self.inbox.set_wake(move || ctx.request_repaint());
@@ -34,16 +33,24 @@ impl AppleEvents {
     }
 }
 
-/// Open the documents and act on the quit requests that arrived since the last frame.
-pub fn poll(inbox: &Inbox, app: &mut SheetApp, ctx: &egui::Context) {
+/// What Finder, the Dock or `open -a` asked for since the last frame.
+#[derive(Debug, Default, PartialEq)]
+pub struct Requests {
+    /// Documents to open, in order. The host decides which window each goes to.
+    pub open: Vec<String>,
+    /// Quit the app (the Dock's Quit, logging out), asking about unsaved changes.
+    pub quit: bool,
+}
+
+/// Drain the events that arrived since the last frame. Call once per frame for the whole app
+/// (not per window): every window shares the one inbox.
+pub fn take(inbox: &Inbox) -> Requests {
+    let mut r = Requests::default();
     for e in inbox.drain() {
         match e {
-            Event::Open(paths) => {
-                for p in paths.iter().filter_map(|p| p.to_str()) {
-                    app.open_path(p);
-                }
-            }
-            Event::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Event::Open(paths) => r.open.extend(paths.iter().filter_map(|p| p.to_str()).filter(|p| !p.is_empty()).map(str::to_string)),
+            Event::Quit => r.quit = true,
         }
     }
+    r
 }

@@ -210,6 +210,8 @@ pub struct SheetApp {
     pub new_window_request: bool,
     /// Cmd+Q: quit the whole app, asking about each window's unsaved changes (taken by the host).
     pub quit_all_request: bool,
+    /// With `quit_all_request`: automation quits every window without asking (`app.quit`).
+    pub quit_all_discard: bool,
 }
 
 /// A pending "replace it?" question from a command (see [`confirm_text`]).
@@ -286,6 +288,7 @@ impl SheetApp {
             multi_window: false,
             new_window_request: false,
             quit_all_request: false,
+            quit_all_discard: false,
         }
     }
 
@@ -312,7 +315,46 @@ impl SheetApp {
 
     /// Unsaved changes a close would lose (and the user has not yet said to discard them).
     pub fn has_unsaved(&self) -> bool {
-        !self.quit_confirmed && self.session.documents().iter().any(|d| d.is_dirty())
+        !self.quit_confirmed && !self.unsaved_titles().is_empty()
+    }
+
+    /// Workbooks a close would lose changes to: those with unsaved changes, and the one with a
+    /// Python edit that isn't committed yet (code typed in the formula bar or the Python editor
+    /// window can be long, so it counts as unsaved work; Save commits it first).
+    pub fn unsaved_titles(&self) -> Vec<String> {
+        let mut titles: Vec<String> = self.session.documents().iter().filter(|d| d.is_dirty()).map(|d| d.display_title()).collect();
+        if self.pending_python_edit()
+            && let Some(d) = self.session.active()
+            && !d.is_dirty()
+        {
+            titles.push(d.display_title());
+        }
+        titles
+    }
+
+    /// A Python cell's code is being edited and differs from what the cell holds.
+    pub fn pending_python_edit(&self) -> bool {
+        let Some(ed) = self.editor.as_ref().filter(|e| e.python) else { return false };
+        let stored = self
+            .session
+            .active()
+            .and_then(|d| d.wb.sheet(ed.sheet))
+            .and_then(|sh| sh.cell(ed.cell))
+            .and_then(|c| c.py.as_ref())
+            .map(|p| p.code.as_str())
+            .unwrap_or_default();
+        ed.text != stored
+    }
+
+    /// Nothing here but a new workbook nobody has changed (or no workbook at all): a document
+    /// opened from outside (Finder, the Dock) can take its place instead of opening a window.
+    pub fn is_blank(&self) -> bool {
+        self.editor.is_none() && (self.session.documents().is_empty() || self.session.untouched_blank())
+    }
+
+    /// The workbook at `path` is open here.
+    pub fn has_document(&self, path: &str) -> bool {
+        self.session.documents().iter().any(|d| d.path.as_deref() == Some(path))
     }
 
     /// Show the Save / Don't Save / Cancel prompt for closing this window.
@@ -898,7 +940,7 @@ impl SheetApp {
         // Formulas entered since the last frame, from any source, feed Recently Used.
         function_library::harvest(self);
         // Closing the window (or Cmd+Q) with unsaved changes asks first.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && self.session.documents().iter().any(|d| d.is_dirty()) {
+        if ctx.input(|i| i.viewport().close_requested()) && self.has_unsaved() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if self.dialog.as_ref().is_none_or(|d| d.name != "quit") {
                 self.open_dialog("quit", json!({}));

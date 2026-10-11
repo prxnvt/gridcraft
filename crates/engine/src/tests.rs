@@ -1646,3 +1646,26 @@ mod python_install;
 mod python_output;
 mod python_run;
 mod seams;
+
+#[test]
+fn untouched_blank_is_one_new_workbook_nobody_changed() {
+    let mut s = Session::new();
+    assert!(!s.untouched_blank());
+    s.new_workbook();
+    assert!(s.untouched_blank());
+    s.new_workbook();
+    assert!(!s.untouched_blank());
+    s.close_document(1);
+    assert!(s.untouched_blank());
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    assert!(!s.untouched_blank());
+    // Opening a file replaces only an untouched blank workbook.
+    let path = std::env::temp_dir().join(format!("gridcraft-untouched-{}.xlsx", std::process::id()));
+    let path = path.to_str().unwrap().to_string();
+    s.execute("file.save", json!({"path": path})).unwrap();
+    let mut t = Session::new();
+    t.new_workbook();
+    t.execute("file.open", json!({"path": path})).unwrap();
+    assert_eq!(t.documents().len(), 1);
+    let _ = std::fs::remove_file(&path);
+}

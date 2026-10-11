@@ -34,16 +34,32 @@ struct App {
     apple_events: fmv_macos_events::Inbox,
 }
 
+/// A new window's app, with the settings of `front` (the window in front) and no workbook yet.
+fn new_window_app(front: &SheetApp) -> SheetApp {
+    let mut session = Session::new();
+    session.prefs = front.session.prefs.clone();
+    let mut app = SheetApp::new(session, services());
+    app.ui = front.ui.clone();
+    app
+}
+
 impl App {
-    /// A new window with a new workbook (File › New, Cmd+N), with the settings of the window in front.
+    /// A new window with a new workbook (File › New, Cmd+N).
     fn open_window(&mut self, ctx: &egui::Context) {
-        let front = self.windows.front(&mut self.root);
-        let (ui, prefs) = (front.ui.clone(), front.session.prefs.clone());
-        let mut session = Session::new();
-        session.prefs = prefs;
-        session.new_workbook();
-        let mut app = SheetApp::new(session, services());
-        app.ui = ui;
+        let mut app = new_window_app(self.windows.front(&mut self.root));
+        app.session.new_workbook();
+        // Numbered after the new workbooks in every window (Book2 next to Book1), as in Excel.
+        let mut taken = Vec::new();
+        for id in self.windows.ids() {
+            if let Some(a) = self.windows.app(&mut self.root, id) {
+                taken.extend(a.session.documents().iter().filter(|d| d.path.is_none()).map(|d| d.title.clone()));
+            }
+        }
+        if let Some(n) = (1..=taken.len() + 1).find(|n| !taken.contains(&format!("Book{n}")))
+            && let Some(d) = app.session.active_mut()
+        {
+            d.title = format!("Book{n}");
+        }
         self.windows.open(ctx, app, window_builder());
     }
 }
@@ -51,6 +67,9 @@ impl App {
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let (mut new_windows, mut quit) = self.windows.take_requests();
+        // Automation acts on the window in front, like the menu bar does.
+        self.windows.route_control(&mut self.root);
+        self.windows.sync_shared(&mut self.root);
         #[cfg(target_os = "macos")]
         {
             if self.menu.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
@@ -58,7 +77,7 @@ impl eframe::App for App {
             }
             for id in self.menu.as_ref().map(native_menu::NativeMenu::take_events).unwrap_or_default() {
                 if id == "ui.quit" {
-                    quit = true;
+                    quit = windows::Quit::merge(quit, Some(windows::Quit::Ask));
                 } else if id == "file.close" {
                     // Cmd+W closes the window (asking to save), as in other Mac apps.
                     self.windows.close_front(ctx);
@@ -69,17 +88,22 @@ impl eframe::App for App {
             if let Some(menu) = &self.menu {
                 menu.sync(self.windows.front(&mut self.root));
             }
-            apple_events::poll(&self.apple_events, self.windows.front(&mut self.root), ctx);
+            // Once per app: the inbox is shared by every window.
+            let requests = apple_events::take(&self.apple_events);
+            self.windows.open_documents(ctx, &mut self.root, &requests.open, new_window_app, window_builder);
+            if requests.quit {
+                quit = windows::Quit::merge(quit, Some(windows::Quit::Ask));
+            }
         }
         self.root.logic(ctx);
         // Requests made by the menu run above or the root window this frame.
         new_windows += usize::from(std::mem::take(&mut self.root.new_window_request));
-        quit |= std::mem::take(&mut self.root.quit_all_request);
+        quit = windows::Quit::merge(quit, windows::Quit::take(&mut self.root));
         for _ in 0..new_windows {
             self.open_window(ctx);
         }
-        if quit {
-            self.windows.quit();
+        if let Some(how) = quit {
+            self.windows.quit(how, &mut self.root);
         }
         self.windows.root_logic(ctx, &mut self.root);
     }
