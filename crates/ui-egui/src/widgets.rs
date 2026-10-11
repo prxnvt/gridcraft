@@ -93,6 +93,8 @@ pub fn big_button_accent(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label
     }
     icons::paint_accent(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text, accent);
     paint_big_label(ui, rect, &lines, dropdown);
+    let name = label.replace('\n', " ");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -156,6 +158,8 @@ pub fn small_button_accent(ui: &mut Ui, icon: Icon, accent: Option<Color32>, lab
             t.text_dim,
         );
     }
+    let name = if label.is_empty() { tr(ui, tip) } else { label };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
     resp.on_hover_text(tr(ui, tip))
 }
 

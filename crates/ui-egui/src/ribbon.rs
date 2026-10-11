@@ -7,7 +7,7 @@ use serde_json::json;
 use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -1502,6 +1502,7 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn formulas(app: &mut SheetApp, ui: &mut Ui) {
+    let mut fold = Fold::plan(ui.ctx());
     if kt(app, big_button(ui, Icon::Function, "Insert\nFunction", "Insert Function (⇧F3)", false), "MF").clicked() {
         app.open_dialog("insertFunction", json!({}));
     }
@@ -1539,6 +1540,8 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             });
         });
     }
+    sep(ui);
+    collapsible(app, ui, &mut fold, "python", Icon::Python, "Python", "MY", python_group, python_menu);
     sep(ui);
     if kt(app, big_button(ui, Icon::Name, "Name\nManager", "Name Manager", false), "MN").clicked() {
         app.open_dialog("nameManager", json!({}));
@@ -1596,18 +1599,19 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         app.grid.pane = Some("watch".into());
     }
     sep(ui);
+    collapsible(app, ui, &mut fold, "calculation", Icon::Calc, "Calculation", "MX", calculation_group, calculation_menu);
+    fold.store(ui.ctx());
+}
+
+const CALCULATION_MODES: [(&str, &str, &str); 3] = [
+    ("Automatic", "formulas.calculationOptions", "automatic"),
+    ("Automatic Except for Data Tables", "formulas.calculationOptions", "automaticExceptTables"),
+    ("Manual", "formulas.calculationOptions", "manual"),
+];
+
+fn calculation_group(app: &mut SheetApp, ui: &mut Ui) {
     let co = kt(app, big_button(ui, Icon::Calc, "Calculation\nOptions", "Calculation Options", true), "MX");
-    egui::Popup::menu(&co).show(|ui| {
-        menu_items(
-            app,
-            ui,
-            &[
-                ("Automatic", "formulas.calculationOptions", json!({"mode": "automatic"})),
-                ("Automatic Except for Data Tables", "formulas.calculationOptions", json!({"mode": "automaticExceptTables"})),
-                ("Manual", "formulas.calculationOptions", json!({"mode": "manual"})),
-            ],
-        );
-    });
+    egui::Popup::menu(&co).show(|ui| calculation_modes(app, ui));
     ui.vertical(|ui| {
         if kt(app, small_button(ui, Icon::Calc, "Calculate Now", "Calculate Now (F9)", false), "MB").clicked() {
             act(app, "formulas.calculateNow", json!({}));
@@ -1617,6 +1621,186 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
 }
+
+fn calculation_modes(app: &mut SheetApp, ui: &mut Ui) {
+    let items: Vec<(&str, &str, serde_json::Value)> = CALCULATION_MODES.iter().map(|(l, id, m)| (*l, *id, json!({"mode": m}))).collect();
+    menu_items(app, ui, &items);
+}
+
+/// The Calculation group folded into one button: the modes, then Calculate Now and Sheet.
+fn calculation_menu(app: &mut SheetApp, ui: &mut Ui) {
+    calculation_modes(app, ui);
+    ui.separator();
+    menu_items(app, ui, &[("Calculate Now", "formulas.calculateNow", json!({})), ("Calculate Sheet", "formulas.calculateSheet", json!({}))]);
+}
+
+/// Width of a group folded into one button.
+const FOLDED_WIDTH: f32 = 64.0;
+
+/// Groups that fold into one dropdown button when the tab is wider than the ribbon card (as the
+/// window narrows), in the order they fold. Their expanded widths are remembered so the decision
+/// doesn't flip from frame to frame.
+#[derive(Clone, Debug, Default)]
+struct Fold {
+    /// The pass these were measured in.
+    pass: u64,
+    widths: Vec<(&'static str, f32)>,
+    folded: Vec<&'static str>,
+    /// What folds this pass.
+    plan: Vec<&'static str>,
+}
+
+impl Fold {
+    const ORDER: [&'static str; 2] = ["calculation", "python"];
+
+    fn id() -> egui::Id {
+        egui::Id::new("ribbon.formulas.fold")
+    }
+
+    /// Decides which groups fold, from last pass's measurements (taken only if the Formulas tab
+    /// was showing then).
+    fn plan(ctx: &egui::Context) -> Fold {
+        let last: Fold = ctx.data(|d| d.get_temp(Self::id())).unwrap_or_default();
+        let fresh = last.pass.saturating_add(1) == ctx.cumulative_pass_nr();
+        let o = RibbonOverflow::get(ctx);
+        let width = |g: &str| last.widths.iter().find(|(n, _)| *n == g).map(|(_, w)| *w);
+        let mut plan = Vec::new();
+        if fresh && o.visible > 0.0 {
+            // The tab's width with every group expanded.
+            let full = o.content + last.folded.iter().filter_map(|g| width(g)).map(|w| (w - FOLDED_WIDTH).max(0.0)).sum::<f32>();
+            let mut saved = 0.0;
+            for g in Self::ORDER {
+                if full - saved <= o.visible + 0.5 {
+                    break;
+                }
+                if let Some(w) = width(g) {
+                    plan.push(g);
+                    saved += (w - FOLDED_WIDTH).max(0.0);
+                }
+            }
+        }
+        Fold { pass: ctx.cumulative_pass_nr(), widths: last.widths, folded: Vec::new(), plan }
+    }
+
+    fn store(mut self, ctx: &egui::Context) {
+        self.folded = std::mem::take(&mut self.plan);
+        ctx.data_mut(|d| d.insert_temp(Self::id(), self));
+    }
+}
+
+/// A group that folds into a big dropdown button named `label` when [`Fold`] says so; `menu`
+/// lists its commands then.
+#[allow(clippy::too_many_arguments)]
+fn collapsible(
+    app: &mut SheetApp,
+    ui: &mut Ui,
+    fold: &mut Fold,
+    key: &'static str,
+    icon: Icon,
+    label: &str,
+    keytip: &str,
+    group: fn(&mut SheetApp, &mut Ui),
+    menu: fn(&mut SheetApp, &mut Ui),
+) {
+    if fold.plan.contains(&key) {
+        let r = kt(app, big_button(ui, icon, label, label, true), keytip);
+        egui::Popup::menu(&r).show(|ui| menu(app, ui));
+        return;
+    }
+    let w = ui.scope(|ui| group(app, ui)).response.rect.width();
+    fold.widths.retain(|(n, _)| *n != key);
+    fold.widths.push((key, w));
+}
+
+/// Formulas › Python: a big Insert Python split button, then Reset and Diagnostics as labelled
+/// small buttons.
+fn python_group(app: &mut SheetApp, ui: &mut Ui) {
+    let accent = Some(Tokens::get(ui.ctx()).cat(Cat::Green));
+    let (main, arrow) = big_split_button(ui, Icon::Python, accent, "Insert\nPython", "Insert Python (Ctrl+Alt+Shift+P)");
+    if main.clicked() {
+        app.begin_python_edit();
+    }
+    let arrow = kt(app, arrow, "MY");
+    egui::Popup::menu(&arrow).show(|ui| {
+        let item = |ui: &mut Ui, label: &str| ui.add(egui::Button::new(label).frame(false).min_size(vec2(220.0, 22.0))).clicked();
+        if item(ui, "Python Cell") {
+            app.begin_python_edit();
+        }
+        if item(ui, "Insert xl() Reference") {
+            app.point_python();
+        }
+        ui.separator();
+        if item(ui, "Initialization…") {
+            app.open_dialog("pythonInitialization", json!({}));
+        }
+        if item(ui, "Python in GridCraft") {
+            app.message = Some(("Python in GridCraft".into(), PYTHON_HELP.into()));
+        }
+    });
+    ui.vertical(|ui| {
+        let (reset, menu) = small_split_button(ui, Icon::Reset, None, "Reset", "Reset Runtime: start Python afresh and run every Python cell again");
+        if reset.clicked() {
+            act(app, "python.reset", json!({}));
+        }
+        let menu = kt(app, menu, "MZ");
+        egui::Popup::menu(&menu).show(|ui| {
+            menu_items(
+                app,
+                ui,
+                &[("Reset Runtime", "python.reset", json!({})), ("Reset and Clear Diagnostics", "python.reset", json!({"clearDiagnostics": true}))],
+            );
+            ui.separator();
+            let busy = app.session.python_busy();
+            let stop = ui.add_enabled(busy, egui::Button::new("Stop (Esc)").frame(false).min_size(vec2(220.0, 22.0)));
+            if stop.clicked() {
+                act(app, "python.stop", json!({}));
+            }
+        });
+        let diagnostics =
+            kt(app, small_button(ui, Icon::Diagnostics, "Diagnostics", "Python Diagnostics: every run, its output and errors", false), "M1");
+        if diagnostics.clicked() {
+            app.grid.pane = Some("pythonDiagnostics".into());
+        }
+    });
+}
+
+/// The Python group folded into one button.
+fn python_menu(app: &mut SheetApp, ui: &mut Ui) {
+    let item = |ui: &mut Ui, label: &str| ui.add(egui::Button::new(label).frame(false).min_size(vec2(220.0, 22.0))).clicked();
+    if item(ui, "Insert Python") {
+        app.begin_python_edit();
+    }
+    if item(ui, "Insert xl() Reference") {
+        app.point_python();
+    }
+    if item(ui, "Initialization…") {
+        app.open_dialog("pythonInitialization", json!({}));
+    }
+    ui.separator();
+    menu_items(
+        app,
+        ui,
+        &[("Reset Runtime", "python.reset", json!({})), ("Reset and Clear Diagnostics", "python.reset", json!({"clearDiagnostics": true}))],
+    );
+    let stop = ui.add_enabled(app.session.python_busy(), egui::Button::new("Stop (Esc)").frame(false).min_size(vec2(220.0, 22.0)));
+    if stop.clicked() {
+        act(app, "python.stop", json!({}));
+    }
+    if item(ui, "Diagnostics") {
+        app.grid.pane = Some("pythonDiagnostics".into());
+    }
+    ui.separator();
+    if item(ui, "Python in GridCraft") {
+        app.message = Some(("Python in GridCraft".into(), PYTHON_HELP.into()));
+    }
+}
+
+const PYTHON_HELP: &str = "A Python cell holds Python code instead of a formula. Type =PY and press Tab, press Ctrl+Alt+Shift+P, or choose Insert Python. \
+In Python mode, Enter starts a new line and Ctrl+Enter (Cmd+Enter on a Mac) puts the code in the cell. \
+xl(\"A1:B5\") reads cells (press F2, then click or drag on the sheet to insert one); headers=True gives a list of dicts. \
+The last expression is the cell's result: a list or a list of lists spills into the cells around it. \
+Python cells share one namespace and run in order, row by row and sheet by sheet. \
+Python runs in a sandbox with no file or network access, and each cell may run for 5 seconds. Esc stops cells that are running.";
 
 fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
