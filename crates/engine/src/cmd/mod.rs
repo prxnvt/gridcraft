@@ -18,6 +18,7 @@ pub mod sheet;
 pub mod solver;
 pub mod solver_report;
 pub mod spelling;
+pub mod stash;
 pub mod view;
 pub mod whatif;
 

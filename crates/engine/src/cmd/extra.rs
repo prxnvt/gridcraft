@@ -561,38 +561,24 @@ fn set_view(s: &mut Session, mode: &str) -> Result<Json> {
     Ok(json!({"view": mode}))
 }
 
-const VIEWS_NAME: &str = "_sc_custom_views";
-const SCRIPTS_NAME: &str = "_sc_scripts";
-const WATCH_NAME: &str = "_sc_watch";
+/// Keys of the workbook data kept in hidden names (see `stash`).
+const VIEWS_KEY: &str = "custom_views";
+const SCRIPTS_KEY: &str = "scripts";
+const WATCH_KEY: &str = "watch";
 
-/// Workbook-level JSON stored in a hidden defined name (round-trips through XLSX).
+/// A JSON object or list stored in the workbook (`{}` when there is none).
 fn stash_get(wb: &Workbook, key: &str) -> Json {
-    wb.names
-        .iter()
-        .find(|n| n.name == key)
-        .and_then(|n| n.formula.strip_prefix('"').and_then(|t| t.strip_suffix('"')).map(|t| t.replace("\"\"", "\"")))
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or(json!({}))
-}
-
-fn stash_set(wb: &mut Workbook, key: &str, v: &Json) {
-    let text = v.to_string();
-    let formula = format!("\"{}\"", text.replace('"', "\"\""));
-    wb.names.retain(|n| n.name != key);
-    wb.names.push(DefinedName { name: key.into(), scope: None, formula, comment: String::new(), hidden: true });
+    super::stash::get_json(wb, key).unwrap_or(json!({}))
 }
 
 fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
-    let mut views = stash_get(&d.wb, VIEWS_NAME);
+    let mut views = stash_get(&d.wb, VIEWS_KEY);
     if let Some(name) = str_param(p, "save") {
         let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
         views[name] = json!({"sheet": d.wb.active_sheet, "selection": d.selection.a1(), "zoom": sh.zoom, "freeze": sh.freeze});
         let v = views.clone();
-        edit(s, |cx| {
-            stash_set(&mut cx.wb, VIEWS_NAME, &v);
-            Ok(())
-        })?;
+        edit(s, |cx| super::stash::set_json(&mut cx.wb, VIEWS_KEY, &v))?;
     } else if let Some(name) = str_param(p, "show") {
         let v = views.get(name).cloned().ok_or_else(|| bad("view.customViews", "no such view"))?;
         if let Some(si) = v["sheet"].as_u64() {
@@ -609,12 +595,9 @@ fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {
             o.remove(name);
         }
         let v = views.clone();
-        edit(s, |cx| {
-            stash_set(&mut cx.wb, VIEWS_NAME, &v);
-            Ok(())
-        })?;
+        edit(s, |cx| super::stash::set_json(&mut cx.wb, VIEWS_KEY, &v))?;
     }
-    Ok(stash_get(&s.doc()?.wb, VIEWS_NAME))
+    Ok(stash_get(&s.doc()?.wb, VIEWS_KEY))
 }
 
 fn split(s: &mut Session, _: &Json) -> Result<Json> {
@@ -783,7 +766,7 @@ fn queries(s: &mut Session, _: &Json) -> Result<Json> {
 fn record(s: &mut Session, p: &Json) -> Result<Json> {
     if bool_param(p, "stop").unwrap_or(false) || s.is_recording() {
         let Some(rec) = s.stop_recording() else { return Ok(json!({"recording": false})) };
-        let scripts = stash_get(&s.doc()?.wb, SCRIPTS_NAME);
+        let scripts = stash_get(&s.doc()?.wb, SCRIPTS_KEY);
         let mut cmds: Vec<Json> = Vec::new();
         for st in &rec.steps {
             if st.id == "automate.runScript" {
@@ -815,15 +798,15 @@ fn new_script(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("automate.newScript", "`commands` must be an array"));
     }
     edit(s, |cx| {
-        let mut all = stash_get(&cx.wb, SCRIPTS_NAME);
+        let mut all = stash_get(&cx.wb, SCRIPTS_KEY);
         all[name.as_str()] = cmds.clone();
-        stash_set(&mut cx.wb, SCRIPTS_NAME, &all);
+        super::stash::set_json(&mut cx.wb, SCRIPTS_KEY, &all)?;
         Ok(json!({"name": name}))
     })
 }
 
 fn all_scripts(s: &mut Session, _: &Json) -> Result<Json> {
-    let all = stash_get(&s.doc()?.wb, SCRIPTS_NAME);
+    let all = stash_get(&s.doc()?.wb, SCRIPTS_KEY);
     Ok(Json::Array(
         all.as_object().map(|o| o.iter().map(|(k, v)| json!({"name": k, "steps": v.as_array().map_or(0, Vec::len)})).collect()).unwrap_or_default(),
     ))
@@ -831,7 +814,7 @@ fn all_scripts(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("automate.runScript", "missing `name`"))?;
-    let all = stash_get(&s.doc()?.wb, SCRIPTS_NAME);
+    let all = stash_get(&s.doc()?.wb, SCRIPTS_KEY);
     let steps = all.get(name).and_then(Json::as_array).cloned().ok_or_else(|| bad("automate.runScript", "no such script"))?;
     // One undo step for the whole run; a failing step rolls back the steps before it.
     s.grouped(&format!("Run Script: {name}"), |s| {
@@ -851,11 +834,11 @@ fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
 fn delete_script(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("automate.deleteScript", "missing `name`"))?.to_string();
     edit(s, |cx| {
-        let mut all = stash_get(&cx.wb, SCRIPTS_NAME);
+        let mut all = stash_get(&cx.wb, SCRIPTS_KEY);
         if let Some(o) = all.as_object_mut() {
             o.remove(&name);
         }
-        stash_set(&mut cx.wb, SCRIPTS_NAME, &all);
+        super::stash::set_json(&mut cx.wb, SCRIPTS_KEY, &all)?;
         Ok(Json::Null)
     })
 }
@@ -995,7 +978,7 @@ fn use_in_formula(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
     let mut list: Vec<String> =
-        stash_get(&s.doc()?.wb, WATCH_NAME).as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        stash_get(&s.doc()?.wb, WATCH_KEY).as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
     let mut changed = false;
     if let Some(a) = str_param(p, "add") {
         if !list.iter().any(|x| x == a) {
@@ -1012,7 +995,7 @@ fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
         let d = s.doc_mut()?;
         // The watch list is view state: don't add an undo step.
         let wb = std::sync::Arc::make_mut(&mut d.wb);
-        stash_set(wb, WATCH_NAME, &v);
+        super::stash::set_json(wb, WATCH_KEY, &v)?;
     }
     let d = s.doc()?;
     let rows: Vec<Json> = list

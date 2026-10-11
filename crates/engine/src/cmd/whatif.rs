@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{Cell, DefinedName, StyleId, Workbook};
+use gridcraft_model::{Cell, StyleId, Workbook};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
@@ -317,8 +317,8 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- scenarios
 
-/// Hidden workbook-scope name holding the scenarios as a quoted JSON string.
-pub(crate) const SCENARIO_NAME: &str = "_sc_scenarios";
+/// The scenarios are kept as JSON in the workbook (see `stash`).
+pub(crate) const SCENARIO_KEY: &str = "scenarios";
 const MAX_SCENARIO_CELLS: usize = 32;
 const MAX_SCENARIOS: usize = 1000;
 
@@ -333,56 +333,16 @@ pub(crate) struct Scenario {
 }
 
 pub(crate) fn load_scenarios(wb: &Workbook) -> Vec<Scenario> {
-    let Some(n) = wb.names.iter().find(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(SCENARIO_NAME)) else { return vec![] };
-    serde_json::from_str(&string_literals(&n.formula)).unwrap_or_default()
+    super::stash::get(wb, SCENARIO_KEY).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
-/// Concatenates the string literals of a `"a"&"b""c"` formula.
-pub(crate) fn string_literals(f: &str) -> String {
-    let mut out = String::new();
-    let mut it = f.chars().peekable();
-    let mut in_str = false;
-    while let Some(c) = it.next() {
-        if !in_str {
-            if c == '"' {
-                in_str = true;
-            }
-            continue;
-        }
-        if c == '"' {
-            if it.peek() == Some(&'"') {
-                it.next();
-                out.push('"');
-            } else {
-                in_str = false;
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-fn store_scenarios(wb: &mut Workbook, list: &[Scenario]) {
-    wb.names.retain(|n| !(n.scope.is_none() && n.name.eq_ignore_ascii_case(SCENARIO_NAME)));
+fn store_scenarios(wb: &mut Workbook, list: &[Scenario]) -> Result<()> {
     if list.is_empty() {
-        return;
+        super::stash::remove(wb, SCENARIO_KEY);
+        return Ok(());
     }
-    let text = serde_json::to_string(list).unwrap_or_else(|_| "[]".into());
-    wb.names.push(DefinedName {
-        name: SCENARIO_NAME.into(),
-        scope: None,
-        // Excel caps string literals at 255 characters: store `"…"&"…"` chunks.
-        formula: text
-            .chars()
-            .collect::<Vec<char>>()
-            .chunks(250)
-            .map(|c| format!("\"{}\"", c.iter().collect::<String>().replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join("&"),
-        comment: "GridCraft Scenario Manager data".into(),
-        hidden: true,
-    });
+    let text = serde_json::to_string(list).map_err(|e| EngineError::Other(e.to_string()))?;
+    super::stash::set(wb, SCENARIO_KEY, &text)
 }
 
 fn scenario_json(sc: &Scenario) -> Json {
@@ -438,7 +398,7 @@ fn scenario_add(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     edit(s, |cx| {
-        store_scenarios(&mut cx.wb, &list);
+        store_scenarios(&mut cx.wb, &list)?;
         Ok(())
     })?;
     Ok(scenario_json(&sc))
@@ -486,7 +446,7 @@ fn scenario_delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (mut list, i) = find_scenario(&d.wb, p, "data.scenarioDelete")?;
     let removed = list.remove(i);
     edit(s, |cx| {
-        store_scenarios(&mut cx.wb, &list);
+        store_scenarios(&mut cx.wb, &list)?;
         Ok(())
     })?;
     Ok(json!({"deleted": removed.name}))
@@ -1180,11 +1140,11 @@ mod tests {
         assert_eq!(n(&s, "B10"), 200.0);
         // Stored in a hidden workbook name.
         let d = s.doc().unwrap();
-        assert!(d.wb.names.iter().any(|n| n.name == super::SCENARIO_NAME && n.hidden));
+        assert!(d.wb.names.iter().any(|n| n.name == "_gc_scenarios_0" && n.hidden));
         assert_eq!(super::load_scenarios(&d.wb).len(), 2);
-        // Long data is split into 250-character literals and survives an xlsx round trip.
+        // Long data is split into 255-character literals and survives an xlsx round trip.
         s.execute("data.scenarioAdd", json!({"name": "Long", "changing": "B2", "values": [1], "comment": "x".repeat(600)})).unwrap();
-        let f = s.doc().unwrap().wb.names.iter().find(|n| n.name == super::SCENARIO_NAME).unwrap().formula.clone();
+        let f = s.doc().unwrap().wb.names.iter().find(|n| n.name == "_gc_scenarios_0").unwrap().formula.clone();
         assert!(f.matches("\"&\"").count() >= 2, "{f}");
         let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
         s.execute("file.open", json!({"name": "sc.xlsx", "base64": b64})).unwrap();
@@ -1207,7 +1167,7 @@ mod tests {
         s.execute("data.scenarioDelete", json!({"name": "Best"})).unwrap();
         assert_eq!(s.execute("data.scenarioManager", json!({})).unwrap()["scenarios"].as_array().unwrap().len(), 1);
         s.execute("data.scenarioDelete", json!({"name": "Base"})).unwrap();
-        assert!(s.doc().unwrap().wb.names.iter().all(|n| n.name != super::SCENARIO_NAME));
+        assert!(s.doc().unwrap().wb.names.iter().all(|n| n.name != "_gc_scenarios_0"));
         assert!(s.execute("data.scenarioSummary", json!({})).is_err());
     }
 

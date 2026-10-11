@@ -113,7 +113,7 @@ pub fn enforce_limits(wb: &mut Workbook, limits: &LoadLimits) -> Vec<String> {
     let mut dropped = Vec::new();
     let mut stash_len: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for n in &wb.names {
-        if let Some(key) = stash_key(&n.name) {
+        if let Some(key) = crate::cmd::stash::item_key(&n.name) {
             let len = stash_len.entry(key).or_default();
             *len = len.saturating_add(n.formula.chars().count());
         }
@@ -124,7 +124,7 @@ pub fn enforce_limits(wb: &mut Workbook, limits: &LoadLimits) -> Vec<String> {
     macros.sort();
     let extra_macros: std::collections::HashSet<String> = macros.into_iter().skip(limits.macros).map(|(_, k)| k).collect();
     wb.names.retain(|n| {
-        let keep = match stash_key(&n.name) {
+        let keep = match crate::cmd::stash::item_key(&n.name) {
             Some(key) => !too_big.contains(&key) && !extra_macros.contains(&key),
             None => n.formula.chars().count() <= limits.name_formula_len && nesting(&n.formula) <= limits.formula_nesting,
         };
@@ -145,7 +145,7 @@ pub fn enforce_limits(wb: &mut Workbook, limits: &LoadLimits) -> Vec<String> {
             limits.stash_len / (1024 * 1024)
         ));
     }
-    let plain: Vec<&String> = dropped.iter().filter(|n| stash_key(n).is_none()).collect();
+    let plain: Vec<&String> = dropped.iter().filter(|n| crate::cmd::stash::item_key(n).is_none()).collect();
     if let Some(first) = plain.first() {
         let more = if plain.len() > 1 { format!(" and {} more", plain.len() - 1) } else { String::new() };
         warnings.push(format!(
@@ -173,8 +173,7 @@ fn formula_problem(text: &str, limits: &LoadLimits) -> Option<Over> {
     }
     let body = text.trim_start().trim_start_matches('=');
     let body = body.strip_prefix("_xlfn.").unwrap_or(body);
-    if body.get(..3).is_some_and(|h| h.eq_ignore_ascii_case("PY(")) && crate::cmd::whatif::string_literals(body).chars().count() > limits.python_code
-    {
+    if body.get(..3).is_some_and(|h| h.eq_ignore_ascii_case("PY(")) && crate::cmd::stash::string_literals(body).chars().count() > limits.python_code {
         return Some(Over::Python);
     }
     None
@@ -197,16 +196,6 @@ fn nesting(f: &str) -> usize {
         }
     }
     max
-}
-
-/// The GridCraft data item a hidden name belongs to: `_gc_<key>_<k>` → `<key>`, `_sc_<key>` → `<key>`.
-fn stash_key(name: &str) -> Option<String> {
-    let lower = name.to_ascii_lowercase();
-    if let Some(rest) = lower.strip_prefix("_gc_") {
-        let (key, k) = rest.rsplit_once('_')?;
-        return (!key.is_empty() && !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit())).then(|| key.to_string());
-    }
-    lower.strip_prefix("_sc_").filter(|k| !k.is_empty()).map(str::to_string)
 }
 
 fn thousands(n: usize) -> String {
