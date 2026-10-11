@@ -418,6 +418,8 @@ pub enum ShapeKind {
     /// A freehand ink stroke; `Shape::text` holds the points as `x,y;x,y;…` relative to the
     /// anchor (sheet points), `Shape::line` the ink colour and `fill` unused.
     Ink,
+    /// An equation; `Shape::text` holds its LaTeX source.
+    Equation,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -428,6 +430,264 @@ pub struct Shape {
     pub fill: Color,
     pub line: Color,
     pub text: String,
+    /// An equation's layout, rebuilt from `text` and never saved.
+    #[serde(skip)]
+    pub math: EquationCache,
+}
+
+/// The laid-out form of an equation's LaTeX source. It is derived data: rebuilt by
+/// [`EquationCache::refresh`] whenever the source changes, never saved, and ignored when shapes
+/// are compared. Painters read it and never lay equations out themselves, so nothing in a paint
+/// path can reach the layout engine.
+#[derive(Clone, Debug, Default)]
+pub struct EquationCache {
+    /// A hash of the source the layout was built from.
+    key: u64,
+    layout: Option<Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>>,
+}
+
+impl PartialEq for EquationCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+fn source_key(src: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    h.finish()
+}
+
+impl EquationCache {
+    /// The layout of `src`, or why it has none; `None` until [`EquationCache::refresh`] has run
+    /// for this source.
+    pub fn get(&self, src: &str) -> Option<Result<&gridcraft_math::MathList, &gridcraft_math::MathError>> {
+        if self.key != source_key(src) {
+            return None;
+        }
+        self.layout.as_ref().map(|r| r.as_ref().map(|l| l.as_ref()))
+    }
+
+    /// Lays `src` out again unless the cache already holds its layout. True when it did.
+    pub fn refresh(&mut self, src: &str) -> bool {
+        let key = source_key(src);
+        if self.layout.is_some() && self.key == key {
+            return false;
+        }
+        self.key = key;
+        self.layout = Some(gridcraft_math::layout(src).map(std::sync::Arc::new));
+        true
+    }
+}
+
+/// What a form control on the sheet is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ControlKind {
+    #[default]
+    Button,
+    Slider,
+    Spin,
+}
+
+impl ControlKind {
+    /// The kind's name in the window: Button, Slider, Spin Button.
+    pub fn label(self) -> &'static str {
+        match self {
+            ControlKind::Button => "Button",
+            ControlKind::Slider => "Slider",
+            ControlKind::Spin => "Spin Button",
+        }
+    }
+}
+
+/// The largest value a slider or spin button takes (Excel's scroll bar limit). Values are whole
+/// numbers from 0 to this.
+pub const CONTROL_MAX: u32 = 30_000;
+
+/// What a button runs when it is pressed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ControlAction {
+    /// Runs a macro of the workbook on `input`, optionally sending its output to `output`.
+    Macro {
+        name: String,
+        #[serde(default)]
+        input: MacroInput,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// Runs one GridCraft command with fixed parameters.
+    Command {
+        id: String,
+        #[serde(default)]
+        params: serde_json::Value,
+    },
+}
+
+/// The range a button's macro runs on.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MacroInput {
+    /// The selection when the button is pressed.
+    #[default]
+    Selection,
+    /// Always this range (`B2:D9` or `Data!B2:D9`).
+    Fixed(String),
+}
+
+/// A form control (button, slider, spin button) floating over the sheet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FormControl {
+    pub id: u32,
+    pub kind: ControlKind,
+    pub anchor: Anchor,
+    /// The name shown in the Selection Pane (`Button 3`); empty means the kind and id.
+    pub name: String,
+    /// The caption of a button.
+    pub text: String,
+    /// The linked cell as reference text: `$B$2` on the control's own sheet, or `Sheet2!$B$2`.
+    /// Structural edits rewrite it like a formula reference.
+    pub link: Option<String>,
+    /// The current value of a slider or spin button (the linked cell holds it too).
+    pub value: u32,
+    pub min: u32,
+    pub max: u32,
+    /// Incremental change: one arrow click or arrow key.
+    pub step: u32,
+    /// Page change (sliders): a click on the track, or Page Up / Page Down.
+    pub page: u32,
+    /// A slider lies horizontally (false: vertically).
+    pub horizontal: bool,
+    /// What a button runs.
+    pub action: Option<ControlAction>,
+    /// Printed with the sheet.
+    pub print: bool,
+    /// Locked when the sheet is protected.
+    pub locked: bool,
+}
+
+impl Default for FormControl {
+    fn default() -> Self {
+        FormControl {
+            id: 0,
+            kind: ControlKind::default(),
+            anchor: Anchor::default(),
+            name: String::new(),
+            text: String::new(),
+            link: None,
+            value: 0,
+            min: 0,
+            max: 100,
+            step: 1,
+            page: 10,
+            horizontal: true,
+            action: None,
+            print: true,
+            locked: true,
+        }
+    }
+}
+
+impl FormControl {
+    /// The name shown for the control: its own, else `Button 3`, `Slider 4`, `Spin Button 5`.
+    pub fn display_name(&self) -> String {
+        if self.name.trim().is_empty() { format!("{} {}", self.kind.label(), self.id) } else { self.name.clone() }
+    }
+
+    /// Checks the numbers of a slider or spin button: 0 ≤ min < max ≤ 30000, 1 ≤ step ≤ max − min,
+    /// and (sliders) page ≥ step. Each rule has its own message.
+    pub fn check_numbers(&self) -> Result<(), String> {
+        if self.kind == ControlKind::Button {
+            return Ok(());
+        }
+        if self.max > CONTROL_MAX {
+            return Err(format!("Maximum value can be at most {CONTROL_MAX}."));
+        }
+        if self.min > CONTROL_MAX {
+            return Err(format!("Minimum value must be a whole number from 0 to {CONTROL_MAX}."));
+        }
+        if self.min >= self.max {
+            return Err(format!("Maximum value ({}) must be greater than Minimum value ({}).", self.max, self.min));
+        }
+        if self.step < 1 {
+            return Err("Incremental change must be at least 1.".into());
+        }
+        let span = self.max - self.min;
+        if self.step > span {
+            return Err(format!("Incremental change ({}) can be at most Maximum minus Minimum ({span}).", self.step));
+        }
+        if self.kind == ControlKind::Slider {
+            if self.page < self.step {
+                return Err(format!("Page change ({}) must be at least the incremental change ({}).", self.page, self.step));
+            }
+            if self.page > CONTROL_MAX {
+                return Err(format!("Page change can be at most {CONTROL_MAX}."));
+            }
+        }
+        Ok(())
+    }
+
+    /// `v` clamped to min..max and snapped to the nearest step from min (max stays reachable).
+    pub fn snap(&self, v: f64) -> u32 {
+        let (min, max) = (self.min.min(CONTROL_MAX), self.max.min(CONTROL_MAX).max(self.min.min(CONTROL_MAX)));
+        if !v.is_finite() || v <= min as f64 {
+            return min;
+        }
+        if v >= max as f64 {
+            return max;
+        }
+        let step = self.step.max(1) as f64;
+        let snapped = (min as f64 + ((v - min as f64) / step).round() * step).clamp(min as f64, max as f64);
+        // When the step doesn't divide the range, the maximum is a stop of its own.
+        if (max as f64 - v).abs() < (snapped - v).abs() { max } else { snapped as u32 }
+    }
+}
+
+/// The kinds of floating object a sheet holds. Equations are stored as shapes
+/// ([`ShapeKind::Equation`]) but select, open and delete as their own kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjKind {
+    Chart,
+    Image,
+    Shape,
+    Equation,
+    Control,
+}
+
+impl ObjKind {
+    pub const ALL: [ObjKind; 5] = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Equation, ObjKind::Control];
+
+    /// The name used in command parameters (`{kind: "chart", id}`).
+    pub fn name(self) -> &'static str {
+        match self {
+            ObjKind::Chart => "chart",
+            ObjKind::Image => "image",
+            ObjKind::Shape => "shape",
+            ObjKind::Equation => "equation",
+            ObjKind::Control => "control",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ObjKind> {
+        ObjKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
+    }
+}
+
+/// One floating object on a sheet: its kind and its workbook-unique id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjRef {
+    pub kind: ObjKind,
+    pub id: u32,
+}
+
+impl ObjRef {
+    pub fn new(kind: ObjKind, id: u32) -> ObjRef {
+        ObjRef { kind, id }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -574,6 +834,88 @@ pub struct LineInfo {
     pub custom: bool,
 }
 
+// ---------------------------------------------------------------- data tables
+
+/// A What-If data table (`{=TABLE(row_input, column_input)}`). The range's top row and left
+/// column are its edges: input values along one or both, formulas along the other (or, for a
+/// two-variable table, one formula in the top-left corner). The rest is the body, whose cells
+/// hold the formulas' results with each input value substituted. Input cells are on the same
+/// sheet, outside the range.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataTable {
+    pub range: RangeRef,
+    /// Receives the values across the top row.
+    pub row_input: Option<CellRef>,
+    /// Receives the values down the left column.
+    pub col_input: Option<CellRef>,
+}
+
+/// One substitution of a data table: set each `(input, value_cell)` input to the value in
+/// `value_cell`, then copy each `(formula, out)` formula result into `out`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableTrial {
+    pub inputs: Vec<(CellRef, CellRef)>,
+    pub outputs: Vec<(CellRef, CellRef)>,
+}
+
+impl DataTable {
+    /// The results area (the range without its top row and left column).
+    pub fn body(&self) -> Option<RangeRef> {
+        let r = self.range;
+        (r.height() >= 2 && r.width() >= 2).then(|| RangeRef::new(CellRef::new(r.start.row + 1, r.start.col + 1), r.end))
+    }
+
+    /// Whether `c` is on the top row or left column (the cells the results depend on).
+    pub fn is_edge(&self, c: CellRef) -> bool {
+        self.range.contains(c) && (c.row == self.range.start.row || c.col == self.range.start.col)
+    }
+
+    /// The edge cells: top row and left column.
+    pub fn edges(&self) -> Vec<CellRef> {
+        let r = self.range;
+        let mut v: Vec<CellRef> = (r.start.col..=r.end.col).map(|c| CellRef::new(r.start.row, c)).collect();
+        v.extend((r.start.row + 1..=r.end.row).map(|row| CellRef::new(row, r.start.col)));
+        v
+    }
+
+    /// The `{=TABLE(…)}` text shown for body cells (absolute input references, blank when absent).
+    pub fn formula_text(&self) -> String {
+        let a = |c: Option<CellRef>| c.map(|c| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1)).unwrap_or_default();
+        format!("TABLE({},{})", a(self.row_input), a(self.col_input))
+    }
+
+    /// The trials that fill the body, grouped so each substitution is computed once.
+    pub fn trials(&self) -> Vec<TableTrial> {
+        let Some(body) = self.body() else { return vec![] };
+        let (r0, c0) = (self.range.start.row, self.range.start.col);
+        match (self.row_input, self.col_input) {
+            // Values down the left column, formulas across the top row.
+            (None, Some(ci)) => (body.start.row..=body.end.row)
+                .map(|row| TableTrial {
+                    inputs: vec![(ci, CellRef::new(row, c0))],
+                    outputs: (body.start.col..=body.end.col).map(|col| (CellRef::new(r0, col), CellRef::new(row, col))).collect(),
+                })
+                .collect(),
+            // Values across the top row, formulas down the left column.
+            (Some(ri), None) => (body.start.col..=body.end.col)
+                .map(|col| TableTrial {
+                    inputs: vec![(ri, CellRef::new(r0, col))],
+                    outputs: (body.start.row..=body.end.row).map(|row| (CellRef::new(row, c0), CellRef::new(row, col))).collect(),
+                })
+                .collect(),
+            // One formula in the corner; every body cell is its own trial.
+            (Some(ri), Some(ci)) => body
+                .iter()
+                .map(|c| TableTrial {
+                    inputs: vec![(ri, CellRef::new(r0, c.col)), (ci, CellRef::new(c.row, c0))],
+                    outputs: vec![(CellRef::new(r0, c0), c)],
+                })
+                .collect(),
+            (None, None) => vec![],
+        }
+    }
+}
+
 // ---------------------------------------------------------------- pivot tables
 
 /// How a PivotTable lays out its row fields.
@@ -606,6 +948,46 @@ pub enum PivotDateGroup {
     Quarters,
     Months,
     Days,
+    Hours,
+    Minutes,
+    Seconds,
+}
+
+/// Grouping of a number field into ranges (Group › By).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PivotNumberGroup {
+    pub start: f64,
+    pub end: f64,
+    pub by: f64,
+}
+
+/// One manual group: a name and the items in it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotNamedGroup {
+    pub name: String,
+    pub items: Vec<String>,
+}
+
+/// A field made by grouping selected items of `base` (Group Selection): its items are the
+/// group names, and the ungrouped items as they are. Named like Excel's ("Region2").
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotManualGroup {
+    pub name: String,
+    pub base: String,
+    pub groups: Vec<PivotNamedGroup>,
+}
+
+/// A row or column field's subtotals (Field Settings › Subtotals).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PivotSubtotals {
+    /// One subtotal per value field with its own function (when the PivotTable shows subtotals).
+    #[default]
+    Automatic,
+    None,
+    /// One subtotal line per function.
+    Custom(Vec<PivotFunc>),
 }
 
 /// A field placed in the Rows or Columns area.
@@ -618,6 +1000,115 @@ pub struct PivotField {
     pub date_group: PivotDateGroup,
     /// Item labels whose detail is hidden (collapsed).
     pub collapsed_items: Vec<String>,
+    /// Custom name shown in headers (Field Settings › Custom Name).
+    pub caption: Option<String>,
+    pub subtotals: PivotSubtotals,
+    /// Repeat the item labels on every row (outline and tabular forms).
+    pub repeat_labels: bool,
+    /// Insert a blank line after each item.
+    pub blank_line: bool,
+    /// Show items that have no data under every parent.
+    pub show_empty: bool,
+    /// Insert a page break after each item (printing).
+    pub page_break: bool,
+    /// Days grouping: number of days per group (0 or 1 = each day).
+    pub group_days: u32,
+    /// Grouping bounds (Starting at / Ending at); values outside fall into "<start" / ">end".
+    pub group_start: Option<f64>,
+    pub group_end: Option<f64>,
+    pub number_group: Option<PivotNumberGroup>,
+}
+
+impl PivotField {
+    /// The name shown in headers.
+    pub fn shown_name(&self) -> &str {
+        self.caption.as_deref().filter(|c| !c.is_empty()).unwrap_or(&self.source_col)
+    }
+}
+
+/// PivotTable Options (and the Design tab's style options).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PivotOptions {
+    /// Layout & Format.
+    pub merge_labels: bool,
+    /// Compact form indent, in characters.
+    pub indent: u8,
+    /// Report filters: over, then down (else down, then over).
+    pub filters_over_then_down: bool,
+    /// Report filter fields per column (row); 0 = all in one.
+    pub filters_per_column: u32,
+    pub error_text: Option<String>,
+    pub empty_text: Option<String>,
+    pub autofit: bool,
+    pub preserve_formatting: bool,
+    /// Totals & Filters.
+    pub multiple_filters: bool,
+    pub custom_list_sort: bool,
+    /// Display.
+    pub expand_buttons: bool,
+    pub contextual_tooltips: bool,
+    pub classic_layout: bool,
+    pub show_values_row: bool,
+    pub empty_rows: bool,
+    pub empty_columns: bool,
+    pub field_list_az: bool,
+    pub row_header_caption: Option<String>,
+    pub column_header_caption: Option<String>,
+    /// Printing.
+    pub print_buttons: bool,
+    pub repeat_row_labels: bool,
+    pub print_titles: bool,
+    /// Data.
+    pub save_data: bool,
+    pub enable_drilldown: bool,
+    pub refresh_on_open: bool,
+    /// Alt Text.
+    pub alt_title: String,
+    pub alt_description: String,
+    /// Design › PivotTable Style Options.
+    pub row_headers: bool,
+    pub column_headers: bool,
+    pub banded_rows: bool,
+    pub banded_columns: bool,
+}
+
+impl Default for PivotOptions {
+    fn default() -> Self {
+        PivotOptions {
+            merge_labels: false,
+            indent: 1,
+            filters_over_then_down: false,
+            filters_per_column: 0,
+            error_text: None,
+            empty_text: None,
+            autofit: true,
+            preserve_formatting: true,
+            multiple_filters: false,
+            custom_list_sort: true,
+            expand_buttons: true,
+            contextual_tooltips: true,
+            classic_layout: false,
+            show_values_row: true,
+            empty_rows: false,
+            empty_columns: false,
+            field_list_az: false,
+            row_header_caption: None,
+            column_header_caption: None,
+            print_buttons: false,
+            repeat_row_labels: true,
+            print_titles: false,
+            save_data: true,
+            enable_drilldown: true,
+            refresh_on_open: false,
+            alt_title: String::new(),
+            alt_description: String::new(),
+            row_headers: true,
+            column_headers: true,
+            banded_rows: false,
+            banded_columns: false,
+        }
+    }
 }
 
 /// Summarize-values-by function.
@@ -645,11 +1136,69 @@ pub enum PivotShowAs {
     PercentOfGrandTotal,
     PercentOfColumnTotal,
     PercentOfRowTotal,
-    /// Running total in the first row field.
+    /// Running total in the base field (the first row field when none is given).
     RunningTotal,
-    /// Rank largest to smallest among sibling row items.
+    /// Rank largest to smallest among the base field's items.
     Rank,
+    /// As a percentage of the base field's base item.
+    PercentOf,
+    /// As a percentage of the parent row (the row one level up).
+    PercentOfParentRowTotal,
+    /// As a percentage of the parent column.
+    PercentOfParentColumnTotal,
+    /// As a percentage of the total of the base field's item that contains it.
+    PercentOfParentTotal,
+    /// Minus the base field's base item.
+    DifferenceFrom,
+    /// (value − base item) / base item.
+    PercentDifferenceFrom,
+    /// Running total in the base field, as a percentage of the field's total.
+    PercentRunningTotal,
+    /// Rank smallest to largest among the base field's items.
+    RankAscending,
+    /// (value × grand total) / (row total × column total).
+    Index,
 }
+
+impl PivotShowAs {
+    /// Whether the transform needs a base field.
+    pub fn needs_base_field(self) -> bool {
+        matches!(
+            self,
+            PivotShowAs::RunningTotal
+                | PivotShowAs::PercentRunningTotal
+                | PivotShowAs::Rank
+                | PivotShowAs::RankAscending
+                | PivotShowAs::PercentOf
+                | PivotShowAs::PercentOfParentTotal
+                | PivotShowAs::DifferenceFrom
+                | PivotShowAs::PercentDifferenceFrom
+        )
+    }
+    /// Whether it also needs a base item.
+    pub fn needs_base_item(self) -> bool {
+        matches!(self, PivotShowAs::PercentOf | PivotShowAs::DifferenceFrom | PivotShowAs::PercentDifferenceFrom)
+    }
+    /// Whether the result is a percentage.
+    pub fn is_percent(self) -> bool {
+        matches!(
+            self,
+            PivotShowAs::PercentOfGrandTotal
+                | PivotShowAs::PercentOfColumnTotal
+                | PivotShowAs::PercentOfRowTotal
+                | PivotShowAs::PercentOf
+                | PivotShowAs::PercentOfParentRowTotal
+                | PivotShowAs::PercentOfParentColumnTotal
+                | PivotShowAs::PercentOfParentTotal
+                | PivotShowAs::PercentDifferenceFrom
+                | PivotShowAs::PercentRunningTotal
+        )
+    }
+}
+
+/// A base item that means the previous / next item of the base field.
+pub const BASE_PREVIOUS: &str = "(previous)";
+pub const BASE_NEXT: &str = "(next)";
 
 /// A field in the Values area.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -661,6 +1210,102 @@ pub struct PivotValue {
     pub name: String,
     pub show_as: PivotShowAs,
     pub number_format: Option<String>,
+    /// Show Values As base field (source column name).
+    pub base_field: Option<String>,
+    /// Show Values As base item: an item label, [`BASE_PREVIOUS`] or [`BASE_NEXT`].
+    pub base_item: Option<String>,
+}
+
+/// A comparison in a label or value filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PivotCompare {
+    Equals,
+    NotEquals,
+    BeginsWith,
+    NotBeginsWith,
+    EndsWith,
+    NotEndsWith,
+    Contains,
+    NotContains,
+    Greater,
+    GreaterOrEqual,
+    Less,
+    LessOrEqual,
+    Between,
+    NotBetween,
+}
+
+/// What a Top 10 filter counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PivotTopBy {
+    Items,
+    Percent,
+    Sum,
+}
+
+/// A date filter's condition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PivotDateRule {
+    Equals,
+    NotEquals,
+    Before,
+    After,
+    Between,
+    Tomorrow,
+    Today,
+    Yesterday,
+    NextWeek,
+    ThisWeek,
+    LastWeek,
+    NextMonth,
+    ThisMonth,
+    LastMonth,
+    NextQuarter,
+    ThisQuarter,
+    LastQuarter,
+    NextYear,
+    ThisYear,
+    LastYear,
+    YearToDate,
+    /// Quarter 1–4 of any year.
+    Quarter(u8),
+    /// Month 1–12 of any year.
+    Month(u8),
+}
+
+/// A filter rule on a row or column field.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PivotRule {
+    /// On item labels.
+    Label { op: PivotCompare, value: String, value2: String },
+    /// On item dates (the field's values).
+    Date { rule: PivotDateRule, value: Option<f64>, value2: Option<f64> },
+    /// On each item's total of a value field.
+    Value { op: PivotCompare, field: String, value: f64, value2: f64 },
+    /// The top or bottom items by a value field.
+    Top { top: bool, count: f64, by: PivotTopBy, field: String },
+}
+
+/// A calculated field: a formula over the sums of other fields.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotCalcField {
+    pub name: String,
+    /// As typed, with `=`; fields by name (`'Unit Price'` when quoted).
+    pub formula: String,
+}
+
+/// A calculated item: a new item of a field, a formula over its other items.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotCalcItem {
+    pub field: String,
+    pub name: String,
+    pub formula: String,
 }
 
 /// A report filter (or, for a field also in Rows/Columns, its hidden-items filter).
@@ -670,6 +1315,10 @@ pub struct PivotFilter {
     pub source_col: String,
     /// Item labels shown; `None` = all.
     pub selected: Option<Vec<String>>,
+    /// Label or date filter.
+    pub label: Option<PivotRule>,
+    /// Value or Top 10 filter.
+    pub value: Option<PivotRule>,
 }
 
 /// A PivotTable: its definition plus where its output was last written. The output itself is
@@ -699,6 +1348,15 @@ pub struct PivotTable {
     pub show_headers: bool,
     /// Area written by the last refresh.
     pub last_range: Option<RangeRef>,
+    pub options: PivotOptions,
+    /// Fields made by grouping selected items.
+    pub manual_groups: Vec<PivotManualGroup>,
+    pub calc_fields: Vec<PivotCalcField>,
+    /// In solve order.
+    pub calc_items: Vec<PivotCalcItem>,
+    /// Cells with a field button, from the last refresh (not saved).
+    #[serde(skip)]
+    pub buttons: Vec<(CellRef, String)>,
 }
 
 impl Default for PivotTable {
@@ -720,6 +1378,359 @@ impl Default for PivotTable {
             style: "PivotStyleLight16".into(),
             show_headers: true,
             last_range: None,
+            options: PivotOptions::default(),
+            manual_groups: vec![],
+            calc_fields: vec![],
+            calc_items: vec![],
+            buttons: vec![],
+        }
+    }
+}
+
+// ---------------------------------------------------------------- macros
+
+/// The macro format version written by this build.
+pub const MACRO_VERSION: u32 = 1;
+/// The most macros a workbook keeps.
+pub const MAX_MACROS: usize = 1_000;
+/// The most steps in one macro, counting the steps inside Repeat and If.
+pub const MAX_MACRO_STEPS: usize = 10_000;
+/// How deeply Repeat and If may nest (a top-level step is at depth 1).
+pub const MAX_MACRO_DEPTH: usize = 4;
+/// The longest macro, input or step name, and the longest description or note.
+pub const MAX_MACRO_NAME: usize = 255;
+pub const MAX_MACRO_TEXT: usize = 4_096;
+
+/// A recorded or hand-made macro: a list of typed steps that runs as one undo step. Most steps run
+/// a GridCraft command; Repeat, If and Stop add bounded control flow. References in step
+/// parameters can be tokens (`"Input.col(2)"`) that are resolved against the declared inputs when
+/// the macro runs, so a macro recorded on one block of data works on another.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Macro {
+    /// Format version ([`MACRO_VERSION`]).
+    pub v: u32,
+    pub name: String,
+    pub description: String,
+    /// Keyboard shortcut (`Ctrl+Shift+M`), checked for collisions by the UI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortcut: Option<String>,
+    /// The ranges the macro works on, checked before it runs.
+    pub inputs: Vec<NamedInput>,
+    pub steps: Vec<Step>,
+    /// Where results go and what to do when they would land on existing data.
+    pub output: OutputRule,
+    /// Commands that need permission (reading or writing files) which the macro may run.
+    pub permissions: Vec<String>,
+}
+
+impl Default for Macro {
+    fn default() -> Self {
+        Macro {
+            v: MACRO_VERSION,
+            name: String::new(),
+            description: String::new(),
+            shortcut: None,
+            inputs: vec![],
+            steps: vec![],
+            output: OutputRule::default(),
+            permissions: vec![],
+        }
+    }
+}
+
+impl Macro {
+    /// Steps in the macro, counting those inside Repeat and If.
+    pub fn step_count(&self) -> usize {
+        fn count(steps: &[Step]) -> usize {
+            steps.iter().map(|s| 1usize.saturating_add(s.kind.children().map(|b| count(b)).sum::<usize>())).sum()
+        }
+        count(&self.steps)
+    }
+
+    /// Checks the size limits ([`MAX_MACRO_STEPS`], [`MAX_MACRO_DEPTH`], name and text lengths).
+    pub fn check_limits(&self) -> Result<(), String> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err("A macro needs a name.".into());
+        }
+        if name.chars().count() > MAX_MACRO_NAME {
+            return Err(format!("A macro name can be at most {MAX_MACRO_NAME} characters long."));
+        }
+        if self.description.chars().count() > MAX_MACRO_TEXT {
+            return Err(format!("A macro description can be at most {MAX_MACRO_TEXT} characters long."));
+        }
+        // Count without recursing past the depth limit (a hostile file can nest deeper).
+        fn walk(steps: &[Step], level: usize, count: &mut usize) -> Result<(), String> {
+            if level > MAX_MACRO_DEPTH {
+                return Err(format!("Repeat and If steps can nest at most {MAX_MACRO_DEPTH} deep."));
+            }
+            for s in steps {
+                *count = count.saturating_add(1);
+                if *count > MAX_MACRO_STEPS {
+                    return Err(format!("A macro can have at most {MAX_MACRO_STEPS} steps."));
+                }
+                if s.note.chars().count() > MAX_MACRO_TEXT {
+                    return Err(format!("A step note can be at most {MAX_MACRO_TEXT} characters long."));
+                }
+                for body in s.kind.children() {
+                    walk(body, level + 1, count)?;
+                }
+            }
+            Ok(())
+        }
+        walk(&self.steps, 1, &mut 0)?;
+        if self.inputs.len() > 64 {
+            return Err("A macro can declare at most 64 inputs.".into());
+        }
+        for (k, i) in self.inputs.iter().enumerate() {
+            let n = i.name.as_str();
+            let ident = n.chars().next().is_some_and(char::is_alphabetic) && n.chars().all(|c| c.is_alphanumeric() || c == '_');
+            if !ident || n.chars().count() > MAX_MACRO_NAME {
+                return Err(format!("“{n}” can't name an input: use letters, digits and _, starting with a letter."));
+            }
+            if ["Output", "Row", "Column", "Name"].iter().any(|r| r.eq_ignore_ascii_case(n)) {
+                return Err(format!("“{n}” is a token of its own and can't name an input."));
+            }
+            if self.inputs.iter().take(k).any(|o| o.name.eq_ignore_ascii_case(n)) {
+                return Err(format!("Two inputs are called “{n}”."));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A range the macro works on, with the shape and content it expects.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NamedInput {
+    /// The token that stands for it in step parameters (`Input`, `Rates`).
+    pub name: String,
+    pub kind: InputKind,
+    /// Allowed data rows (header excluded), `[min, max]`; a max of 0 means no limit.
+    pub rows: [u32; 2],
+    /// Allowed columns, `[min, max]`; a max of 0 means no limit.
+    pub cols: [u32; 2],
+    /// The first row holds column names.
+    pub header: bool,
+    /// What each column must hold, first column first; columns past the list may hold anything.
+    pub col_types: Vec<ColType>,
+    /// Every data cell must have something in it.
+    pub non_empty: bool,
+    /// The range used when a run doesn't name one (else the current selection, for the first input).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_ref: Option<String>,
+}
+
+impl Default for NamedInput {
+    fn default() -> Self {
+        NamedInput {
+            name: "Input".into(),
+            kind: InputKind::Range,
+            rows: [1, 0],
+            cols: [1, 0],
+            header: false,
+            col_types: vec![],
+            non_empty: false,
+            default_ref: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InputKind {
+    /// A single cell.
+    Cell,
+    #[default]
+    Range,
+}
+
+/// What a column of an input must hold. Empty cells pass unless the input is `non_empty`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColType {
+    Number,
+    Text,
+    /// A number shown with a date or time format.
+    Date,
+    Bool,
+    #[default]
+    Any,
+}
+
+impl ColType {
+    /// The plural noun used in messages ("must hold numbers").
+    pub fn noun(self) -> &'static str {
+        match self {
+            ColType::Number => "numbers",
+            ColType::Text => "text",
+            ColType::Date => "dates",
+            ColType::Bool => "TRUE or FALSE",
+            ColType::Any => "anything",
+        }
+    }
+}
+
+/// One macro step and its editor flags.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Step {
+    #[serde(flatten)]
+    pub kind: StepKind,
+    /// A disabled step is skipped.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub enabled: bool,
+    /// The debugger stops before this step.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub breakpoint: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+fn yes() -> bool {
+    true
+}
+fn is_true(b: &bool) -> bool {
+    *b
+}
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl Step {
+    pub fn new(kind: StepKind) -> Step {
+        Step { kind, enabled: true, breakpoint: false, note: String::new() }
+    }
+
+    /// A step that runs command `id` with `params`.
+    pub fn command(id: impl Into<String>, params: serde_json::Value) -> Step {
+        Step::new(StepKind::Command { id: id.into(), params })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum StepKind {
+    /// Runs a GridCraft command. String parameters may hold tokens, resolved when the step runs.
+    Command {
+        id: String,
+        #[serde(default)]
+        params: serde_json::Value,
+    },
+    /// Runs `body` once for each row (or column) of the range `over`, a token or reference; inside
+    /// it, `Row` (or `Column`) stands for the current one. At most `max` times.
+    Repeat {
+        over: String,
+        #[serde(default)]
+        of: RepeatOf,
+        #[serde(default = "repeat_max")]
+        max: u32,
+        #[serde(default)]
+        body: Vec<Step>,
+    },
+    /// Compares the value of `cell` (a token or reference to one cell) with `value` and runs
+    /// `then` or `else`.
+    If {
+        cell: String,
+        op: CompareOp,
+        #[serde(default)]
+        value: serde_json::Value,
+        #[serde(default)]
+        then: Vec<Step>,
+        #[serde(default, rename = "else")]
+        otherwise: Vec<Step>,
+    },
+    /// Ends the run with a message. The changes made so far are kept, or undone with `rollback`.
+    Stop {
+        #[serde(default)]
+        message: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        rollback: bool,
+    },
+}
+
+fn repeat_max() -> u32 {
+    10_000
+}
+
+impl StepKind {
+    /// The step lists inside this step (Repeat's body, If's branches).
+    pub fn children(&self) -> impl Iterator<Item = &Vec<Step>> {
+        let (a, b) = match self {
+            StepKind::Repeat { body, .. } => (Some(body), None),
+            StepKind::If { then, otherwise, .. } => (Some(then), Some(otherwise)),
+            _ => (None, None),
+        };
+        a.into_iter().chain(b)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepeatOf {
+    #[default]
+    Rows,
+    Columns,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompareOp {
+    Eq,
+    Ne,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    /// The cell is empty (`value` is ignored).
+    Empty,
+    NotEmpty,
+    /// The cell's text contains `value`'s text, ignoring case.
+    Contains,
+}
+
+/// Where a macro's results go.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OutputRule {
+    /// What the `Output` token stands for: a token (`Input.offset(0,4)`), a reference or `Name:X`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+    /// What to do when the cells the macro writes, outside its inputs, already hold data.
+    pub on_conflict: OnConflict,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OnConflict {
+    /// Ask first: overwrite, shift the data down or right, or cancel. Programmatic runs fail.
+    #[default]
+    Ask,
+    Fail,
+    Overwrite,
+    ShiftDown,
+    ShiftRight,
+}
+
+impl OnConflict {
+    pub fn parse(s: &str) -> Option<OnConflict> {
+        Some(match s.to_ascii_lowercase().replace(['_', '-', ' '], "").as_str() {
+            "ask" => OnConflict::Ask,
+            "fail" | "cancel" => OnConflict::Fail,
+            "overwrite" => OnConflict::Overwrite,
+            "shiftdown" => OnConflict::ShiftDown,
+            "shiftright" => OnConflict::ShiftRight,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OnConflict::Ask => "ask",
+            OnConflict::Fail => "fail",
+            OnConflict::Overwrite => "overwrite",
+            OnConflict::ShiftDown => "shiftDown",
+            OnConflict::ShiftRight => "shiftRight",
         }
     }
 }

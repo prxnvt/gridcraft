@@ -1633,3 +1633,16 @@ fn notes_comments_and_links_survive_a_json_save() {
     assert_eq!(after.hyperlinks, before.hyperlinks);
     assert_eq!(after.cells, before.cells);
 }
+
+mod controls;
+mod equation;
+mod macros;
+mod objects;
+mod python_cells;
+mod python_commands;
+mod python_diagnostics;
+mod python_files;
+mod python_install;
+mod python_output;
+mod python_run;
+mod seams;

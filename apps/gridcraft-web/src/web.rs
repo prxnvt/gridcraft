@@ -9,6 +9,8 @@ const LOADING_ID: &str = "gridcraft_loading";
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
+    // The engine's time limits (Solver's Max Time) need a clock; std has none in the browser.
+    gridcraft_engine::clock::set_clock(js_sys::Date::now);
     wasm_bindgen_futures::spawn_local(async {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");

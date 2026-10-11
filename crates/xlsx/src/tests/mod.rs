@@ -1,7 +1,9 @@
 //! Integration-style tests: round trips, hand-written fixtures, hostile input and CSV.
 
 mod array_export;
+mod controls_tests;
 mod csv_tests;
+mod equation_tests;
 mod fixtures;
 mod malformed;
 mod ods_tests;

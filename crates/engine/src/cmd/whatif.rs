@@ -8,13 +8,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gridcraft_calc::Calc;
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, Cell, DefinedName, Sheet, StyleId, Workbook};
+use gridcraft_model::{Cell, StyleId, Workbook};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
 use super::*;
+use crate::report::{self, OutputKind, RStyle, Report, Target};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -61,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Data Table…",
             ["Data", "Forecast", "What-If Analysis"],
             None,
-            "{range: \"D2:E10\", rowInput?: \"B1\", columnInput?: \"B2\"} one-variable (values down the first column with columnInput, or across the top row with rowInput; formulas in the other edge) or two-variable (formula in the top-left corner). Computes every result by substitution and writes static values (a snapshot, not a live {=TABLE()}); ≤100,000 cells.",
+            "{range: \"D2:E10\", rowInput?: \"B1\", columnInput?: \"B2\"} creates a live data table ({=TABLE(rowInput,columnInput)}): one-variable (values down the first column with columnInput, or across the top row with rowInput; formulas along the other edge) or two-variable (formula in the top-left corner). Input cells are on the table's sheet, outside it. Results recalculate with the workbook (not in Automatic Except for Data Tables mode until F9); ≤100,000 result cells.",
             has_doc,
             data_table
         ),
@@ -180,34 +180,11 @@ fn value_json(v: &Value) -> Json {
 
 // ---------------------------------------------------------------- trials
 
-/// Evaluates a workbook with some input cells replaced, without touching the document.
-pub(crate) struct Trial {
-    base: Workbook,
-    calc: Calc,
-}
+/// What-if trials (shared with data tables and Solver).
+pub(crate) use gridcraft_calc::Trial;
 
-impl Trial {
-    pub(crate) fn new(d: &DocState) -> Trial {
-        let mut base = (*d.wb).clone();
-        // What-if analysis always recalculates, even in manual mode.
-        base.calc.mode = CalcMode::Automatic;
-        Trial { base, calc: d.calc.clone() }
-    }
-
-    /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
-    pub(crate) fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Vec<Value> {
-        let mut wb = self.base.clone();
-        let mut keys = Vec::with_capacity(sets.len());
-        for (si, c, v) in sets {
-            if let Some(sh) = wb.sheet_mut(*si) {
-                let style = sh.style_id(*c);
-                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style });
-                keys.push((*si, *c));
-            }
-        }
-        self.calc.cells_changed(&mut wb, &keys);
-        reads.iter().map(|(si, c)| wb.sheet(*si).map(|s| s.value(*c)).unwrap_or_default()).collect()
-    }
+fn trial(d: &DocState) -> Trial {
+    Trial::new(&d.wb, &d.calc)
 }
 
 // ---------------------------------------------------------------- goal seek
@@ -322,7 +299,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let x0 = d.wb.sheet(csi).map(|sh| sh.value(chg)).and_then(|v| v.as_f64()).unwrap_or(0.0);
     let (max_iter, tol) = (d.wb.calc.max_iterations, d.wb.calc.max_change);
-    let mut trial = Trial::new(d);
+    let mut trial = trial(d);
     let mut f = |x: f64| -> f64 {
         trial.run(&[(csi, chg, Value::number(x))], &[(ssi, set)]).first().and_then(Value::as_f64).map(|v| v - target).unwrap_or(f64::NAN)
     };
@@ -330,7 +307,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(csi)?;
         let style = sh.style_id(chg);
-        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style });
+        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style, py: None });
         cx.touch(csi, chg);
         Ok(())
     })?;
@@ -340,8 +317,8 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- scenarios
 
-/// Hidden workbook-scope name holding the scenarios as a quoted JSON string.
-pub(crate) const SCENARIO_NAME: &str = "_sc_scenarios";
+/// The scenarios are kept as JSON in the workbook (see `stash`).
+pub(crate) const SCENARIO_KEY: &str = "scenarios";
 const MAX_SCENARIO_CELLS: usize = 32;
 const MAX_SCENARIOS: usize = 1000;
 
@@ -356,56 +333,16 @@ pub(crate) struct Scenario {
 }
 
 pub(crate) fn load_scenarios(wb: &Workbook) -> Vec<Scenario> {
-    let Some(n) = wb.names.iter().find(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(SCENARIO_NAME)) else { return vec![] };
-    serde_json::from_str(&string_literals(&n.formula)).unwrap_or_default()
+    super::stash::get(wb, SCENARIO_KEY).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
-/// Concatenates the string literals of a `"a"&"b""c"` formula.
-fn string_literals(f: &str) -> String {
-    let mut out = String::new();
-    let mut it = f.chars().peekable();
-    let mut in_str = false;
-    while let Some(c) = it.next() {
-        if !in_str {
-            if c == '"' {
-                in_str = true;
-            }
-            continue;
-        }
-        if c == '"' {
-            if it.peek() == Some(&'"') {
-                it.next();
-                out.push('"');
-            } else {
-                in_str = false;
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-fn store_scenarios(wb: &mut Workbook, list: &[Scenario]) {
-    wb.names.retain(|n| !(n.scope.is_none() && n.name.eq_ignore_ascii_case(SCENARIO_NAME)));
+fn store_scenarios(wb: &mut Workbook, list: &[Scenario]) -> Result<()> {
     if list.is_empty() {
-        return;
+        super::stash::remove(wb, SCENARIO_KEY);
+        return Ok(());
     }
-    let text = serde_json::to_string(list).unwrap_or_else(|_| "[]".into());
-    wb.names.push(DefinedName {
-        name: SCENARIO_NAME.into(),
-        scope: None,
-        // Excel caps string literals at 255 characters: store `"…"&"…"` chunks.
-        formula: text
-            .chars()
-            .collect::<Vec<char>>()
-            .chunks(250)
-            .map(|c| format!("\"{}\"", c.iter().collect::<String>().replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join("&"),
-        comment: "GridCraft Scenario Manager data".into(),
-        hidden: true,
-    });
+    let text = serde_json::to_string(list).map_err(|e| EngineError::Other(e.to_string()))?;
+    super::stash::set(wb, SCENARIO_KEY, &text)
 }
 
 fn scenario_json(sc: &Scenario) -> Json {
@@ -461,7 +398,7 @@ fn scenario_add(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     edit(s, |cx| {
-        store_scenarios(&mut cx.wb, &list);
+        store_scenarios(&mut cx.wb, &list)?;
         Ok(())
     })?;
     Ok(scenario_json(&sc))
@@ -509,7 +446,7 @@ fn scenario_delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (mut list, i) = find_scenario(&d.wb, p, "data.scenarioDelete")?;
     let removed = list.remove(i);
     edit(s, |cx| {
-        store_scenarios(&mut cx.wb, &list);
+        store_scenarios(&mut cx.wb, &list)?;
         Ok(())
     })?;
     Ok(json!({"deleted": removed.name}))
@@ -550,7 +487,7 @@ fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let current: Vec<Value> = changing.iter().map(|c| sh.value(*c)).collect();
     let current_results: Vec<Value> = results.iter().map(|c| sh.value(*c)).collect();
-    let mut trial = Trial::new(d);
+    let mut trial = trial(d);
     let reads: Vec<(usize, CellRef)> = results.iter().map(|c| (si, *c)).collect();
     let scenario_results: Vec<Vec<Value>> = per
         .iter()
@@ -567,139 +504,125 @@ fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
         .find(|n| d.wb.sheet_index(n).is_none())
         .unwrap_or_else(|| "Scenario Summary".into());
     let names: Vec<String> = scenarios.iter().map(|x| x.name.clone()).collect();
-    let new_index = edit(s, |cx| {
-        let bold = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.font.bold = true);
-        let mut sheet = Sheet::new(name.clone());
-        let put = |sheet: &mut Sheet, row: u32, col: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style });
-        };
-        put(&mut sheet, 1, 1, Value::text("Scenario Summary"), bold);
-        put(&mut sheet, 2, 2, Value::text("Current Values:"), bold);
-        for (k, n) in names.iter().enumerate() {
-            put(&mut sheet, 2, 3 + k as u32, Value::text(n.as_str()), bold);
+    let bold = RStyle { bold: true, ..RStyle::default() };
+    let fmt = |f: &gridcraft_model::NumFmt| RStyle { num_fmt: Some(f.0.to_string()), ..RStyle::default() };
+    let abs = |c: &CellRef| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1);
+    let mut rep = Report::new();
+    rep.text(1, 1, "Scenario Summary", bold.clone());
+    rep.text(2, 2, "Current Values:", bold.clone());
+    for (k, n) in names.iter().enumerate() {
+        rep.text(2, 3 + k as u32, n, bold.clone());
+    }
+    rep.text(3, 1, "Changing Cells:", bold.clone());
+    let mut row = 4u32;
+    for (i, c) in changing.iter().enumerate() {
+        let st = fmt(&changing_fmts.get(i).cloned().unwrap_or_default());
+        rep.text(row, 1, &abs(c), RStyle::default());
+        let cur = current.get(i).cloned().unwrap_or_default();
+        rep.put(row, 2, cur.clone(), st.clone());
+        for (k, m) in per.iter().enumerate() {
+            rep.put(row, 3 + k as u32, m.get(c).cloned().unwrap_or_else(|| cur.clone()), st.clone());
         }
-        put(&mut sheet, 3, 1, Value::text("Changing Cells:"), bold);
-        let mut row = 4u32;
-        for (i, c) in changing.iter().enumerate() {
-            let fmt = changing_fmts.get(i).cloned().unwrap_or_default();
-            let st = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.num_fmt = fmt);
-            put(&mut sheet, row, 1, Value::text(format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1)), StyleId::DEFAULT);
-            let cur = current.get(i).cloned().unwrap_or_default();
-            put(&mut sheet, row, 2, cur.clone(), st);
-            for (k, m) in per.iter().enumerate() {
-                put(&mut sheet, row, 3 + k as u32, m.get(c).cloned().unwrap_or_else(|| cur.clone()), st);
+        row += 1;
+    }
+    if !results.is_empty() {
+        rep.text(row, 1, "Result Cells:", bold.clone());
+        row += 1;
+        for (i, c) in results.iter().enumerate() {
+            let st = fmt(&result_fmts.get(i).cloned().unwrap_or_default());
+            rep.text(row, 1, &abs(c), RStyle::default());
+            rep.put(row, 2, current_results.get(i).cloned().unwrap_or_default(), st.clone());
+            for (k, r) in scenario_results.iter().enumerate() {
+                rep.put(row, 3 + k as u32, r.get(i).cloned().unwrap_or_default(), st.clone());
             }
             row += 1;
         }
-        if !results.is_empty() {
-            put(&mut sheet, row, 1, Value::text("Result Cells:"), bold);
-            row += 1;
-            for (i, c) in results.iter().enumerate() {
-                let fmt = result_fmts.get(i).cloned().unwrap_or_default();
-                let st = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.num_fmt = fmt);
-                put(&mut sheet, row, 1, Value::text(format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1)), StyleId::DEFAULT);
-                put(&mut sheet, row, 2, current_results.get(i).cloned().unwrap_or_default(), st);
-                for (k, r) in scenario_results.iter().enumerate() {
-                    put(&mut sheet, row, 3 + k as u32, r.get(i).cloned().unwrap_or_default(), st);
-                }
-                row += 1;
-            }
-        }
-        put(
-            &mut sheet,
-            row + 1,
-            1,
-            Value::text("Notes: Current Values column represents values of changing cells at time Scenario Summary Report was created."),
-            StyleId::DEFAULT,
-        );
-        sheet.cols.insert(1, gridcraft_model::LineInfo { size: Some(110.0), ..Default::default() });
-        sheet.cols.insert(2, gridcraft_model::LineInfo { size: Some(100.0), ..Default::default() });
-        cx.wb.sheets.push(std::sync::Arc::new(sheet));
-        cx.structural = true;
-        Ok(cx.wb.sheets.len() - 1)
-    })?;
-    s.doc_mut()?.wb_switch_sheet(new_index);
+    }
+    rep.text(
+        row + 1,
+        1,
+        "Notes: Current Values column represents values of changing cells at time Scenario Summary Report was created.",
+        RStyle::default(),
+    );
+    rep.col_widths = vec![(1, 110.0), (2, 100.0)];
+    let target = Target { kind: OutputKind::NewSheet { name: name.clone() }, origin: CellRef::new(0, 0) };
+    report::write(s, &target, rep, false)?;
     Ok(json!({"sheet": name, "scenarios": names.len(), "changingCells": changing.len(), "resultCells": results.len()}))
 }
 
 // ---------------------------------------------------------------- data tables
 
-const MAX_TABLE_CELLS: u64 = 100_000;
+/// The input cell of a data table must be a single cell on the table's sheet, outside it.
+const BAD_INPUT: &str = "The input cell must be a single cell on the data table's sheet, outside the table.";
 
 fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.dataTable";
     let (si, r) = range_arg(s, p, "range", CMD)?;
-    let row_in = if p.get("rowInput").and_then(Json::as_str).is_some_and(|t| !t.is_empty()) { Some(cell_arg(s, p, "rowInput", CMD)?) } else { None };
-    let col_in =
-        if p.get("columnInput").and_then(Json::as_str).is_some_and(|t| !t.is_empty()) { Some(cell_arg(s, p, "columnInput", CMD)?) } else { None };
-    if row_in.is_none() && col_in.is_none() {
+    let input = |key: &str| -> Result<Option<CellRef>> {
+        if !p.get(key).and_then(Json::as_str).is_some_and(|t| !t.trim().is_empty()) {
+            return Ok(None);
+        }
+        let text = str_param(p, key).unwrap_or("");
+        if text.contains(':') || text.contains(',') {
+            return Err(EngineError::Other(BAD_INPUT.into()));
+        }
+        let (isi, c) = cell_arg(s, p, key, CMD)?;
+        if isi != si || r.contains(c) {
+            return Err(EngineError::Other(BAD_INPUT.into()));
+        }
+        Ok(Some(c))
+    };
+    let row_input = input("rowInput")?;
+    let col_input = input("columnInput")?;
+    if row_input.is_none() && col_input.is_none() {
         return Err(bad(CMD, "give `rowInput`, `columnInput` or both"));
     }
     if r.height() < 2 || r.width() < 2 {
-        return Err(bad(CMD, "the table needs at least two rows and two columns"));
+        return Err(EngineError::Other("Select the whole table: the input values, the formulas and the cells for the results.".into()));
     }
-    let body = RangeRef::new(CellRef::new(r.start.row + 1, r.start.col + 1), r.end);
-    if body.count() > MAX_TABLE_CELLS {
-        return Err(bad(CMD, format!("the table body is too large ({MAX_TABLE_CELLS} cells max)")));
+    let table = gridcraft_model::DataTable { range: r, row_input, col_input };
+    let Some(body) = table.body() else { return Err(bad(CMD, "the table is too small")) };
+    if body.count() > gridcraft_calc::MAX_TABLE_CELLS {
+        return Err(EngineError::Other(format!("A data table can have at most {} result cells.", gridcraft_calc::MAX_TABLE_CELLS)));
     }
-    for input in [row_in, col_in].into_iter().flatten() {
-        if input.0 == si && r.contains(input.1) {
-            return Err(EngineError::Other("Input cell reference is not valid.".into()));
+    {
+        let sh = s.doc()?.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+        if sh.data_tables.iter().any(|t| t.range != r && t.range.intersection(&r).is_some()) {
+            return Err(EngineError::Other("The range overlaps another data table.".into()));
+        }
+        if sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|x| x.intersection(&r).is_some())) {
+            return Err(EngineError::Other("A data table can't overlap a PivotTable.".into()));
+        }
+        if sh.merges.iter().any(|m| m.intersection(&body).is_some()) {
+            return Err(EngineError::Other("A data table's results can't include merged cells.".into()));
         }
     }
-    let d = s.doc()?;
-    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let (r0, c0) = (r.start.row, r.start.col);
-    let mut trial = Trial::new(d);
-    let mut out: Vec<(CellRef, Value)> = Vec::with_capacity(body.count() as usize);
-    let mode = match (row_in, col_in) {
-        (None, Some((isi, ic))) => {
-            let reads: Vec<(usize, CellRef)> = (c0 + 1..=r.end.col).map(|c| (si, CellRef::new(r0, c))).collect();
-            for row in r0 + 1..=r.end.row {
-                let v = sh.value(CellRef::new(row, c0));
-                let vals = trial.run(&[(isi, ic, v)], &reads);
-                for (k, val) in vals.into_iter().enumerate() {
-                    out.push((CellRef::new(row, c0 + 1 + k as u32), val));
-                }
-            }
-            "column"
-        }
-        (Some((isi, ic)), None) => {
-            let reads: Vec<(usize, CellRef)> = (r0 + 1..=r.end.row).map(|row| (si, CellRef::new(row, c0))).collect();
-            for col in c0 + 1..=r.end.col {
-                let v = sh.value(CellRef::new(r0, col));
-                let vals = trial.run(&[(isi, ic, v)], &reads);
-                for (k, val) in vals.into_iter().enumerate() {
-                    out.push((CellRef::new(r0 + 1 + k as u32, col), val));
-                }
-            }
-            "row"
-        }
-        (Some((rsi, rc)), Some((csi, cc))) => {
-            let reads = [(si, CellRef::new(r0, c0))];
-            for row in r0 + 1..=r.end.row {
-                let cv = sh.value(CellRef::new(row, c0));
-                for col in c0 + 1..=r.end.col {
-                    let rv = sh.value(CellRef::new(r0, col));
-                    let vals = trial.run(&[(rsi, rc, rv), (csi, cc, cv.clone())], &reads);
-                    out.push((CellRef::new(row, col), vals.into_iter().next().unwrap_or_default()));
-                }
-            }
-            "twoVariable"
-        }
-        (None, None) => return Err(bad(CMD, "give `rowInput`, `columnInput` or both")),
+    let mode = match (row_input, col_input) {
+        (Some(_), Some(_)) => "twoVariable",
+        (Some(_), None) => "row",
+        _ => "column",
     };
-    let n = out.len();
+    let manual = s.doc()?.wb.calc.mode != gridcraft_model::CalcMode::Automatic;
+    let edges = table.edges();
     edit(s, |cx| {
-        for (c, v) in out {
-            let sh = cx.sheet_mut(si)?;
+        let sh = cx.sheet_mut(si)?;
+        // Re-running Data Table over the same range replaces that table.
+        sh.data_tables.retain(|t| t.range != r);
+        for c in body.iter() {
             let style = sh.style_id(c);
-            sh.set_cell(c, Cell { value: v, formula: None, style });
+            sh.set_cell(c, Cell { value: Value::Empty, formula: None, style, py: None });
+        }
+        sh.data_tables.push(table);
+        for c in edges {
             cx.touch(si, c);
         }
+        // Outside automatic mode the edit alone wouldn't compute the table.
+        cx.structural = manual;
         Ok(())
     })?;
-    Ok(json!({"range": body.a1(), "cells": n, "mode": mode, "static": true}))
+    Ok(
+        json!({"range": body.a1(), "cells": body.count(), "mode": mode, "formula": format!("{{={}}}", s.doc()?.wb.sheet(si).and_then(|sh| sh.data_table_at(body.start)).map(|t| t.formula_text()).unwrap_or_default())}),
+    )
 }
 
 // ---------------------------------------------------------------- advanced filter
@@ -881,7 +804,7 @@ fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                     let src = CellRef::new(*row, c);
                     let to = dest.offset(i as i64, (c - list.start.col) as i64)?;
                     let style = sh.style_id(src);
-                    Some((to, Cell { value: sh.value(src), formula: None, style }))
+                    Some((to, Cell { value: sh.value(src), formula: None, style, py: None }))
                 })
             })
             .collect();
@@ -1109,7 +1032,7 @@ fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
             if v.is_empty() && style == StyleId::DEFAULT {
                 sh.remove_cell(c);
             } else {
-                sh.set_cell(c, Cell { value: v, formula: None, style });
+                sh.set_cell(c, Cell { value: v, formula: None, style, py: None });
             }
             cx.touch(dsi, c);
         }
@@ -1217,11 +1140,11 @@ mod tests {
         assert_eq!(n(&s, "B10"), 200.0);
         // Stored in a hidden workbook name.
         let d = s.doc().unwrap();
-        assert!(d.wb.names.iter().any(|n| n.name == super::SCENARIO_NAME && n.hidden));
+        assert!(d.wb.names.iter().any(|n| n.name == "_gc_scenarios_0" && n.hidden));
         assert_eq!(super::load_scenarios(&d.wb).len(), 2);
-        // Long data is split into 250-character literals and survives an xlsx round trip.
+        // Long data is split into 255-character literals and survives an xlsx round trip.
         s.execute("data.scenarioAdd", json!({"name": "Long", "changing": "B2", "values": [1], "comment": "x".repeat(600)})).unwrap();
-        let f = s.doc().unwrap().wb.names.iter().find(|n| n.name == super::SCENARIO_NAME).unwrap().formula.clone();
+        let f = s.doc().unwrap().wb.names.iter().find(|n| n.name == "_gc_scenarios_0").unwrap().formula.clone();
         assert!(f.matches("\"&\"").count() >= 2, "{f}");
         let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
         s.execute("file.open", json!({"name": "sc.xlsx", "base64": b64})).unwrap();
@@ -1238,11 +1161,13 @@ mod tests {
         // Result row: current, Base, Best.
         assert_eq!(n(&s, "'Scenario Summary'!C8"), 200.0);
         assert_eq!(n(&s, "'Scenario Summary'!E8"), 300.0);
-        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        // Like Excel, the summary sheet goes before the sheet it summarises.
+        assert_eq!(s.doc().unwrap().wb.sheet_index("Scenario Summary"), Some(0));
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
         s.execute("data.scenarioDelete", json!({"name": "Best"})).unwrap();
         assert_eq!(s.execute("data.scenarioManager", json!({})).unwrap()["scenarios"].as_array().unwrap().len(), 1);
         s.execute("data.scenarioDelete", json!({"name": "Base"})).unwrap();
-        assert!(s.doc().unwrap().wb.names.iter().all(|n| n.name != super::SCENARIO_NAME));
+        assert!(s.doc().unwrap().wb.names.iter().all(|n| n.name != "_gc_scenarios_0"));
         assert!(s.execute("data.scenarioSummary", json!({})).is_err());
     }
 
@@ -1277,6 +1202,93 @@ mod tests {
         assert!(s.execute("data.dataTable", json!({"range": "L1:N3"})).is_err());
         assert!(s.execute("data.dataTable", json!({"range": "A1:XFD100000", "columnInput": "B2"})).is_err());
         assert!(s.execute("data.dataTable", json!({"range": "L1:N3", "columnInput": "M2"})).is_err());
+        assert!(s.execute("data.dataTable", json!({"range": "P1:Q3", "columnInput": "Sheet2!B2"})).is_err());
+        assert!(s.execute("data.dataTable", json!({"range": "P1:Q3", "columnInput": "B1:B2"})).is_err());
+        assert!(s.execute("data.dataTable", json!({"range": "E2:G4", "columnInput": "B2"})).is_err(), "overlaps a table");
+    }
+
+    #[test]
+    fn data_tables_round_trip_through_xlsx() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "B1", "values": [[0.05], [1000]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D3", "values": [[100], [200]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "E2", "input": "=B2*(1+B1)"})).unwrap();
+        s.execute("data.dataTable", json!({"range": "D2:E4", "columnInput": "B2"})).unwrap();
+        s.execute("cell.set", json!({"cell": "G1", "input": "=B2*B1"})).unwrap();
+        s.execute("range.setValues", json!({"range": "H1", "values": [[1, 2]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "G2", "values": [[10], [20]]})).unwrap();
+        s.execute("data.dataTable", json!({"range": "G1:I3", "rowInput": "B1", "columnInput": "B2"})).unwrap();
+        s.execute("cell.set", json!({"cell": "K2", "input": "=B1*3"})).unwrap();
+        s.execute("range.setValues", json!({"range": "L1", "values": [[1, 2]]})).unwrap();
+        s.execute("data.dataTable", json!({"range": "K1:M2", "rowInput": "B1"})).unwrap();
+        let wb = s.doc().unwrap().wb.clone();
+        let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+        let xml = String::from_utf8_lossy(&gridcraft_xlsx::read_part(&bytes, "xl/worksheets/sheet1.xml").unwrap().unwrap()).to_string();
+        assert!(xml.contains(r#"<f t="dataTable" ref="E3:E4" dt2D="0" dtr="0" r1="B2"/>"#), "{xml}");
+        assert!(xml.contains(r#"<f t="dataTable" ref="H2:I3" dt2D="1" dtr="0" r1="B1" r2="B2"/>"#), "{xml}");
+        assert!(xml.contains(r#"<f t="dataTable" ref="L2:M2" dt2D="0" dtr="1" r1="B1"/>"#), "{xml}");
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "dt.xlsx", "base64": b64})).unwrap();
+        // Read back in cell order.
+        let key = |t: &gridcraft_model::DataTable| (t.range.start.row, t.range.start.col);
+        let mut tables = s.doc().unwrap().wb.active().unwrap().data_tables.clone();
+        let mut want = wb.active().unwrap().data_tables.clone();
+        tables.sort_by_key(key);
+        want.sort_by_key(key);
+        assert_eq!(tables, want);
+        assert!((n(&s, "E3") - 105.0).abs() < 1e-9);
+        assert_eq!(n(&s, "I3"), 40.0);
+        // Still live after reopening.
+        s.execute("cell.set", json!({"cell": "B1", "input": "1"})).unwrap();
+        assert_eq!(n(&s, "E4"), 400.0);
+        assert_eq!(n(&s, "M2"), 6.0);
+    }
+
+    #[test]
+    fn data_tables_are_live_and_guarded() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "B1", "values": [[0.05], [1000]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D3", "values": [[100], [200], [300]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "E2", "input": "=B2*(1+B1)"})).unwrap();
+        s.execute("cell.set", json!({"cell": "H1", "input": "=SUM(E3:E5)"})).unwrap();
+        let r = s.execute("data.dataTable", json!({"range": "$D$2:$E$5", "columnInput": "$B$2"})).unwrap();
+        assert_eq!(r["formula"], "{=TABLE(,$B$2)}");
+        assert!((n(&s, "H1") - 630.0).abs() < 1e-9);
+        // Live: a precedent of the formula changes, the results follow.
+        s.execute("cell.set", json!({"cell": "B1", "input": "0.1"})).unwrap();
+        assert!((n(&s, "E3") - 110.0).abs() < 1e-9);
+        assert!((n(&s, "H1") - 660.0).abs() < 1e-9);
+        let got = s.execute("cell.get", json!({"cell": "E4"})).unwrap();
+        assert_eq!(got["formula"], "{=TABLE(,$B$2)}");
+        // Part of the results can't be changed; a TABLE formula can't be typed.
+        assert!(s.execute("cell.set", json!({"cell": "E4", "input": "5"})).is_err());
+        assert!(s.execute("range.setValues", json!({"range": "E4", "values": [[1], [2]]})).is_err());
+        assert!(s.execute("edit.clearContents", json!({"range": "E3:E4"})).is_err());
+        assert!(s.execute("cell.set", json!({"cell": "K1", "input": "=TABLE(B1,B2)"})).is_err());
+        // Formatting results is fine.
+        s.execute("home.bold", json!({"range": "E3:E5"})).unwrap();
+        // Rows: inserting through the table is refused; above it moves table and input together.
+        assert!(s.execute("home.insertRows", json!({"rows": "4:4"})).is_err());
+        assert!(s.execute("home.deleteRows", json!({"rows": "4:5"})).is_err());
+        s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+        let t = s.doc().unwrap().wb.active().unwrap().data_tables[0].clone();
+        assert_eq!(t.range.a1(), "D3:E6");
+        assert_eq!(t.col_input.map(|c| c.a1()).as_deref(), Some("B3"));
+        s.execute("cell.set", json!({"cell": "B2", "input": "0.2"})).unwrap();
+        assert!((n(&s, "E4") - 120.0).abs() < 1e-9);
+        // Clearing every result removes the table; the cells then take values again.
+        s.execute("edit.clearContents", json!({"range": "E4:E6"})).unwrap();
+        assert!(s.doc().unwrap().wb.active().unwrap().data_tables.is_empty());
+        s.execute("cell.set", json!({"cell": "E5", "input": "7"})).unwrap();
+        // Undo brings the table back.
+        s.execute("edit.undo", json!({"steps": 2})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().data_tables.len(), 1);
+        // Except-tables mode: edits don't refresh tables until F9.
+        s.execute("formulas.calculationOptions", json!({"mode": "automaticExceptTables"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B2", "input": "0.5"})).unwrap();
+        assert!((n(&s, "E4") - 120.0).abs() < 1e-9);
+        s.execute("formulas.calculateNow", json!({})).unwrap();
+        assert!((n(&s, "E4") - 150.0).abs() < 1e-9);
     }
 
     #[test]

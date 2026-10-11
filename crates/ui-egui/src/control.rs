@@ -1,7 +1,8 @@
 //! Programmatic control of the running app (agents, tests, MCP).
 //!
 //! Methods (JSON lines over the host's transport, see `docs/control-protocol.md`):
-//! - `engine.execute {command, params}` — run any engine or UI command
+//! - `engine.execute {command, params, wait?, waitSeconds?}` — run any engine or UI command;
+//!   with `wait`, the reply waits (without blocking the frame) until Python cells finish
 //! - `engine.commands {search?}` — every command with enablement and params docs
 //! - `document.inspect`, `sheet.read {range?}`, `cell.get {cell?}` — read state
 //! - `ui.inspect` — UI state (ribbon tab, editor, dialog, grid geometry, perf)
@@ -40,7 +41,14 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Json),
-    Screenshot { path: Option<String> },
+    Screenshot {
+        path: Option<String>,
+    },
+    /// A command's reply held until Python is idle or the deadline (ms) passes.
+    Wait {
+        result: Json,
+        deadline: f64,
+    },
 }
 
 #[derive(Default)]
@@ -48,6 +56,8 @@ pub struct Shots {
     token: u64,
     queued: Vec<(u64, f64, u32)>,
     pending: Vec<(u64, Option<String>, Sender<ControlResponse>, f64)>,
+    /// Replies waiting for Python (`engine.execute` with `wait`).
+    waits: Vec<(Json, Sender<ControlResponse>, f64)>,
 }
 
 fn ok(v: Json) -> Outcome {
@@ -71,15 +81,40 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "window": [r.width(), r.height()],
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
-        "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point()})),
+        "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})),
+        // Python cells running or waiting in the background (they show #BUSY!).
+        "pythonBusy": app.session.python_busy(),
+        // The Python editor window: {open, sheet, cell, editing, dirty, python}.
+        "pythonEditor": crate::python_window::state(app),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
-        "selectedChart": app.selected_chart,
+        "selectedObject": app.selected_object,
+        // The id when the selection is a chart (kept for older agents).
+        "selectedChart": app.selected_chart(),
         "mode": format!("{:?}", app.session.mode),
         "documents": app.session.documents().iter().map(|d| json!({"title": d.display_title(), "dirty": d.is_dirty()})).collect::<Vec<_>>(),
         "activeDocument": app.session.active_index(),
         "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
     })
+}
+
+/// `ui.object.select {id?, kind?}`: selects the object with that id on the active sheet (the kind
+/// is found from the id when left out, and must match when given); no `id` clears the selection.
+/// Replies with the object and its rect in window points, for `ui.click` / `ui.drag`.
+fn select_object(app: &mut SheetApp, p: &Json) -> Outcome {
+    let Some(id) = p.get("id").and_then(Json::as_u64) else {
+        app.selected_object = None;
+        return ok(Json::Null);
+    };
+    let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return err("no document") };
+    let found = u32::try_from(id).ok().and_then(|id| match p.get("kind").and_then(Json::as_str) {
+        Some(k) => gridcraft_engine::model::ObjKind::parse(k).map(|k| gridcraft_engine::model::ObjRef::new(k, id)).filter(|o| sh.has_object(*o)),
+        None => sh.object_ref(id),
+    });
+    let Some(o) = found else { return err("no such object on the active sheet") };
+    let rect = app.grid.rect.and_then(|r| crate::chartview::object_rect(&crate::grid::Geo::new(sh, r, app.view().scroll), sh, o));
+    app.selected_object = Some(o);
+    ok(json!({"selected": o, "rect": rect.map(|r| [r.left(), r.top(), r.width(), r.height()])}))
 }
 
 fn key_from(name: &str) -> Option<egui::Key> {
@@ -162,7 +197,20 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            wrap(app.run(id, if params.is_null() { json!({}) } else { params }))
+            let r = app.run(id, if params.is_null() { json!({}) } else { params });
+            let wait = p.get("wait").and_then(Json::as_bool).unwrap_or(false);
+            match r {
+                Ok(result) if wait && app.session.python_busy() => {
+                    // Default: the Python time limit and the time imports may add, plus a second
+                    // for the worker to start.
+                    let prefs = &app.session.prefs;
+                    let secs =
+                        p.get("waitSeconds").and_then(Json::as_f64).unwrap_or(prefs.python_timeout_seconds + prefs.python_import_seconds + 1.0);
+                    let secs = if secs.is_finite() { secs.clamp(0.0, 3_600.0) } else { 0.0 };
+                    return Outcome::Wait { result, deadline: crate::now_ms() + secs * 1000.0 };
+                }
+                r => wrap(r),
+            }
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
@@ -174,9 +222,20 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.theme", "Display Theme", ""),
                 ("view.zoom100", "100%", ""),
                 ("ui.dialog", "Open Dialog", ""),
+                ("ui.pane", "Task Pane", "{name?: comments|watch|selection|formatChart|pythonDiagnostics} shows a task pane; no name closes it"),
+                (
+                    "ui.pythonEditor",
+                    "Python Editor",
+                    "{cell?, sheet?, close?} opens the Python editor window on a cell (default: the active cell, or the Python cell being edited); close: true closes it, keeping any edit",
+                ),
                 ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"} (alias: code)"),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
+                (
+                    "python.saveCsv",
+                    "Save Python Result as CSV",
+                    "{cell?, path?} saves a Python cell's tabular result as a .csv file (no path: a save dialog)",
+                ),
             ] {
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }
@@ -242,6 +301,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             app.dialog = None;
             ok(Json::Null)
         }
+        "ui.object.select" => select_object(app, p),
         "ui.message.dismiss" => {
             app.message = None;
             ok(Json::Null)
@@ -361,6 +421,7 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
             Outcome::Done(v) => {
                 let _ = req.reply.send(v);
             }
+            Outcome::Wait { result, deadline } => app.shots.waits.push((result, req.reply, deadline)),
             Outcome::Screenshot { path } => {
                 app.shots.token += 1;
                 let token = app.shots.token;
@@ -370,8 +431,39 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
         }
     }
     app.control_rx = Some(rx);
+    answer_waits(app, ctx);
     if !app.synthetic.is_empty() {
         ctx.request_repaint();
+    }
+}
+
+/// Answers the replies waiting for Python once it is idle (or their deadline passed), with the
+/// values the cells hold now. A result that names a `cell` and its `value` gets the cell's value
+/// as it is now, rather than `#BUSY!`.
+fn answer_waits(app: &mut SheetApp, ctx: &egui::Context) {
+    if app.shots.waits.is_empty() {
+        return;
+    }
+    let busy = app.session.python_busy();
+    let now = crate::now_ms();
+    let waits = std::mem::take(&mut app.shots.waits);
+    for (mut result, reply, deadline) in waits {
+        if busy && now < deadline {
+            app.shots.waits.push((result, reply, deadline));
+            continue;
+        }
+        let cell = result.get("cell").and_then(Json::as_str).map(str::to_string);
+        if let (Some(cell), Some(obj)) = (cell, result.as_object_mut())
+            && obj.contains_key("value")
+            && let Ok(now) = app.session.run("cell.get", json!({"cell": cell}))
+            && let Some(v) = now.get("value")
+        {
+            obj.insert("value".into(), v.clone());
+        }
+        let _ = reply.send(json!({"ok": true, "result": result, "pythonBusy": busy}));
+    }
+    if !app.shots.waits.is_empty() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
 }
 

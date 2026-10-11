@@ -137,6 +137,9 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("insert.equation", "Insert", "Symbols", "Equation"),
     ("insert.symbol", "Insert", "Symbols", "Symbol"),
     ("insert.checkbox", "Insert", "Cell Controls", "Checkbox"),
+    ("insert.button", "Insert", "Controls", "Button"),
+    ("insert.slider", "Insert", "Controls", "Scroll Bar"),
+    ("insert.spinButton", "Insert", "Controls", "Spin Button"),
     // Draw
     ("draw.pen", "Draw", "Tools", "Pen"),
     ("draw.eraser", "Draw", "Tools", "Eraser"),
@@ -190,6 +193,10 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("formulas.calculationOptions", "Formulas", "Calculation", "Calculation Options"),
     ("formulas.calculateNow", "Formulas", "Calculation", "Calculate Now"),
     ("formulas.calculateSheet", "Formulas", "Calculation", "Calculate Sheet"),
+    ("python.insert", "Formulas", "Python", "Insert Python"),
+    ("python.reset", "Formulas", "Python", "Reset"),
+    ("python.diagnostics", "Formulas", "Python", "Diagnostics"),
+    ("python.initialization", "Formulas", "Python", "Initialization"),
     // Data
     ("data.getData", "Data", "Get & Transform Data", "Get Data"),
     ("data.fromTextCsv", "Data", "Get & Transform Data", "From Text/CSV"),
@@ -269,6 +276,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("view.unhideWindow", "View", "Window", "Unhide"),
     ("view.switchWindows", "View", "Window", "Switch Windows"),
     ("view.macros", "View", "Macros", "Macros"),
+    ("macro.record", "View", "Macros", "Record Macro"),
     // Automate
     ("automate.newScript", "Automate", "Scripting Tools", "New Script"),
     ("automate.allScripts", "Automate", "Scripting Tools", "All Scripts"),

@@ -9,22 +9,37 @@
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod code_editor;
 pub mod control;
+pub mod control_ui;
 pub mod credits;
 pub mod dialogs;
+pub mod dnd;
 pub mod editor;
+pub mod equation;
+pub mod form_controls;
 pub mod formula_bar;
 mod formula_locale;
+pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
 pub mod keytips;
+pub mod macro_editor;
+pub mod macro_ui;
+pub mod objects;
 pub mod panes;
+pub mod pivot_calc_ui;
+pub mod pivot_filter;
 pub mod pivot_pane;
+pub mod python_ui;
+pub mod python_window;
 pub mod ribbon;
+pub mod solver_ui;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
+pub mod toolpak;
 pub mod widgets;
 
 use std::collections::HashMap;
@@ -49,6 +64,10 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    /// Formulas › Recently Used and Insert Function's Most Recently Used category, newest first
+    /// (at most [`function_library::RECENT_MAX`]).
+    #[serde(deserialize_with = "function_library::lenient_recent")]
+    pub recent_functions: Vec<String>,
     /// Interface language. English by default (so tests and headless renders never depend on the
     /// host's locale); the desktop app starts from [`i18n::Language::system`] when `ui.json` has
     /// no usable language (see [`i18n::saved_language`]). An unknown saved value reads as English
@@ -68,6 +87,7 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            recent_functions: function_library::default_recent(),
             language: i18n::Language::En,
         }
     }
@@ -106,6 +126,8 @@ pub struct SheetView {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Native picker for a program (Python Options' interpreter).
+    pub pick_program: Option<Box<dyn Fn() -> Option<String>>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
@@ -143,6 +165,10 @@ pub struct SheetApp {
     pub dialog: Option<dialogs::Dialog>,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
+    /// How long the toast with the same time stays, and the button it offers (a pane to open).
+    pub toast_extra: Option<ToastExtra>,
+    /// Package installs whose outcome was already shown ([`Session::python_installs_ended`]).
+    pub installs_shown: u64,
     pub services: Services,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -158,14 +184,58 @@ pub struct SheetApp {
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
+    /// The formula bar's badge slot (the PY badge in Python mode); empty otherwise.
+    pub formula_badge: Option<formula_bar::FormulaBadge>,
     pub(crate) shots: control::Shots,
-    /// Chart selected on the sheet (id).
-    pub selected_chart: Option<u32>,
+    /// The floating object selected on the sheet (chart, picture, shape, equation or control).
+    pub selected_object: Option<gridcraft_engine::model::ObjRef>,
     pub started: f64,
+    /// A command asked before replacing something; OK re-runs it with `overwrite: true`.
+    pub confirm: Option<Confirm>,
+    /// Dialog to open when the current one closes (Data Analysis → a tool's form).
+    pub dialog_next: Option<dialogs::Dialog>,
+    /// Automate › Macros: relative recording, recent macros.
+    pub macros: macro_ui::MacroUi,
+    /// How much of the session's journal Recently Used has read (see [`function_library::harvest`]).
+    pub(crate) journal_seen: usize,
+    /// The Python editor window, when open (kept apart from `dialog`, so dialogs don't close it).
+    pub py_window: Option<python_window::PyWindow>,
+}
+
+/// A pending "replace it?" question from a command (see [`confirm_text`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Confirm {
+    pub title: String,
+    pub text: String,
+    pub command: String,
+    pub params: Json,
+    /// Buttons other than OK, each with the params it adds when it runs the command again
+    /// (Overwrite, Shift Down, Shift Right for a macro). Empty: OK adds `overwrite: true`.
+    pub choices: Vec<(String, Json)>,
+}
+
+/// What [`SheetApp::run_confirming`] did.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outcome {
+    Done(Json),
+    /// The command asked a question (shown now; OK re-runs it).
+    Asked,
+    /// It failed; the error is shown.
+    Failed,
+}
+
+/// The question in a command's "needs confirmation" error, if it is one.
+pub fn confirm_text(e: &str) -> Option<String> {
+    let rest = e.split_once("confirm: ")?.1;
+    Some(rest.split_once(" (run again with").map(|(q, _)| q).unwrap_or(rest).to_string())
 }
 
 impl SheetApp {
-    pub fn new(session: Session, services: Services) -> SheetApp {
+    pub fn new(mut session: Session, services: Services) -> SheetApp {
+        // Python cells run in the background, stepped every frame, so a slow cell never blocks
+        // the window.
+        session.set_python_background(true);
+        let journal_seen = session.journal.len();
         SheetApp {
             session,
             ui: UiState::default(),
@@ -175,6 +245,8 @@ impl SheetApp {
             dialog: None,
             message: None,
             toast: None,
+            toast_extra: None,
+            installs_shown: 0,
             services,
             synthetic: Default::default(),
             control_rx: None,
@@ -191,9 +263,15 @@ impl SheetApp {
             effective_dark: false,
             name_box: None,
             keytips: keytips::KeyTips::default(),
+            formula_badge: None,
             shots: control::Shots::default(),
-            selected_chart: None,
+            selected_object: None,
             started: now_ms(),
+            confirm: None,
+            dialog_next: None,
+            macros: macro_ui::MacroUi::default(),
+            journal_seen,
+            py_window: None,
         }
     }
 
@@ -278,11 +356,24 @@ impl SheetApp {
 
     /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
-        if let Err(e) = self.run(id, params) {
-            if e.contains("is not available right now") {
-                self.toast = Some((e, now_ms()));
-            } else {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
+        let _ = self.run_confirming("GridCraft", id, params);
+    }
+
+    /// Runs a command; errors become a message box, and a "replace it?" error becomes a
+    /// question whose OK runs the command again with `overwrite: true`.
+    pub fn run_confirming(&mut self, title: &str, id: &str, params: Json) -> Outcome {
+        match self.run(id, params.clone()) {
+            Ok(v) => Outcome::Done(v),
+            Err(e) => {
+                if macro_ui::ask(self, title, id, &params, &e) {
+                    return Outcome::Asked;
+                }
+                if e.contains("is not available right now") {
+                    self.toast = Some((e, now_ms()));
+                } else {
+                    self.message = Some((title.into(), clean_error(&e)));
+                }
+                Outcome::Failed
             }
         }
     }
@@ -344,10 +435,18 @@ impl SheetApp {
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
             }
+            "ui.pane" => {
+                // `{name}` shows a task pane (comments, watch, selection, formatChart,
+                // pythonDiagnostics); no name closes it.
+                self.grid.pane = p.get("name").and_then(Json::as_str).filter(|n| !n.is_empty()).map(str::to_string);
+                Ok(json!({"pane": self.grid.pane}))
+            }
+            "ui.pythonEditor" => python_window::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
             }
+            "python.saveCsv" => python_ui::save_csv(self, p),
             _ => return None,
         };
         Some(r)
@@ -355,6 +454,7 @@ impl SheetApp {
 
     /// Picks up requests commands made (dialogs, edit mode…).
     pub fn after_engine(&mut self) {
+        self.prune_selected_object();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
@@ -437,6 +537,8 @@ impl SheetApp {
     }
 
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
+    /// Editing a Python cell (rather than typing over it) happens in the formula bar, in Python
+    /// mode.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
@@ -445,6 +547,10 @@ impl SheetApp {
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        if text.is_none() && sh.cell(at).is_some_and(|c| c.py.is_some()) {
+            self.begin_python_edit();
+            return;
+        }
         // A picture has no editable scalar text. Selecting it, F2, or clicking
         // the formula bar must not turn its fallback value into a text edit.
         // Typing still starts an intentional replacement.
@@ -474,9 +580,149 @@ impl SheetApp {
         self.session.mode = if replace { gridcraft_engine::Mode::Enter } else { gridcraft_engine::Mode::Edit };
     }
 
+    /// Starts editing the active cell in Python mode, in the formula bar, with its code (empty
+    /// for a cell that isn't a Python cell yet). Nothing changes until the code is committed.
+    pub fn begin_python_edit(&mut self) {
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some(("Text Box".into(), clean_error(&e)));
+            return;
+        }
+        let Some(d) = self.session.active() else { return };
+        let Some(sh) = d.wb.active() else { return };
+        let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        let code = sh.cell(at).and_then(|c| c.py.as_ref()).map(|p| p.code.clone()).unwrap_or_default();
+        let mut ed = editor::EditState::python(d.wb.active_sheet, at, code);
+        ed.locale = self.ui.language.formula_locale();
+        self.editor = Some(ed);
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Formulas › Insert Python › Insert xl() Reference: turns on Python mode's pointing (as F2
+    /// does), starting a Python edit of the active cell if none is open, so the next click or drag
+    /// on the sheet inserts `xl("…")`.
+    pub fn point_python(&mut self) {
+        if !self.editor.as_ref().is_some_and(|e| e.python) {
+            if self.editor.is_some() {
+                self.toggle_python();
+            } else {
+                self.begin_python_edit();
+            }
+        }
+        if let Some(ed) = self.editor.as_mut().filter(|e| e.python) {
+            ed.py_point = true;
+            ed.point = None;
+            ed.point_cell = None;
+            ed.request_focus = true;
+            self.session.mode = gridcraft_engine::Mode::Point;
+            self.toast = Some(("Click or drag on the sheet to insert an xl() reference".into(), now_ms()));
+        }
+    }
+
+    /// Whether the cell is a Python cell.
+    pub fn is_python_cell(&self, sheet: usize, at: CellRef) -> bool {
+        self.session.active().and_then(|d| d.wb.sheet(sheet)).and_then(|sh| sh.cell(at)).is_some_and(|c| c.py.is_some())
+    }
+
+    /// Leaves Python mode (the PY badge, Ctrl+Alt+Shift+P, Backspace in an empty editor): Python
+    /// goes off and the input is cleared. Committing the empty input then turns a Python cell
+    /// back into a normal cell, which undo reverses; Esc keeps the cell as it was. Not editing, it
+    /// starts that edit on the active Python cell.
+    pub fn leave_python(&mut self) {
+        if self.editor.is_none() {
+            let Some(d) = self.session.active() else { return };
+            if !self.is_python_cell(d.wb.active_sheet, d.selection.active) {
+                return;
+            }
+            self.begin_python_edit();
+        }
+        let Some((sheet, cell)) = self.editor.as_ref().filter(|e| e.python).map(|e| (e.sheet, e.cell)) else { return };
+        let was = self.is_python_cell(sheet, cell);
+        if let Some(ed) = self.editor.as_mut() {
+            ed.leave_python(was);
+        }
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Ctrl+Alt+Shift+P: Python mode on or off. Not editing, it starts a Python edit of the
+    /// active cell; in a formula edit, the text becomes code.
+    pub fn toggle_python(&mut self) {
+        match self.editor.as_mut() {
+            Some(ed) if ed.python => self.leave_python(),
+            Some(ed) => {
+                ed.enter_python();
+                self.session.mode = gridcraft_engine::Mode::Edit;
+            }
+            None => self.begin_python_edit(),
+        }
+    }
+
+    /// Switches the active Python cell between a Python object and Excel values
+    /// (Ctrl+Alt+Shift+M, the PY badge menu, Insert Python's menu, the cell menu).
+    pub fn toggle_python_output(&mut self) {
+        let Some(d) = self.session.active() else { return };
+        let at = d.selection.active;
+        let Some(object) = d.wb.active().and_then(|sh| sh.cell(at)).and_then(|c| c.py.as_ref()).map(|p| p.object) else {
+            self.toast = Some(("Select a Python cell to change its output".into(), now_ms()));
+            return;
+        };
+        self.run_or_alert("python.output", json!({"cell": at.a1(), "mode": if object { "value" } else { "object" }}));
+    }
+
+    /// Commits a Python-mode edit through `python.set`; the cell stays selected.
+    fn commit_python(&mut self, ed: editor::EditState) -> bool {
+        self.session.mode = gridcraft_engine::Mode::Ready;
+        let sheet = self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map(|s| s.name.clone());
+        let mut p = json!({"cell": ed.cell.a1(), "code": ed.text});
+        if let Some(sheet) = sheet {
+            p["sheet"] = json!(sheet);
+        }
+        match self.session.run("python.set", p) {
+            Ok(_) => {
+                self.after_engine();
+                true
+            }
+            Err(e) => {
+                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.editor = Some(ed);
+                self.session.mode = gridcraft_engine::Mode::Edit;
+                false
+            }
+        }
+    }
+
     /// Commits the edit; `then` moves the selection (dr, dc) afterwards.
     pub fn commit_edit(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
-        let Some(ed) = self.editor.take() else { return true };
+        let Some(mut ed) = self.editor.take() else { return true };
+        if ed.python {
+            return self.commit_python(ed);
+        }
+        // A bare `=PY` entered with Enter or Tab starts Python mode instead.
+        if ed.is_py_trigger() {
+            ed.enter_python();
+            self.editor = Some(ed);
+            self.session.mode = gridcraft_engine::Mode::Edit;
+            return false;
+        }
+        // Left Python mode and entered nothing: the Python cell becomes a normal cell.
+        if ed.py_left && ed.text.trim().is_empty() && self.is_python_cell(ed.sheet, ed.cell) {
+            self.session.mode = gridcraft_engine::Mode::Ready;
+            let sheet = self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map(|s| s.name.clone()).unwrap_or_default();
+            return match self.session.run("python.clear", json!({"cell": ed.cell.a1(), "sheet": sheet})) {
+                Ok(_) => {
+                    if dr != 0 || dc != 0 {
+                        self.move_after_enter(dr, dc);
+                    }
+                    self.after_engine();
+                    true
+                }
+                Err(e) => {
+                    self.message = Some(("GridCraft".into(), clean_error(&e)));
+                    self.editor = Some(ed);
+                    self.session.mode = gridcraft_engine::Mode::Edit;
+                    false
+                }
+            };
+        }
         self.session.mode = gridcraft_engine::Mode::Ready;
         let text = match &ed.completion {
             Some(full) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
@@ -568,6 +814,16 @@ impl SheetApp {
         }
         self.effective_dark = ctx.theme() == egui::Theme::Dark;
         control::poll(self, ctx);
+        self.drive_job(ctx);
+        // Python cells running in the background: take results, start the next cell.
+        if self.session.python_busy() {
+            self.session.step_python();
+            ctx.request_repaint_after(std::time::Duration::from_millis(15));
+        }
+        // A package install that ended: say how, once.
+        python_ui::install_toast(self);
+        // Formulas entered since the last frame, from any source, feed Recently Used.
+        function_library::harvest(self);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
@@ -584,6 +840,33 @@ impl SheetApp {
         }
         if self.session.active().is_none() {
             self.session.new_workbook();
+        }
+    }
+
+    /// Advances a long-running job (Solver) a slice per frame; Esc pauses it.
+    fn drive_job(&mut self, ctx: &egui::Context) {
+        use gridcraft_engine::job::JobState;
+        if matches!(self.session.job_state, JobState::Running { .. }) {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                // Solver pauses into its Show Trial Solution box; other jobs ask generically.
+                let solver = matches!(&self.session.job_state, JobState::Running { label, .. } if label == "Solver");
+                self.session.pause_job(if solver { json!({"dialog": "solverTrial", "reason": "user"}) } else { json!({"reason": "user"}) });
+            } else {
+                self.session.step_job(16.0);
+                self.after_engine();
+                ctx.request_repaint();
+            }
+        }
+        // A job paused with a dialog of its own (Solver's Show Trial Solution) shows it.
+        if let JobState::Paused { info, .. } = &self.session.job_state
+            && let Some(name) = info.get("dialog").and_then(Json::as_str)
+            && self.dialog.as_ref().is_none_or(|d| d.name != name)
+        {
+            let (name, info) = (name.to_string(), info.clone());
+            self.open_dialog(&name, info);
+        }
+        if let Some((label, Err(e))) = self.session.take_job_result() {
+            self.message = Some((label, clean_error(&e)));
         }
     }
 
@@ -608,9 +891,11 @@ impl SheetApp {
         self.ribbon_keys(&ctx);
         ribbon::title_bar(self, ui);
         ribbon::show(self, ui);
-        if self.ui.formula_bar {
+        // Python code is edited in the formula bar, so it shows while that happens.
+        if self.ui.formula_bar || self.editor.as_ref().is_some_and(|e| e.python) {
             formula_bar::show(self, ui);
         }
+        python_ui::enable_bar(self, ui);
         if self.ui.status_bar {
             tabs::status_bar(self, ui);
         }
@@ -622,8 +907,11 @@ impl SheetApp {
             grid::show(self, ui);
             self.perf.grid_ms = now_ms() - g0;
         });
+        python_window::show(self, &ctx);
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
+        widgets::confirm_box(self, &ctx);
+        widgets::job_paused(self, &ctx);
         widgets::toast(self, &ctx);
         control::issue_screenshots(self, &ctx);
         control::collect_screenshots(self, &ctx);
@@ -686,8 +974,8 @@ impl SheetApp {
         }
         for action in actions {
             match action {
-                keytips::Action::Home => {
-                    self.run_or_alert("ui.ribbonTab", json!({"tab": "Home"}));
+                keytips::Action::Tab(tab) => {
+                    self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
                     self.ui.ribbon_collapsed = false;
                 }
                 keytips::Action::Command(id) => self.run_or_alert(id, json!({})),
@@ -728,6 +1016,16 @@ pub fn clean_error(e: &str) -> String {
         return rest.to_string();
     }
     e.to_string()
+}
+
+/// More about the toast shown at `at`: how long it stays, whether it reports a failure, and a
+/// button that opens a pane (`(label, pane)`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToastExtra {
+    pub at: f64,
+    pub ms: f64,
+    pub danger: bool,
+    pub action: Option<(String, String)>,
 }
 
 #[allow(clippy::disallowed_methods)] // the clock is read only off wasm

@@ -323,3 +323,429 @@ fn rotated_wrapped_text_is_drawn_rotated_inside_its_cell() {
         assert!(clip.width() < 70.0, "clip spans one 6-character column, got {clip:?}");
     }
 }
+
+#[test]
+fn ref_edit_takes_the_grid_selection_and_restores_it() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("goalSeek", json!({}));
+    h.run_steps(2);
+    let field = |h: &egui_kittest::Harness<'static, SheetApp>, k: &str| {
+        h.state().dialog.as_ref().and_then(|d| d.values.get(k).and_then(|v| v.as_str()).map(str::to_string)).unwrap_or_default()
+    };
+    assert_eq!(field(&h, "set"), "$B$2", "Set cell starts at the active cell");
+    // Clicking into "By changing cell" makes it the pick target; the grid selection then fills it.
+    let app = h.state_mut();
+    if let Some(d) = app.dialog.as_mut() {
+        d.pick = Some("changing".into());
+        d.pick_seen = "$B$2".into();
+        d.home = Some((0, "B2".into(), "B2".into()));
+    }
+    app.session.run("selection.set", json!({"range": "C3:D4"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(field(&h, "changing"), "$C$3:$D$4");
+    assert_eq!(field(&h, "set"), "$B$2", "only the pick target changes");
+    // A selection on another sheet carries the sheet name.
+    h.state_mut().session.run("home.insertSheet", json!({"name": "Data", "before": 1})).unwrap();
+    h.state_mut().session.run("selection.set", json!({"range": "A5"})).unwrap();
+    h.run_steps(2);
+    assert!(field(&h, "changing").ends_with("!$A$5"), "{}", field(&h, "changing"));
+    // Closing puts the original sheet and selection back.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    let d = h.state().session.active().map(|d| (d.wb.active_sheet, d.selection.a1()));
+    assert_eq!(d, Some((0, "B2".to_string())));
+}
+
+#[test]
+fn confirm_question_reruns_the_command_on_ok() {
+    assert_eq!(
+        gridcraft_ui_egui::confirm_text("invalid parameters for `x`: confirm: Replace it? (run again with `overwrite: true`)").as_deref(),
+        Some("Replace it?")
+    );
+    assert_eq!(gridcraft_ui_egui::confirm_text("no workbook open"), None);
+    let mut h = harness(blank());
+    h.state_mut().confirm = Some(gridcraft_ui_egui::Confirm {
+        title: "Test".into(),
+        text: "Replace it?".into(),
+        command: "cell.set".into(),
+        params: json!({"cell": "A1", "input": "5"}),
+        choices: vec![],
+    });
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().confirm.is_none());
+    assert_eq!(value(&h, "A1"), Value::Number(5.0));
+    // Cancel leaves things alone.
+    h.state_mut().confirm = Some(gridcraft_ui_egui::Confirm {
+        title: "Test".into(),
+        text: "Replace it?".into(),
+        command: "cell.set".into(),
+        params: json!({"cell": "A1", "input": "6"}),
+        choices: vec![],
+    });
+    h.run_steps(2);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().confirm.is_none());
+    assert_eq!(value(&h, "A1"), Value::Number(5.0));
+}
+
+/// Counts up a little each frame until it reaches 50.
+struct Ticker(u32);
+
+impl gridcraft_engine::job::Job for Ticker {
+    fn label(&self) -> String {
+        "Ticker".into()
+    }
+    fn step(&mut self, _s: &mut Session, _b: gridcraft_engine::job::Budget) -> gridcraft_engine::job::Step {
+        self.0 += 5;
+        if self.0 >= 50 {
+            gridcraft_engine::job::Step::Done(Ok(json!({"n": self.0})))
+        } else {
+            gridcraft_engine::job::Step::Continue(self.0.to_string())
+        }
+    }
+    fn stop(&mut self, _s: &mut Session) -> gridcraft_engine::Result<serde_json::Value> {
+        Ok(json!({"n": self.0}))
+    }
+}
+
+#[test]
+fn jobs_run_per_frame_and_escape_pauses_them() {
+    use gridcraft_engine::job::JobState;
+    let mut h = harness(blank());
+    h.state_mut().session.start_job(Box::new(Ticker(0))).unwrap();
+    h.run_steps(2);
+    assert!(matches!(h.state().session.job_state, JobState::Running { .. }));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(matches!(h.state().session.job_state, JobState::Paused { .. }), "{:?}", h.state().session.job_state);
+    h.run_steps(3);
+    assert!(matches!(h.state().session.job_state, JobState::Paused { .. }), "a paused job waits for an answer");
+    // The pause question's Continue (Enter) resumes it; it then runs to the end.
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(12);
+    assert!(h.state().session.job.is_none());
+    assert!(h.state().message.is_none());
+}
+
+#[test]
+fn data_table_dialog_creates_a_live_table() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "B1", "values": [[2]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "D2", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "=B1*10"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1:E4"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("dataTable", json!({}));
+    h.run_steps(2);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("columnInput".into(), json!("$B$1"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    assert_eq!(value(&h, "E3"), Value::Number(20.0));
+    h.state_mut().session.run("cell.set", json!({"cell": "E1", "input": "=B1*100"})).unwrap();
+    h.run_steps(1);
+    assert_eq!(value(&h, "E4"), Value::Number(300.0));
+}
+
+#[test]
+fn data_analysis_runs_a_tool_from_its_form() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Score"], [1], [2], [3], [4]]})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("dataAnalysis", json!({}));
+    h.run_steps(2);
+    // Pick Descriptive Statistics and press OK: its form replaces the list.
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.list_index = 5;
+    }
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().map(|d| (d.name.clone(), d.title.clone()));
+    assert_eq!(d, Some(("toolpak".to_string(), "Descriptive Statistics".to_string())));
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("input".into(), json!("$A$1:$A$5"));
+        d.values.insert("labels".into(), json!(true));
+        d.values.insert("newSheetName".into(), json!("Stats"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let doc = h.state().session.active().unwrap();
+    assert_eq!(doc.wb.active().unwrap().name, "Stats");
+    assert_eq!(doc.wb.active().unwrap().value(CellRef::parse("B2").unwrap()), Value::Number(2.5));
+}
+
+#[test]
+fn toolpak_forms_build_command_params() {
+    use gridcraft_ui_egui::toolpak;
+    // Every tool has a form.
+    for (id, _) in gridcraft_engine::cmd::analysis::TOOLS {
+        assert!(toolpak::form(id).is_some(), "{id}");
+    }
+    let f = toolpak::form("analysis.descriptiveStatistics").unwrap();
+    let mut v = serde_json::Map::new();
+    for (k, x) in [
+        ("input", json!(" $A$1:$B$9 ")),
+        ("groupedBy", json!("columns")),
+        ("labels", json!(true)),
+        ("summary", json!(true)),
+        ("useConfidence", json!(true)),
+        ("confidence", json!("90")),
+        ("useKthLargest", json!(false)),
+        ("kthLargest", json!("2")),
+        ("outputMode", json!("range")),
+        ("outputRange", json!("$D$1")),
+    ] {
+        v.insert(k.into(), x);
+    }
+    let p = toolpak::params(&f, &v);
+    assert_eq!(p["input"], "$A$1:$B$9");
+    assert_eq!(p["confidence"], 90.0);
+    assert_eq!(p["kthLargest"], serde_json::Value::Null);
+    assert_eq!(p["output"], "$D$1");
+    v.insert("outputMode".into(), json!("newWorkbook"));
+    assert_eq!(toolpak::params(&f, &v)["output"], "newWorkbook");
+    v.insert("outputMode".into(), json!("newSheet"));
+    assert_eq!(toolpak::params(&f, &v)["output"], "newSheet");
+}
+
+fn wyndor_session() -> Session {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Doors", 0], ["Windows", 0]]})).unwrap();
+    for (c, f) in [("C1", "=B1"), ("C2", "=2*B2"), ("C3", "=3*B1+2*B2"), ("D1", "=3*B1+5*B2")] {
+        s.execute("cell.set", json!({"cell": c, "input": f})).unwrap();
+    }
+    s.execute("range.setValues", json!({"range": "E1", "values": [[4], [12], [18]]})).unwrap();
+    s.execute(
+        "data.solverSetModel",
+        json!({"objective": "$D$1", "variables": "$B$1:$B$2", "method": "simplex", "constraints": [{"left": "$C$1:$C$3", "op": "<=", "right": "$E$1:$E$3"}]}),
+    )
+    .unwrap();
+    s
+}
+
+#[test]
+fn solver_runs_in_the_background_and_shows_results() {
+    let mut h = harness(wyndor_session());
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().map(|d| (d.name.clone(), d.values.get("objective").cloned()));
+    assert_eq!(d, Some(("solver".to_string(), Some(json!("$D$1")))));
+    // Solve (what the Solve button does), then let the job run frame by frame.
+    h.state_mut().dialog = None;
+    h.state_mut().session.run("data.solverStart", json!({})).unwrap();
+    h.run_steps(10);
+    let dlg = h.state().dialog.as_ref().map(|d| (d.name.clone(), d.values.get("status").cloned()));
+    assert_eq!(dlg, Some(("solverResults".to_string(), Some(json!(0)))));
+    assert_eq!(value(&h, "B2"), Value::Number(6.0));
+}
+
+#[test]
+fn show_iteration_results_pauses_with_the_trial_dialog() {
+    let mut s = wyndor_session();
+    s.execute("data.solverSetModel", json!({"method": "grg", "options": {"showIterations": true}})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().session.run("data.solverStart", json!({})).unwrap();
+    for _ in 0..40 {
+        h.run_steps(1);
+        if h.state().dialog.is_some() {
+            break;
+        }
+    }
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.clone()).as_deref(), Some("solverTrial"));
+    // Stop: the best solution so far is offered in Solver Results.
+    h.state_mut().dialog = None;
+    h.state_mut().session.stop_job();
+    h.state_mut().after_engine();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.clone()).as_deref(), Some("solverResults"));
+}
+
+fn pivot_session() -> Session {
+    let mut s = blank();
+    let rows = json!([["Region", "Sales"], ["East", 100], ["West", 50], ["North", 30], ["East", 20]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    s
+}
+
+/// The value beside a row label in the active sheet's PivotTable.
+fn pivot_value(h: &egui_kittest::Harness<'static, SheetApp>, label: &str) -> Option<Value> {
+    let d = h.state().session.active()?;
+    let sh = d.wb.active()?;
+    let r = sh.pivots.last()?.last_range?;
+    let row = (r.start.row..=r.end.row).find(|row| sh.value(CellRef::new(*row, r.start.col)).display() == label)?;
+    Some(sh.value(CellRef::new(row, r.start.col + 1)))
+}
+
+#[test]
+fn pivot_field_button_sorts_and_filters() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(pivot_session());
+    let (id, buttons) = {
+        let sh = h.state().session.active().and_then(|d| d.wb.active()).unwrap();
+        let pt = sh.pivots.last().unwrap();
+        (pt.id, gridcraft_ui_egui::pivot_filter::buttons(sh))
+    };
+    // Row Labels has a button, unfiltered.
+    assert_eq!(buttons, vec![(CellRef::new(2, 0), false)]);
+    h.state_mut().grid.pivot_menu = Some((id, "Region".into(), egui::pos2(400.0, 200.0)));
+    h.run_steps(2);
+    h.get_by_label("Sort Z to A").click();
+    h.run_steps(2);
+    let first = h.state().session.active().and_then(|d| d.wb.active()).map(|s| s.value(CellRef::new(3, 0)).display());
+    assert_eq!(first.as_deref(), Some("West"));
+    // Uncheck West and press OK.
+    h.state_mut().grid.pivot_menu = Some((id, "Region".into(), egui::pos2(400.0, 200.0)));
+    h.run_steps(2);
+    h.get_by_label("West").click();
+    h.run_steps(1);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(h.state().grid.pivot_menu.is_none());
+    assert_eq!(pivot_value(&h, "West"), None);
+    assert_eq!(pivot_value(&h, "Grand Total"), Some(Value::Number(150.0)));
+    let sh = h.state().session.active().and_then(|d| d.wb.active()).unwrap();
+    assert_eq!(gridcraft_ui_egui::pivot_filter::buttons(sh), vec![(CellRef::new(2, 0), true)], "the button shows the filter");
+}
+
+#[test]
+fn pivot_label_and_top10_dialogs() {
+    let mut h = harness(pivot_session());
+    let id = h.state().session.active().and_then(|d| d.wb.active()).and_then(|s| s.pivots.last()).map(|p| p.id).unwrap();
+    h.state_mut()
+        .open_dialog("pivotFilter", json!({"kind": "label", "pivot": id, "field": "Region", "op": "beginsWith", "values": ["Sum of Sales"]}));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.title.clone()).as_deref(), Some("Label Filter (Region)"));
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("value".into(), json!("E"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    assert_eq!(pivot_value(&h, "Grand Total"), Some(Value::Number(120.0)));
+    // Top 10: the bottom item by Sum of Sales.
+    h.state_mut().open_dialog("pivotFilter", json!({"kind": "top10", "pivot": id, "field": "Region", "values": ["Sum of Sales"]}));
+    h.run_steps(2);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("top".into(), json!("bottom"));
+        d.values.insert("count".into(), json!("1"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    assert_eq!(pivot_value(&h, "Grand Total"), Some(Value::Number(30.0)));
+    // A bad count keeps the dialog open with a message.
+    h.state_mut().open_dialog("pivotFilter", json!({"kind": "top10", "pivot": id, "field": "Region", "values": ["Sum of Sales"]}));
+    h.run_steps(2);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("count".into(), json!("x"));
+    }
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_some());
+    assert!(h.state().message.is_some());
+}
+
+#[test]
+fn calculated_field_and_item_dialogs() {
+    use egui_kittest::kittest::Queryable;
+    let mut s = pivot_session();
+    s.execute("selection.set", json!({"range": "A4"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("pivotCalcField", json!({}));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.title.clone()).as_deref(), Some("Insert Calculated Field"));
+    // Pick Sales from the list and insert it, then finish the formula and press Add.
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("name".into(), json!("Double"));
+        d.values.insert("pick".into(), json!(1));
+    }
+    h.run_steps(1);
+    h.get_by_label("Insert Field").click();
+    h.run_steps(2);
+    let f = h.state().dialog.as_ref().and_then(|d| d.values.get("formula").and_then(|v| v.as_str()).map(str::to_string));
+    assert_eq!(f.as_deref(), Some("= Sales"));
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("formula".into(), json!("= Sales*2"));
+    }
+    h.run_steps(1);
+    h.get_by_label("  Add  ").click();
+    h.run_steps(2);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    h.get_by_label(" Close ").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+    let pt = h.state().session.active().and_then(|d| d.wb.active()).and_then(|s| s.pivots.last().cloned()).unwrap();
+    assert_eq!(pt.calc_fields.len(), 1);
+    assert_eq!(pivot_value(&h, "East").map(|_| ()), Some(()));
+    // Calculated item through its dialog and OK.
+    h.state_mut().open_dialog("pivotCalcItem", json!({}));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.title.clone()).as_deref(), Some("Insert Calculated Item in \"Region\""));
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("name".into(), json!("EW"));
+        d.values.insert("formula".into(), json!("=East+West"));
+    }
+    h.run_steps(1);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    assert_eq!(pivot_value(&h, "EW"), Some(Value::Number(170.0)));
+}
+
+/// Presses at `from`, moves in steps and releases at `to`.
+fn drag(h: &mut egui_kittest::Harness<'static, SheetApp>, from: egui::Pos2, to: egui::Pos2) {
+    let button = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.input_mut().events.push(Event::PointerMoved(from));
+    h.run_steps(1);
+    h.input_mut().events.push(button(from, true));
+    h.run_steps(1);
+    for k in 1..=8 {
+        let t = k as f32 / 8.0;
+        h.input_mut().events.push(Event::PointerMoved(from + (to - from) * t));
+        h.run_steps(1);
+    }
+    h.input_mut().events.push(button(to, false));
+    h.run_steps(3);
+}
+
+#[test]
+fn pivot_fields_drag_between_areas() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(pivot_session());
+    let pt = |h: &egui_kittest::Harness<'static, SheetApp>| {
+        h.state().session.active().and_then(|d| d.wb.active()).and_then(|s| s.pivots.last().cloned()).unwrap()
+    };
+    // Region from Rows into Columns.
+    let chip = h.get_by_label("Region ▾").rect().center();
+    let columns = h.get_by_label("Columns").rect();
+    drag(&mut h, chip, egui::pos2(columns.center().x, columns.bottom() + 30.0));
+    let p = pt(&h);
+    assert!(p.rows.is_empty(), "{:?}", h.state().message);
+    assert_eq!(p.columns.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), vec!["Region"]);
+    // Sales from the field list into Rows.
+    let sales = h.get_by_label("Sales").rect().center();
+    let rows = h.get_by_label("Rows").rect();
+    drag(&mut h, sales, egui::pos2(rows.center().x, rows.bottom() + 30.0));
+    assert_eq!(pt(&h).rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), vec!["Sales"]);
+    // Region dragged out of the areas leaves the PivotTable.
+    let chip = h.get_by_label("Region ▾").rect().center();
+    drag(&mut h, chip, egui::pos2(300.0, 400.0));
+    assert!(pt(&h).columns.is_empty());
+    assert_eq!(pt(&h).values.len(), 1, "values stay");
+    // Clicks still reach the checkboxes and the field menus.
+    h.get_by_label("Region").click();
+    h.run_steps(2);
+    assert_eq!(pt(&h).rows.len(), 2, "ticking Region adds it to Rows");
+    h.get_by_label("Region ▾").click();
+    h.run_steps(2);
+    h.get_by_label("Remove Field").click();
+    h.run_steps(2);
+    assert_eq!(pt(&h).rows.len(), 1);
+}

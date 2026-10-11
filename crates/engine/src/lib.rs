@@ -8,11 +8,19 @@
 
 pub mod catalog;
 pub mod cf;
+pub mod clock;
 pub mod cmd;
 pub mod display;
 pub mod fill;
 pub mod io;
+pub mod job;
+pub mod macros;
 pub mod pivot;
+pub mod pivot_formula;
+pub mod pyenv;
+pub mod python;
+pub mod record;
+pub mod report;
 pub mod sample;
 pub mod selection;
 pub mod tables;
@@ -29,6 +37,7 @@ pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
 pub use gridcraft_formula as formula;
+pub use gridcraft_math as math;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
 pub use selection::Selection;
@@ -45,6 +54,12 @@ pub enum EngineError {
     NoDocument,
     #[error("{0}")]
     Other(String),
+    /// The command would replace something; run it again with `overwrite: true` to go ahead.
+    #[error("confirm: {0} (run again with `overwrite: true`)")]
+    Confirm(String),
+    /// Active content (a macro) asks to run; run again with `approve: true` to allow it.
+    #[error("approve: {0} (run again with `approve: true`)")]
+    Approve(String),
     #[error("internal error in `{0}` (the workbook was kept as it was): {1}")]
     Internal(String, String),
 }
@@ -56,6 +71,36 @@ pub struct HistoryEntry {
     pub label: String,
     pub wb: Arc<Workbook>,
     pub selection: Selection,
+}
+
+/// An undo group opened with [`Session::group_begin`]. Hand it back to [`Session::group_end`]
+/// (keep the changes as one undo step) or [`Session::group_rollback`] (undo them all).
+#[derive(Debug, PartialEq, Eq)]
+#[must_use = "an undo group stays open until it is ended or rolled back"]
+pub struct GroupToken {
+    id: u64,
+    doc: u64,
+}
+
+impl GroupToken {
+    /// The document the group belongs to.
+    pub fn doc(&self) -> u64 {
+        self.doc
+    }
+}
+
+/// An open undo group: what runs on `doc` until it ends becomes one undo step.
+#[derive(Clone, Debug)]
+struct OpenGroup {
+    id: u64,
+    doc: u64,
+    label: String,
+    /// Undo depth when the group began; the group's own steps are cut back to it.
+    start: usize,
+    wb: Arc<Workbook>,
+    selection: Selection,
+    /// The redo stack when the group began (a rollback puts it back).
+    redo: Vec<HistoryEntry>,
 }
 
 /// The clipboard: a block of cells (with formulas and styles) or marching-ants reference.
@@ -70,6 +115,35 @@ pub struct Clipboard {
     pub doc_uid: u64,
     /// Plain text (tab-separated) for the system clipboard.
     pub text: String,
+    /// Trust of the source document: pasting from a file someone else made carries that along.
+    pub trust: Trust,
+}
+
+/// Whether a document's active content (Python cells, macros) may run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Trust {
+    /// Made here (a new workbook or a sample).
+    #[default]
+    Local,
+    /// Opened from a file, or holds content pasted from one: nothing active runs until the person
+    /// enables it.
+    FromFile,
+    /// Opened from a file, and the person enabled its content.
+    Trusted,
+}
+
+impl Trust {
+    /// Whether active content may run without asking.
+    pub fn allows_code(self) -> bool {
+        self != Trust::FromFile
+    }
+
+    /// The trust of a document after it receives content from a document with trust `source`:
+    /// content from an untrusted file keeps it untrusted.
+    pub fn receive(self, source: Trust) -> Trust {
+        if source == Trust::FromFile { Trust::FromFile } else { self }
+    }
 }
 
 /// In-cell edit mode as shown in the status bar.
@@ -96,6 +170,15 @@ pub struct DocState {
     pub title: String,
     /// Per-sheet selection memory.
     pub sheet_selections: Vec<Selection>,
+    /// Whether the workbook's active content may run.
+    pub trust: Trust,
+    /// While a macro's footprint is measured: every cell a command wrote, by sheet name, even
+    /// where it wrote what was already there.
+    pub touched: Option<Vec<(String, CellRef)>>,
+    /// The last Python runs (`python.diagnostics`), oldest first.
+    pub py_log: std::collections::VecDeque<python::PyRunLog>,
+    /// Python runs so far (numbers the log entries).
+    pub py_log_seq: u64,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -105,6 +188,7 @@ impl DocState {
     pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
+        wb.refresh_equations();
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
         DocState {
@@ -119,6 +203,10 @@ impl DocState {
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             title,
             sheet_selections: vec![],
+            trust: Trust::Local,
+            touched: None,
+            py_log: Default::default(),
+            py_log_seq: 0,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -150,6 +238,16 @@ pub struct Prefs {
     pub r1c1: bool,
     /// Words added with Add to Dictionary.
     pub user_dictionary: Vec<String>,
+    /// Seconds one Python cell may run.
+    pub python_timeout_seconds: f64,
+    /// Seconds of a run spent importing modules not loaded yet that don't count against
+    /// `python_timeout_seconds`, at most (a package's first import after an install is slow).
+    pub python_import_seconds: f64,
+    /// The user's Python for Python cells (a path, or a name on PATH); empty to look for one.
+    pub python_interpreter: String,
+    /// Where GridCraft's own Python environment lives; empty for `GRIDCRAFT_PYTHON_ENV`, else the
+    /// app's data folder.
+    pub python_environment: String,
 }
 
 impl Default for Prefs {
@@ -163,6 +261,10 @@ impl Default for Prefs {
             sheets_in_new_workbook: 1,
             r1c1: false,
             user_dictionary: vec![],
+            python_timeout_seconds: 5.0,
+            python_import_seconds: 60.0,
+            python_interpreter: String::new(),
+            python_environment: String::new(),
         }
     }
 }
@@ -192,14 +294,34 @@ pub struct Session {
     pub last_find: Option<Json>,
     /// Workbook view: normal, pageLayout or pageBreakPreview.
     pub view_mode: String,
-    /// Journal position where action recording started.
-    pub recording: Option<usize>,
+    /// The action recorder, while recording (top-level commands only; see [`record`]).
+    pub recorder: Option<record::Recorder>,
+    /// Macros the person allowed to run this session: (document uid, macro content hash).
+    pub macro_approvals: std::collections::HashSet<(u64, u64)>,
+    /// Where the macro recorder started (beside `recorder`, its buffer).
+    pub macro_recording: Option<macros::recorder::RecordingStart>,
+    /// The macro being debugged, between debugger actions.
+    pub macro_debug: Option<macros::debug::Debugger>,
+    /// How many `execute` calls are running (0 between top-level commands).
+    depth: u32,
     /// Windows hidden with View › Hide.
     pub hidden_windows: Vec<usize>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// Long-running work (Solver), advanced by the host a slice at a time.
+    pub job: Option<Box<dyn job::Job>>,
+    pub job_state: job::JobState,
+    /// The last Solver run's result (for its reports and Restore Original Values).
+    pub solver_last: Option<Json>,
+    /// Open undo groups, innermost last.
+    groups: Vec<OpenGroup>,
+    next_group: u64,
+    /// Counts group begins and ends, so `execute` can tell that a command opened or closed one.
+    group_epoch: u64,
+    /// Python workers and the cells queued for them (see [`python`]).
+    pub(crate) python: python::PyRuntime,
 }
 
 impl Session {
@@ -223,6 +345,10 @@ impl Session {
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.docs.get_mut(self.active)
     }
+    /// The document with this uid (it may not be the active one any more).
+    pub fn doc_by_uid_mut(&mut self, uid: u64) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.uid == uid)
+    }
     pub fn doc(&self) -> Result<&DocState> {
         self.active().ok_or(EngineError::NoDocument)
     }
@@ -236,7 +362,9 @@ impl Session {
     }
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
-            self.docs.remove(i);
+            let d = self.docs.remove(i);
+            self.groups.retain(|g| g.doc != d.uid);
+            self.python_forget(d.uid);
             if self.active >= self.docs.len() {
                 self.active = self.docs.len().saturating_sub(1);
             }
@@ -264,15 +392,35 @@ impl Session {
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
+        // While a macro is being debugged its undo group is open: other edits of the workbooks it
+        // touched wait. Other workbooks stay editable.
+        let locked = self.active().is_some_and(|d| self.macro_debug.as_ref().is_some_and(|m| m.locks(d.uid)));
+        if self.depth == 0 && spec.undoable && id != "macro.debug" && locked {
+            return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
+        }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
+        let (first_group, group_epoch) = (self.next_group, self.group_epoch);
+        // The recorder keeps top-level calls with the place they ran in.
+        let recording = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
+            Some(d) => (d.uid, d.wb.active_sheet, d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
+            None => (0, 0, String::new(), Selection::default()),
+        });
+        // What Python cells see as the edit: the workbook before a top-level command.
+        let python_before = if self.depth == 0 { before.as_ref().map(|(uid, wb, _)| (*uid, wb.clone())) } else { None };
+        if self.depth == 0 {
+            self.python.refreshed = false;
+        }
+        self.depth = self.depth.saturating_add(1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
+        self.depth = self.depth.saturating_sub(1);
         let result = match result {
             Ok(r) => r,
             Err(p) => {
                 let msg =
                     p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
-                // Restore the workbook as it was.
+                // Restore the workbook as it was, and drop the undo groups the command opened.
+                self.groups.retain(|g| g.id < first_group);
                 if let Some((uid, wb, sel)) = &before
                     && let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid)
                 {
@@ -280,28 +428,168 @@ impl Session {
                     d.selection = sel.clone();
                     d.calc.rebuild(&d.wb);
                 }
+                macros::debug::recover(self);
+                if let Some((uid, ..)) = &before {
+                    self.python_mark_dirty(*uid);
+                }
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
         };
         if spec.journal && result.is_ok() {
+            // A command that started recording isn't part of the recording; one that stopped it
+            // finds no recorder.
+            if let Some((doc, sheet, sheet_name, selection)) = recording
+                && let Some(rec) = self.recorder.as_mut()
+            {
+                // A toggle (Bold) is recorded with the state it set, as Excel records
+                // `Bold = True`: playing it back sets it rather than flipping it.
+                let mut params = params.clone();
+                if let (Ok(Json::Object(r)), Json::Object(p)) = (&result, &mut params)
+                    && !p.contains_key("on")
+                    && let Some(on @ Json::Bool(_)) = r.get("on")
+                {
+                    p.insert("on".into(), on.clone());
+                }
+                rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
+            }
             self.journal.push((id.to_string(), params.clone()));
             if self.journal.len() > 10_000 {
                 self.journal.drain(..5_000);
             }
         }
+        // Inside an undo group, or when the command opened or closed one, the group owns the step.
+        let grouped = |uid: u64| self.group_epoch != group_epoch || self.groups.iter().any(|g| g.doc == uid);
+        let grouped = before.as_ref().is_some_and(|(uid, ..)| grouped(*uid));
         if spec.undoable
             && let Some((uid, wb, sel)) = before
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
         {
-            d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel });
-            if d.undo.len() > UNDO_LIMIT {
+            if !grouped {
+                d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel });
+                if d.undo.len() > UNDO_LIMIT {
+                    d.undo.remove(0);
+                }
+            }
+            d.redo.clear();
+            d.revision += 1;
+        }
+        if python_before.is_some() && !std::mem::take(&mut self.python.refreshed) && result.is_ok() {
+            self.python_after_command(id, python_before);
+        }
+        result
+    }
+
+    /// Runs `f` as one undo step labelled `label` on the active document: whatever commands `f`
+    /// runs, one Undo brings back the workbook as it was before. If `f` fails, every change it made
+    /// is rolled back and its error returned. Groups nest; the outermost one makes the step.
+    pub fn grouped<R>(&mut self, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
+        let token = self.group_begin(label)?;
+        match f(self) {
+            Ok(r) => {
+                self.group_end(token)?;
+                Ok(r)
+            }
+            Err(e) => {
+                // The error from `f` is the one worth reporting; a rollback can only fail if the
+                // group already ended, and then there is nothing left to undo.
+                let _ = self.group_rollback(token);
+                Err(e)
+            }
+        }
+    }
+
+    /// Opens an undo group on the active document that can span several calls (a debugged macro
+    /// steps once per frame). Until [`Session::group_end`] or [`Session::group_rollback`], undoable
+    /// commands on that document add no undo steps of their own, and Undo and Redo are unavailable.
+    pub fn group_begin(&mut self, label: &str) -> Result<GroupToken> {
+        let d = self.doc()?;
+        let g = OpenGroup {
+            id: self.next_group,
+            doc: d.uid,
+            label: label.trim_end_matches('…').to_string(),
+            start: d.undo.len(),
+            wb: d.wb.clone(),
+            selection: d.selection.clone(),
+            redo: d.redo.clone(),
+        };
+        let token = GroupToken { id: g.id, doc: g.doc };
+        self.next_group += 1;
+        self.group_epoch += 1;
+        self.groups.push(g);
+        Ok(token)
+    }
+
+    /// Ends an undo group: if the workbook changed, the group becomes one undo step (unless it is
+    /// nested in another open group on the same document, which then owns the step). Groups opened
+    /// inside it and still open end with it. Returns whether the workbook changed.
+    pub fn group_end(&mut self, token: GroupToken) -> Result<bool> {
+        let g = self.take_group(&token)?;
+        let outer = self.groups.iter().any(|o| o.doc == g.doc);
+        let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(false) };
+        // Steps something pushed directly while the group was open (a finished Solver run) fold in.
+        d.undo.truncate(g.start);
+        let changed = !Arc::ptr_eq(&d.wb, &g.wb);
+        if changed && !outer {
+            d.undo.push(HistoryEntry { label: g.label, wb: g.wb, selection: g.selection });
+            while d.undo.len() > UNDO_LIMIT {
                 d.undo.remove(0);
             }
             d.redo.clear();
             d.revision += 1;
         }
-        result
+        Ok(changed)
+    }
+
+    /// Ends an undo group by putting back the workbook, selection and undo history as they were
+    /// when it began.
+    pub fn group_rollback(&mut self, token: GroupToken) -> Result<()> {
+        let g = self.take_group(&token)?;
+        let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(()) };
+        if !Arc::ptr_eq(&d.wb, &g.wb) {
+            d.wb = g.wb;
+            d.calc.rebuild(&d.wb);
+        }
+        d.selection = g.selection;
+        d.undo.truncate(g.start);
+        d.redo = g.redo;
+        d.revision += 1;
+        Ok(())
+    }
+
+    /// Starts recording top-level commands (an empty buffer, replacing any recording in progress).
+    pub fn start_recording(&mut self) {
+        self.recorder = Some(record::Recorder::default());
+    }
+
+    /// Stops recording and hands back what was recorded (`None` if nothing was recording).
+    pub fn stop_recording(&mut self) -> Option<record::Recorder> {
+        self.recorder.take()
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.recorder.is_some()
+    }
+
+    /// How many commands are running: 0 between top-level commands, 1 inside one, 2 inside a
+    /// command run by a command, and so on.
+    pub fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    /// Whether an undo group is open on the document with this uid.
+    pub fn in_group(&self, doc: u64) -> bool {
+        self.groups.iter().any(|g| g.doc == doc)
+    }
+
+    /// Removes the token's group and any group on the same document opened after it.
+    fn take_group(&mut self, token: &GroupToken) -> Result<OpenGroup> {
+        let at = self.groups.iter().position(|g| g.id == token.id).ok_or_else(|| EngineError::Other("that undo group has already ended".into()))?;
+        let mut later = self.groups.split_off(at);
+        let g = later.remove(0);
+        self.groups.extend(later.into_iter().filter(|o| o.doc != g.doc));
+        self.group_epoch += 1;
+        Ok(g)
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {

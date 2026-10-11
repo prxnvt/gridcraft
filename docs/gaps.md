@@ -70,9 +70,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   routine in business.
 - **Estimate:** 28–42 h (`.xls` read 20–30, encryption 8–12). [file-format-parity.md](file-format-parity.md)
 
-### 8. PivotTables: no slicers, calculated fields, PivotCharts; unverified in Excel (F)
+### 8. PivotTables: no slicers, timelines, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
-  `insert.pivotChart`, `pivot.calculatedField`, `table.insertSlicer`; GETPIVOTDATA missing.
+  `insert.pivotChart`, `table.insertSlicer`; GETPIVOTDATA and Show Details missing.
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
@@ -97,8 +97,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
   data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
 
-### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
-- `data.solver`, `data.analysisToolPak`, `data.forecastSheet` missing; FORECAST.ETS family missing.
+### 13. Analysis tools: Forecast Sheet (F)
+- `data.forecastSheet` missing; FORECAST.ETS family missing. Solver and the Analysis ToolPak are in.
   **Estimate:** 22–35 h.
 
 ### 14. Page Layout view and print polish (U, F)
@@ -114,8 +114,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   conversion; cloud storage requested (#86). **Estimate:** 35–55 h (co-authoring scope needs the owner).
 
 ### 17. Insert objects (F)
-- SmartArt, WordArt, equations, signature line, objects, 3-D models, screenshot; 8 shape kinds vs
-  ~170; pictures in cells (#61, PR #105). **Estimate:** 25–40 h.
+- SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
+  pictures in cells (#61, PR #105). Equations exist (LaTeX source, Office Math in xlsx); there is
+  no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
 
 ### 18. Accessibility (U)
 - AccessKit on, but no accessible grid/ribbon tree, no high contrast, no checker. **Estimate:** 12–18 h.
@@ -144,6 +145,22 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 24. Fonts and look (U)
 - Font weights beyond regular/bold (#168), system font list (#4), Calibri metrics (#29), macOS
   chrome (#169, #170), Linux title bar (#54), icon consistency across apps (#173). **Estimate:** 7–12 h.
+
+### 25. Open bug: scikit-learn looks like it fails in a Python cell after installing it (S)
+- **Symptom:** after approving the install of scikit-learn from a cell that imports it, the cell
+  still failed, so the install looked broken. The package was in fact installed (1.9.1, macOS,
+  CPython 3.14, uv).
+- **Evidence:** a cold first import of four sklearn submodules took about 22 s in a fresh
+  environment and under 1 s afterwards; `--compile-bytecode` made no real difference. The time
+  goes on the first load of each scipy and numpy native library (about 0.5 to 1 s each), which
+  looks like macOS checking each new binary (not confirmed). Before M14.49 that first import
+  hit the 5 s cell limit and the cell was then refused until changed.
+- **Mitigated, not fixed:** M14.49 adds an install warm-up step, a 60 s import allowance and one
+  retry; with them a first `import sklearn` succeeded in testing. Still open: confirm the cause,
+  replay the original workbook against a fresh environment with the M14.46 logging, check
+  environments installed before M14.49 (no warm-up), and decide whether the retry should apply
+  only to stops that happen mid-import.
+- **Estimate:** 2–4 h.
 
 ## Revision history
 

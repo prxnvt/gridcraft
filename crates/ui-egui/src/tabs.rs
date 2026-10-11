@@ -1,6 +1,6 @@
 //! Sheet tabs and the status bar.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use gridcraft_engine::model::Visibility;
 use serde_json::json;
 
@@ -170,11 +170,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                     pos2(bar.left() + bar.width() * frac1.max(frac0 + 0.03), bar.bottom()),
                 );
                 let resp = ui.interact(bar, ui.id().with("hscroll"), Sense::click_and_drag());
-                ui.painter().rect_filled(
-                    thumb,
-                    4.0,
-                    if resp.hovered() || resp.dragged() { Color32::from_gray(150) } else { Color32::from_gray(190) },
-                );
+                ui.painter().rect_filled(thumb, 4.0, if resp.hovered() || resp.dragged() { t.scrollbar_hover } else { t.scrollbar });
                 if resp.dragged() {
                     let dx = resp.drag_delta().x / bar.width() * total;
                     if let Some(v) = app.view_mut() {
@@ -199,6 +195,18 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Point => "Point",
                 };
                 ui.label(egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                crate::macro_ui::status(app, ui);
+                if let gridcraft_engine::job::JobState::Running { label, progress } = &app.session.job_state {
+                    ui.add_space(12.0);
+                    ui.add(egui::Spinner::new().size(12.0).color(t.text_dim));
+                    let text = if progress.is_empty() { format!("{label}…") } else { format!("{label}: {progress}") };
+                    ui.label(egui::RichText::new(text).font(theme::ui_font(12.5)).color(t.text_dim));
+                }
+                // Which Python runs cells, on workbooks that have them.
+                crate::python_ui::status(app, ui);
+                // Python cells running in the background, or a package install, with a Stop
+                // button (Esc does the same).
+                crate::python_ui::busy_status(app, ui);
                 if let Some(d) = app.session.active() {
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);

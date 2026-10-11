@@ -1,17 +1,17 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
-//! we paint with egui), pictures and shapes.
+//! we paint with egui), pictures, shapes, equations and form controls.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use egui::epaint::{PathShape, PathStroke};
-use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
+use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
-use crate::theme;
+use crate::theme::{self, Tokens};
 
 fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
@@ -229,8 +229,13 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
             }
             ShapeKind::Icon => {
                 if let Some(icon) = crate::icons::from_name(&sp.text) {
-                    crate::icons::paint(p, r, icon, if fill == Color32::TRANSPARENT { Color32::BLACK } else { fill });
+                    let t = Tokens::get(p.ctx());
+                    crate::icons::paint_on_sheet(p, r, icon, if fill == Color32::TRANSPARENT { t.cell_text } else { fill });
                 }
+                continue;
+            }
+            ShapeKind::Equation => {
+                crate::equation::paint_shape(p, r, sp, wb, geo.z);
                 continue;
             }
             ShapeKind::Line | ShapeKind::Arrow => {
@@ -247,15 +252,12 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
             let job = egui::text::LayoutJob::simple(
                 sp.text.clone(),
                 FontId::new(14.0 * geo.z, egui::FontFamily::Name(theme::CELL.into())),
-                if sp.kind == ShapeKind::TextBox { Color32::BLACK } else { Color32::WHITE },
+                if sp.kind == ShapeKind::TextBox { Tokens::get(p.ctx()).cell_text } else { Color32::WHITE },
                 r.width() - 8.0,
             );
             let g = p.layout_job(job);
             let pos = if sp.kind == ShapeKind::TextBox { r.min + vec2(4.0, 4.0) } else { r.center() - g.size() / 2.0 };
             p.galley(pos, g, Color32::BLACK);
-        }
-        if sp.kind == ShapeKind::TextBox && app.selected_chart == Some(sp.id) {
-            selection_frame(p, r);
         }
     }
     for im in &sh.images {
@@ -277,10 +279,7 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
         if let Some(tex) = cache.get(&key) {
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
-            p.rect_filled(r, 0.0, Color32::from_gray(230));
-        }
-        if app.selected_chart == Some(im.id) {
-            selection_frame(p, r);
+            p.rect_filled(r, 0.0, Tokens::get(p.ctx()).sheet_track);
         }
     }
     for ch in &sh.charts {
@@ -290,54 +289,83 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
         }
         // Soft shadow + white card.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
-        p.rect_filled(r, 0.0, Color32::WHITE);
+        p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
         let data = gridcraft_chart::resolve(wb, si, ch);
         let m = EguiMeasure { painter: p, z: geo.z };
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
-        if app.selected_chart == Some(ch.id) {
-            selection_frame(p, r);
+        if app.selected_chart() == Some(ch.id) {
             // Highlight the source data like Excel does.
             for s in &ch.series {
                 if let Ok(gridcraft_engine::formula::Expr::Ref(rf)) = gridcraft_engine::formula::parse(&s.values)
                     && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
                 {
                     let rr = geo.range_rect(sh, rf.range());
-                    p.rect_stroke(rr, 0.0, Stroke::new(1.5, Color32::from_rgb(0x2E, 0x6F, 0xD8)), StrokeKind::Inside);
+                    p.rect_stroke(rr, 0.0, Stroke::new(1.5, Tokens::get(p.ctx()).ref_color(0, true)), StrokeKind::Inside);
                 }
             }
         }
     }
+    // Form controls sit above every other object.
+    let hover = p.ctx().input(|i| i.pointer.hover_pos()).filter(|h| geo.cells.contains(*h));
+    for c in &sh.controls {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        if r.expand(24.0).intersects(p.clip_rect()) {
+            crate::form_controls::paint(p, r, c, geo.z, crate::form_controls::look(app, c, r, geo.z, hover));
+        }
+    }
+    // The selected object's frame and handles go over everything.
+    if let Some(r) = app.selected_object.and_then(|o| object_rect(geo, sh, o))
+        && r.intersects(p.clip_rect())
+    {
+        selection_frame(p, r);
+    }
 }
 
 fn selection_frame(p: &Painter, r: Rect) {
-    p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(120)), StrokeKind::Outside);
-    for c in [r.left_top(), r.center_top(), r.right_top(), r.left_center(), r.right_center(), r.left_bottom(), r.center_bottom(), r.right_bottom()] {
-        p.circle_filled(c, 4.0, Color32::WHITE);
-        p.circle_stroke(c, 4.0, Stroke::new(1.0, Color32::from_gray(100)));
+    let t = Tokens::get(p.ctx());
+    p.rect_stroke(r, 0.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Outside);
+    for h in crate::objects::Handle::ALL {
+        let c = h.pos(r);
+        p.circle_filled(c, 4.0, t.sheet_control_bg);
+        p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
-    let _ = Align2::CENTER_CENTER;
 }
 
-/// The topmost object under `p`: (kind, id, rect).
-pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
-    let _ = app;
+/// Where object `o` sits on screen, when it exists on `sh`.
+pub fn object_rect(geo: &Geo, sh: &Sheet, o: ObjRef) -> Option<Rect> {
+    sh.object_anchor(o).map(|a| anchor_rect(geo, sh, &a))
+}
+
+/// The topmost object under `p` and its rect. Controls paint on top, so they are hit first;
+/// then charts, pictures and shapes (equations included), each from the top of its stack.
+pub fn hit(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
+    if !geo.cells.contains(p) {
+        return None;
+    }
+    for c in sh.controls.iter().rev() {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        if r.expand(2.0).contains(p) {
+            return Some((ObjRef::new(ObjKind::Control, c.id), r));
+        }
+    }
     for ch in sh.charts.iter().rev() {
         let r = anchor_rect(geo, sh, &ch.anchor);
-        if r.expand(4.0).contains(p) && geo.cells.contains(p) {
-            return Some(("chart", ch.id, r));
+        if r.expand(4.0).contains(p) {
+            return Some((ObjRef::new(ObjKind::Chart, ch.id), r));
         }
     }
     for im in sh.images.iter().rev() {
         let r = anchor_rect(geo, sh, &im.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("image", im.id, r));
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Image, im.id), r));
         }
     }
     for s in sh.shapes.iter().rev() {
         let r = anchor_rect(geo, sh, &s.anchor);
-        if r.expand(3.0).contains(p) && geo.cells.contains(p) {
-            return Some(("shape", s.id, r));
+        if r.expand(3.0).contains(p) {
+            let kind = if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape };
+            return Some((ObjRef::new(kind, s.id), r));
         }
     }
     None

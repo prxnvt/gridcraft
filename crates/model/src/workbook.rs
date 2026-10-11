@@ -71,6 +71,9 @@ pub struct Workbook {
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
     pub cell_styles: Vec<(String, crate::style::Style)>,
+    /// Macros (Automate › Macros), in the order the Macros list shows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macros: Vec<crate::features::Macro>,
 }
 
 impl Default for Workbook {
@@ -94,6 +97,7 @@ impl Workbook {
             protected_structure: false,
             custom_lists: vec![],
             cell_styles: vec![],
+            macros: vec![],
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {
@@ -201,6 +205,18 @@ impl Workbook {
         }
         None
     }
+    /// Rebuilds the cached layout of every equation whose source changed (or was never laid
+    /// out, as after loading a file).
+    pub fn refresh_equations(&mut self) {
+        let stale = |s: &crate::Shape| s.kind == crate::ShapeKind::Equation && s.math.get(&s.text).is_none();
+        // Only sheets with a stale equation are copied (sheets are shared with undo snapshots).
+        for sh in self.sheets.iter_mut().filter(|sh| sh.shapes.iter().any(stale)) {
+            for s in Arc::make_mut(sh).shapes.iter_mut().filter(|s| s.kind == crate::ShapeKind::Equation) {
+                s.math.refresh(&s.text);
+            }
+        }
+    }
+
     pub fn next_object_id(&self) -> u32 {
         let mut m = 0;
         for s in &self.sheets {
@@ -213,11 +229,17 @@ impl Workbook {
             for c in &s.shapes {
                 m = m.max(c.id);
             }
+            for c in &s.controls {
+                m = m.max(c.id);
+            }
             for c in &s.tables {
                 m = m.max(c.id);
             }
+            for c in &s.pivots {
+                m = m.max(c.id);
+            }
         }
-        m + 1
+        m.saturating_add(1)
     }
 }
 
@@ -248,5 +270,29 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    #[test]
+    fn object_ids_count_every_kind() {
+        let mut wb = Workbook::new();
+        assert_eq!(wb.next_object_id(), 1);
+        let control = crate::FormControl { id: 7, ..Default::default() };
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(control);
+        }
+        assert_eq!(wb.next_object_id(), 8, "controls take ids from the shared pool");
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.clear();
+            sh.shapes.push(crate::Shape {
+                math: Default::default(),
+                id: u32::MAX,
+                kind: crate::ShapeKind::Equation,
+                anchor: Default::default(),
+                fill: Default::default(),
+                line: Default::default(),
+                text: String::new(),
+            });
+        }
+        assert_eq!(wb.next_object_id(), u32::MAX, "a hostile id saturates instead of overflowing");
     }
 }

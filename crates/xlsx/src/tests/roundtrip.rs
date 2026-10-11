@@ -63,7 +63,7 @@ fn sample() -> Workbook {
     };
 
     let mut s = Sheet::new("Data & Stuff");
-    let set = |s: &mut Sheet, a: &str, v: Value, style: StyleId| s.cells.set(at(a), Cell { value: v, formula: None, style });
+    let set = |s: &mut Sheet, a: &str, v: Value, style: StyleId| s.cells.set(at(a), Cell { value: v, formula: None, style, py: None });
     set(&mut s, "A1", Value::text("Region"), bold);
     set(&mut s, "B1", Value::text("Amount"), bold);
     set(&mut s, "C1", Value::text("  spaced\nline _x0041_ \u{1} "), StyleId::DEFAULT);
@@ -253,6 +253,7 @@ fn sample() -> Workbook {
         alt: "Logo \"x\"".into(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 11,
         kind: ShapeKind::Ellipse,
         anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
@@ -261,6 +262,7 @@ fn sample() -> Workbook {
         text: "Hi\nthere".into(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 12,
         kind: ShapeKind::Arrow,
         anchor: Anchor { cell: at("E14"), dx: 0.0, dy: 0.0, width: 64.0, height: 0.0, ..Default::default() },
@@ -269,6 +271,7 @@ fn sample() -> Workbook {
         text: String::new(),
     });
     s.shapes.push(Shape {
+        math: Default::default(),
         id: 13,
         kind: ShapeKind::TextBox,
         anchor: Anchor { cell: at("E16"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, ..Default::default() },
@@ -560,7 +563,7 @@ fn writing_repairs_invalid_models() {
         last_col: false,
         filter_button: true,
     });
-    s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999) });
+    s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999), py: None });
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     let s = back.sheet(0).unwrap();
     assert_eq!(s.visibility, Visibility::Visible, "at least one sheet stays visible");

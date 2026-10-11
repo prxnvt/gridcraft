@@ -4,7 +4,7 @@
 //! Every dialog is also reachable programmatically: `ui.dialog {name}` opens one,
 //! `ui.dialog.set {field, value}` edits a field and `ui.dialog.confirm` presses OK.
 
-use egui::{Color32, Key, vec2};
+use egui::{Key, vec2};
 use serde_json::{Map, Value as Json, json};
 
 use crate::SheetApp;
@@ -12,10 +12,28 @@ use crate::theme;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
-    Text { key: &'static str, label: &'static str },
-    Number { key: &'static str, label: &'static str },
-    Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
-    Check { key: &'static str, label: &'static str },
+    Text {
+        key: &'static str,
+        label: &'static str,
+    },
+    /// A range reference picked by selecting on the grid (Excel's RefEdit box).
+    Ref {
+        key: &'static str,
+        label: &'static str,
+    },
+    Number {
+        key: &'static str,
+        label: &'static str,
+    },
+    Choice {
+        key: &'static str,
+        label: &'static str,
+        options: Vec<(&'static str, &'static str)>,
+    },
+    Check {
+        key: &'static str,
+        label: &'static str,
+    },
     Note(String),
 }
 
@@ -33,6 +51,14 @@ pub struct Dialog {
     pub result: Option<Json>,
     picture_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
+    /// The RefEdit box that grid selections currently write into.
+    pub pick: Option<String>,
+    /// Selection reference last written by (or seen while) picking.
+    pub pick_seen: String,
+    /// Sheet, ranges and active cell from before picking, restored when the dialog closes.
+    pub home: Option<(usize, String, String)>,
+    /// RefEdit key the dialog is collapsed to (only that box shows).
+    pub collapsed: Option<String>,
 }
 
 impl Dialog {
@@ -53,10 +79,14 @@ impl Dialog {
             result: None,
             picture_inbox: None,
             picture_target: None,
+            pick: None,
+            pick_seen: String::new(),
+            home: None,
+            collapsed: None,
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -69,12 +99,17 @@ impl Dialog {
             result: None,
             picture_inbox: None,
             picture_target: None,
+            pick: None,
+            pick_seen: String::new(),
+            home: None,
+            collapsed: None,
         }
     }
 
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
+        let active_abs = app.session.active().map(|d| abs(&gridcraft_engine::core::RangeRef::cell(d.selection.active))).unwrap_or_default();
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
         use Field::*;
         let d = match name {
@@ -316,7 +351,29 @@ impl Dialog {
                 vec![Check { key: "header", label: "My data has headers" }, Text { key: "columnsText", label: "Columns (blank = all, e.g. A,C):" }],
                 json!({"header": true}),
             ),
-            "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
+            "dataTable" => {
+                let range = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
+                Dialog::form(
+                    "dataTable",
+                    "Data Table",
+                    "data.dataTable",
+                    vec![Ref { key: "rowInput", label: "Row input cell:" }, Ref { key: "columnInput", label: "Column input cell:" }],
+                    json!({"range": range, "rowInput": "", "columnInput": ""}),
+                )
+            }
+            "dataAnalysis" => Dialog::custom("dataAnalysis", "Data Analysis", json!({})),
+            "solver" => return crate::solver_ui::open(app),
+            "solverResults" => Dialog::custom("solverResults", "Solver Results", params.clone()),
+            "solverTrial" => Dialog::custom("solverTrial", "Show Trial Solution", params.clone()),
+            "toolpak" => return crate::toolpak::open(params.get("tool").and_then(Json::as_str).unwrap_or("")),
+            "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active_abs, "to": "", "changing": ""})),
+            "pivotFilter" => crate::pivot_filter::dialog(&params),
+            "equation" => return crate::equation::open_editor(app, &params),
+            "pivotCalcField" => return crate::pivot_calc_ui::open_field(app),
+            "pythonInitialization" => return crate::python_ui::open_initialization(app),
+            "pythonOptions" => return Some(crate::python_ui::open_options(app)),
+            "pythonInstall" => return crate::python_ui::open_install(app, &params),
+            "pivotCalcItem" => return crate::pivot_calc_ui::open_item(app),
             "subtotal" => Dialog::form(
                 "subtotal",
                 "Subtotal",
@@ -473,7 +530,11 @@ impl Dialog {
                 }
                 d
             }
-            "insertFunction" => Dialog::custom("insertFunction", "Formula Builder", json!({"category": "Most Recently Used"})),
+            "insertFunction" => {
+                // A Function Library menu opens it on its own category.
+                let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();
+                Dialog::custom("insertFunction", "Insert Function", json!({"category": category}))
+            }
             "find" => {
                 let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
                 d.tab = if p("replace").as_bool() == Some(true) { "Replace".into() } else { "Find".into() };
@@ -518,6 +579,11 @@ impl Dialog {
                 d
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
+            "macros" => crate::macro_ui::open_dialog(app, &params),
+            "macroEditor" => return crate::macro_editor::open(app, &params),
+            "assignAction" => return crate::control_ui::open_assign(app, &params),
+            "recordMacro" => crate::macro_ui::open_record(app, &params),
+            "formatControl" => return crate::control_ui::open_format(app, &params),
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
                 d.result = app.session.run("review.workbookStatistics", json!({})).ok();
@@ -596,6 +662,79 @@ fn abs(r: &gridcraft_engine::core::RangeRef) -> String {
     if r.is_single() { a(r.start) } else { format!("{}:{}", a(r.start), a(r.end)) }
 }
 
+// ---------------------------------------------------------------- RefEdit
+
+/// The grid selection as a RefEdit reference: absolute, comma-joined areas, with the sheet name
+/// when it isn't the sheet the dialog was opened on.
+fn selection_ref(app: &SheetApp, home_sheet: Option<usize>) -> String {
+    let Some(doc) = app.session.active() else { return String::new() };
+    let areas: Vec<String> = doc.selection.ranges.iter().map(abs).collect();
+    let text = areas.join(",");
+    let active = doc.wb.active_sheet;
+    match (home_sheet, doc.wb.active()) {
+        (Some(h), Some(sh)) if h != active => {
+            let q = gridcraft_engine::formula::quote_sheet(&sh.name);
+            areas.iter().map(|a| format!("{q}!{a}")).collect::<Vec<_>>().join(",")
+        }
+        _ => text,
+    }
+}
+
+/// Starts picking into `key`: later grid selections are written into the box. The first pick
+/// remembers the selection so closing the dialog can put it back.
+fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
+    if d.home.is_none()
+        && let Some(doc) = app.session.active()
+    {
+        let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
+        d.home = Some((doc.wb.active_sheet, ranges.join(","), doc.selection.active.a1()));
+    }
+    d.pick = Some(key.to_string());
+    d.pick_seen = selection_ref(app, d.home.as_ref().map(|h| h.0));
+}
+
+/// Puts back the selection (and sheet) from before the dialog started picking.
+fn restore_home(app: &mut SheetApp, d: &Dialog) {
+    if let Some((sheet, ranges, active)) = &d.home {
+        let _ = app.session.run("selection.set", json!({"sheet": sheet, "range": ranges, "active": active}));
+    }
+}
+
+/// A RefEdit box: a text field that grid selections fill while it is the pick target, with a
+/// button that collapses the dialog to just this box (and expands it again).
+pub(crate) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str, width: f32) {
+    let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+    let home = d.home.as_ref().map(|h| h.0);
+    let sel = selection_ref(app, home);
+    let picking = d.pick.as_deref() == Some(key);
+    ui.horizontal(|ui| {
+        let r = ui.add(egui::TextEdit::singleline(&mut s).desired_width(width - 30.0).id_salt(("refedit", key)));
+        if r.gained_focus() || (r.clicked() && !picking) {
+            begin_pick(app, d, key);
+        } else if picking && !r.has_focus() && sel != d.pick_seen {
+            // The user selected on the grid: that selection becomes the reference.
+            s = sel.clone();
+            d.pick_seen = sel;
+        }
+        let collapsed = d.collapsed.as_deref() == Some(key);
+        let t = theme::Tokens::get(ui.ctx());
+        let icon = if collapsed { crate::icons::Icon::Expand } else { crate::icons::Icon::Collapse };
+        let tip = if collapsed { "Expand dialog" } else { "Collapse dialog" };
+        if crate::widgets::icon_button(ui, icon, t.text_dim, tip, vec2(22.0, 20.0)).clicked() {
+            d.collapsed = if collapsed { None } else { Some(key.to_string()) };
+            if !collapsed {
+                begin_pick(app, d, key);
+            }
+        }
+    });
+    d.values.insert(key.into(), json!(s));
+}
+
+/// The collapsed form of a dialog: only the RefEdit being picked into.
+fn collapsed_bar(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str) {
+    ref_edit(app, ui, d, key, 340.0);
+}
+
 /// Builds the command params from form values for dialogs that need translation.
 fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
@@ -649,6 +788,22 @@ fn build_params(d: &Dialog) -> Json {
 
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
+    // The macro step editor is a large resizable window of its own.
+    if d.name == "macroEditor" {
+        let mut open = true;
+        crate::macro_editor::window(app, ctx, &mut d, &mut open);
+        if open {
+            app.dialog = Some(d);
+        } else {
+            restore_home(app, &d);
+            app.macros.editor = None;
+            app.grid.macro_overlay = None;
+            if let Some(next) = app.dialog_next.take() {
+                app.dialog = Some(next);
+            }
+        }
+        return;
+    }
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);
     }
@@ -658,7 +813,16 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
+        "toolpak" => 440.0,
+        "pythonInitialization" => 560.0,
+        "pythonOptions" => 540.0,
+        "pythonInstall" => 480.0,
+        "solver" => 520.0,
+        "solverResults" => 480.0,
+        "solverTrial" => 380.0,
+        "dataAnalysis" => 340.0,
+        "macros" | "assignAction" => 440.0,
         _ => 380.0,
     };
     let window = egui::Window::new(d.title.clone())
@@ -670,6 +834,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         .open(&mut win_open);
     let window = if d.name == "insertPicture" { window.default_height(240.0) } else { window };
     window.show(ctx, |ui| {
+            if let Some(key) = d.collapsed.clone() {
+                collapsed_bar(app, ui, &mut d, &key);
+                return;
+            }
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
@@ -681,7 +849,23 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "manageRules" => manage_rules(app, ui),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
+                "pivotFilter" => crate::pivot_filter::show(app, ui, &mut d, &mut confirm),
+                "equation" => crate::equation::editor(app, ui, &mut d, &mut confirm, &mut open),
+                "pivotCalcField" => crate::pivot_calc_ui::field_dialog(app, ui, &mut d, &mut confirm),
+                "pythonInitialization" => crate::python_ui::initialization(app, ui, &mut d, &mut confirm, &mut open),
+                "pythonOptions" => crate::python_ui::options(app, ui, &mut d, &mut confirm, &mut open),
+                "pythonInstall" => crate::python_ui::install_dialog(app, ui, &mut d, &mut confirm, &mut open),
+                "pivotCalcItem" => crate::pivot_calc_ui::item_dialog(app, ui, &mut d, &mut confirm),
+                "dataAnalysis" => crate::toolpak::list(app, ui, &mut d, &mut open),
+                "solver" => crate::solver_ui::show(app, ui, &mut d, &mut open),
+                "solverResults" => crate::solver_ui::results(app, ui, &mut d, &mut open),
+                "solverTrial" => crate::solver_ui::trial(app, ui, &mut d, &mut open),
+                "toolpak" => crate::toolpak::show(app, ui, &mut d, &mut confirm, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "macros" => crate::macro_ui::macros_dialog(app, ui, &mut d, &mut open),
+                "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
+                "recordMacro" => crate::macro_ui::record_dialog(app, ui, &mut d, &mut open),
+                "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);
@@ -846,7 +1030,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         open = false;
                     }
                 }
-                _ => form(ui, &mut d, &mut confirm, &mut open),
+                _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         });
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
@@ -885,6 +1069,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if open {
         app.dialog = Some(d);
+    } else {
+        restore_home(app, &d);
+        // A dialog that leads to another (Data Analysis → a tool's form).
+        if let Some(next) = app.dialog_next.take() {
+            app.dialog = Some(next);
+        }
     }
 }
 
@@ -953,10 +1143,11 @@ fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
     });
 }
 
-fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+pub(crate) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let ok = ui.add(egui::Button::new(egui::RichText::new("   OK   ").color(Color32::WHITE)).fill(crate::theme::Tokens::get(ui.ctx()).accent));
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let ok = ui.add(egui::Button::new(egui::RichText::new("   OK   ").color(t.on_accent)).fill(t.accent));
         if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
             *confirm = true;
         }
@@ -966,7 +1157,7 @@ fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     });
 }
 
-fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         for f in d.fields.clone() {
             match f {
@@ -984,9 +1175,18 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
                         } else {
                             ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0))
                         };
+                        if r.gained_focus() {
+                            d.pick = None;
+                        }
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
                         }
+                    });
+                }
+                Field::Ref { key, label } => {
+                    ui.vertical(|ui| {
+                        ui.label(label);
+                        ref_edit(app, ui, d, key, 320.0);
                     });
                 }
                 Field::Number { key, label } => {
@@ -1259,31 +1459,70 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
     }
 }
 
+/// Insert Function: search, or pick a category (Most Recently Used, All or one category), then a
+/// function. OK starts the formula in the active cell.
 fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    use crate::function_library::{self as lib, ALL, MOST_RECENTLY_USED};
+    ui.label("Search for a function:");
+    ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(f32::INFINITY).hint_text("e.g. lookup, average, date")).request_focus();
+    // A new search (typed, or set through the control channel) looks through every function,
+    // as Excel's search does.
+    if d.values.get("searched").and_then(Json::as_str) != Some(d.search.as_str()) {
+        d.list_index = 0;
+        if !d.search.trim().is_empty() {
+            d.values.insert("category".into(), json!(ALL));
+        }
+        d.values.insert("searched".into(), json!(d.search));
+    }
+    // The category may be a label or an engine id (programmatic callers, `ui.dialog.set`).
+    let saved = d.values.get("category").and_then(Json::as_str).unwrap_or(MOST_RECENTLY_USED).to_string();
+    let mut category = if saved.eq_ignore_ascii_case(ALL) {
+        ALL.to_string()
+    } else {
+        lib::category_id(&saved).map(lib::category_label).unwrap_or(MOST_RECENTLY_USED).to_string()
+    };
     ui.horizontal(|ui| {
-        ui.label("Search:");
-        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text("e.g. lookup, average, date"));
-        r.request_focus();
+        ui.label("Or select a category:");
+        egui::ComboBox::from_id_salt("insertFunctionCategory").width(200.0).selected_text(category.as_str()).show_ui(ui, |ui| {
+            for c in [MOST_RECENTLY_USED, ALL].into_iter().chain(lib::CATEGORIES.iter().map(|(_, l)| *l)) {
+                ui.selectable_value(&mut category, c.to_string(), c);
+            }
+        });
     });
+    if category != saved {
+        d.list_index = 0;
+    }
+    d.values.insert("category".into(), json!(category));
     let locale = app.ui.language.formula_locale();
-    let list = gridcraft_engine::cmd::formulas::function_list();
-    let q = d.search.to_ascii_lowercase();
-    let hits: Vec<&Json> = list
-        .iter()
-        .filter(|f| {
-            q.is_empty()
-                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_ascii_lowercase().contains(&q))
-                || f["description"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(&q))
-        })
-        .take(300)
-        .collect();
-    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+    let q = d.search.trim().to_lowercase();
+    let matches =
+        |f: &lib::FnEntry| q.is_empty() || locale.function_name(&f.name).to_lowercase().contains(&q) || f.description.to_lowercase().contains(&q);
+    let hits: Vec<&lib::FnEntry> = if category == MOST_RECENTLY_USED {
+        app.ui.recent_functions.iter().filter_map(|n| lib::all().iter().find(|f| f.name == *n)).filter(|f| matches(f)).collect()
+    } else {
+        let id = lib::category_id(&category);
+        lib::all().iter().filter(|f| id.is_none_or(|id| f.category == id) && matches(f)).take(500).collect()
+    };
+    ui.label("Select a function:");
+    egui::ScrollArea::vertical().max_height(240.0).auto_shrink([false, false]).show(ui, |ui| {
+        if hits.is_empty() {
+            ui.label(egui::RichText::new("No functions match.").italics());
+        }
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let font = egui::TextStyle::Body.resolve(ui.style());
         for (i, f) in hits.iter().enumerate() {
-            let name = locale.function_name(f["name"].as_str().unwrap_or(""));
-            let r = ui.add(
-                egui::Button::selectable(i == d.list_index, format!("{name:<18} {}", f["category"].as_str().unwrap_or("")))
-                    .min_size(vec2(480.0, 20.0)),
-            );
+            // Two aligned columns: the function and its category.
+            let name = locale.function_name(&f.name);
+            let category = lib::category_label(&f.category);
+            let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), egui::Sense::click());
+            if i == d.list_index {
+                ui.painter().rect_filled(rect, 3.0, ui.visuals().selection.bg_fill);
+            } else if r.hovered() {
+                ui.painter().rect_filled(rect, 3.0, t.hover);
+            }
+            ui.painter().text(rect.left_center() + vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, name, font.clone(), t.text);
+            ui.painter().text(rect.left_center() + vec2(190.0, 0.0), egui::Align2::LEFT_CENTER, category, font.clone(), t.text_dim);
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, i == d.list_index, format!("{name} ({category})")));
             if r.clicked() {
                 d.list_index = i;
             }
@@ -1295,13 +1534,15 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     });
     if let Some(f) = hits.get(d.list_index) {
         ui.separator();
-        ui.label(egui::RichText::new(crate::formula_locale::signature(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default()).strong());
-        ui.label(crate::formula_locale::description(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default());
+        ui.label(egui::RichText::new(crate::formula_locale::signature(&f.name, locale).unwrap_or_default()).strong());
+        ui.label(crate::formula_locale::description(&f.name, locale).unwrap_or_default());
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(n) = hits.get(d.list_index).and_then(|f| f["name"].as_str()) {
-        let n = app.session.active().map(|doc| crate::formula_locale::completion_name(n, locale, &doc.wb, doc.wb.active_sheet)).unwrap_or(n);
+    if *confirm && let Some(f) = hits.get(d.list_index) {
+        lib::push_recent(&mut app.ui.recent_functions, std::slice::from_ref(&f.name));
+        let n =
+            app.session.active().map(|doc| crate::formula_locale::completion_name(&f.name, locale, &doc.wb, doc.wb.active_sheet)).unwrap_or(&f.name);
         let cur = app.editor.as_ref().map(|e| e.text.clone());
         let text = match cur {
             Some(t) if t.starts_with('=') => format!("{t}{n}("),
@@ -1578,26 +1819,32 @@ fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm
 }
 
 fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
-    let (mut set, mut to, mut changing) = (get("set"), get("to"), get("changing"));
     egui::Grid::new("gs").show(ui, |ui| {
         ui.label("Set cell:");
-        ui.text_edit_singleline(&mut set);
+        ref_edit(app, ui, d, "set", 200.0);
         ui.end_row();
         ui.label("To value:");
-        ui.text_edit_singleline(&mut to);
+        let mut to = d.values.get("to").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.add(egui::TextEdit::singleline(&mut to).desired_width(170.0)).gained_focus() {
+            d.pick = None;
+        }
+        d.values.insert("to".into(), json!(to));
         ui.end_row();
         ui.label("By changing cell:");
-        ui.text_edit_singleline(&mut changing);
+        ref_edit(app, ui, d, "changing", 200.0);
         ui.end_row();
     });
-    d.values.insert("set".into(), json!(set.clone()));
-    d.values.insert("to".into(), json!(to.clone()));
-    d.values.insert("changing".into(), json!(changing.clone()));
+    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let (set, to, changing) = (get("set"), get("to"), get("changing"));
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
     if *confirm {
-        match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {
+        let Ok(target) = to.trim().parse::<f64>() else {
+            app.message = Some(("Goal Seek".into(), "Enter a number in To value.".into()));
+            *confirm = false;
+            return;
+        };
+        match app.run("data.goalSeek", json!({"set": set, "to": target, "changing": changing})) {
             Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
             Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
         }
@@ -1624,7 +1871,7 @@ fn spelling(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bo
     let word = it["word"].as_str().unwrap_or("").to_string();
     let cell = it["cell"].as_str().unwrap_or("").to_string();
     ui.label(format!("Not in Dictionary ({cell}):"));
-    ui.label(egui::RichText::new(&word).strong().color(Color32::from_rgb(0xC4, 0x2B, 0x1C)));
+    ui.label(egui::RichText::new(&word).strong().color(crate::theme::Tokens::get(ui.ctx()).danger));
     let sugg: Vec<String> =
         it["suggestions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
     ui.label("Suggestions:");

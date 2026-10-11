@@ -1,20 +1,28 @@
 //! The command registry. Ids follow Excel's ribbon (`home.bold`, `insert.chart`,
 //! `data.sortAscending`) plus primitive editing commands (`cell.set`, `selection.set`).
 
+pub mod analysis;
+pub mod controls;
 pub mod data;
 pub mod draw;
 pub mod edit;
+pub mod equation;
 pub mod extra;
 pub mod file;
 pub mod format;
 pub mod formulas;
 pub mod insert;
 pub mod inspect;
+pub mod macros;
 pub mod pivot;
 pub mod print;
+pub mod python;
 pub mod review;
 pub mod sheet;
+pub mod solver;
+pub mod solver_report;
 pub mod spelling;
+pub mod stash;
 pub mod view;
 pub mod whatif;
 
@@ -77,11 +85,17 @@ pub fn has_doc(s: &Session) -> std::result::Result<(), String> {
 }
 pub fn can_undo(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
+    not_grouping(s)?;
     if s.active().is_some_and(|d| !d.undo.is_empty()) { Ok(()) } else { Err("nothing to undo".into()) }
 }
 pub fn can_redo(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
+    not_grouping(s)?;
     if s.active().is_some_and(|d| !d.redo.is_empty()) { Ok(()) } else { Err("nothing to redo".into()) }
+}
+/// Undo and Redo wait for an open undo group (a macro being debugged) to finish.
+fn not_grouping(s: &Session) -> std::result::Result<(), String> {
+    if s.active().is_some_and(|d| s.in_group(d.uid)) { Err("finish or stop the running action first".into()) } else { Ok(()) }
 }
 pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
@@ -110,17 +124,25 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(format::specs());
         v.extend(sheet::specs());
         v.extend(insert::specs());
+        v.extend(controls::specs());
+        v.extend(equation::specs());
         v.extend(data::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
         v.extend(view::specs());
         v.extend(inspect::specs());
         v.extend(extra::specs());
+        v.extend(macros::specs());
         v.extend(draw::specs());
         v.extend(spelling::specs());
         v.extend(pivot::specs());
         v.extend(whatif::specs());
+        v.extend(analysis::specs());
+        v.extend(solver::specs());
+        v.extend(solver_report::specs());
+        v.extend(crate::job::specs());
         v.extend(print::specs());
+        v.extend(python::specs());
         v
     })
 }
@@ -238,6 +260,11 @@ pub struct Ctx<'a> {
     pub protection_checked: bool,
 }
 
+/// Today as a date serial for PivotTable date filters (the calculation's "now").
+pub(crate) fn pivot_today(_wb: &gridcraft_model::Workbook) -> f64 {
+    gridcraft_calc::now_serial().floor()
+}
+
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     let d = s.doc_mut()?;
     commit(d, |cx| {
@@ -256,8 +283,19 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
     let r = f(&mut ctx)?;
     let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    // Equations whose source changed (or that arrived without a layout, as from a paste) are
+    // laid out here, so painting only ever reads the cache.
+    wb.refresh_equations();
     if !protection_checked {
         check_protection(&d.wb, &wb)?;
+    }
+    guard_data_tables(&d.wb, &mut wb)?;
+    if let Some(log) = d.touched.as_mut() {
+        for (si, c) in changed.iter().take(TOUCH_LOG_LIMIT.saturating_sub(log.len())) {
+            if let Some(sh) = wb.sheet(*si) {
+                log.push((sh.name.clone(), *c));
+            }
+        }
     }
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
@@ -270,6 +308,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
+    controls::sync_linked_values(&mut wb);
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", t0.elapsed());
     }
@@ -285,6 +324,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     d.selection = sel;
     Ok(r)
 }
+
+/// The most written cells a macro's footprint check records.
+const TOUCH_LOG_LIMIT: usize = 1_000_000;
 
 /// Excel's message for an edit of a locked cell on a protected sheet.
 pub(crate) const PROTECTED: &str = "The cell or chart you're trying to change is on a protected sheet.";
@@ -310,17 +352,73 @@ fn check_protection(old: &Workbook, new: &Workbook) -> Result<()> {
     Ok(())
 }
 
-/// Two cells hold the same value or formula (formats aside).
+/// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result
+/// is not something the person edits).
 fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::Cell>) -> bool {
-    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| c.formula.is_none() && c.value.is_empty());
+    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| !c.has_content());
     match (a, b) {
         (Some(a), Some(b)) => match (&a.formula, &b.formula) {
             (Some(x), Some(y)) => x.text == y.text && x.array == y.array,
-            (None, None) => a.value == b.value,
+            (None, None) => match (&a.py, &b.py) {
+                (Some(x), Some(y)) => x.code == y.code && x.object == y.object && x.lines == y.lines,
+                (None, None) => a.value == b.value,
+                _ => false,
+            },
             _ => false,
         },
         _ => empty(a) && empty(b),
     }
+}
+
+/// Refused edits to a data table's results.
+pub const DATA_TABLE_PART: &str = "These cells are a data table's results. Change the whole table, or clear all of its results to remove it.";
+
+/// Data table results can't be edited cell by cell: an edit that changes some (not all) of a
+/// table's result cells is refused; one that clears all of them removes the table.
+fn guard_data_tables(old: &gridcraft_model::Workbook, new: &mut gridcraft_model::Workbook) -> Result<()> {
+    for si in 0..new.sheets.len() {
+        let Some(new_sh) = new.sheets.get(si) else { continue };
+        if new_sh.data_tables.is_empty() {
+            continue;
+        }
+        let Some(old_sh) = old.sheet_index(&new_sh.name).and_then(|i| old.sheets.get(i)) else { continue };
+        if std::sync::Arc::ptr_eq(old_sh, new_sh) {
+            continue;
+        }
+        let mut cleared: Vec<gridcraft_model::DataTable> = Vec::new();
+        for t in &new_sh.data_tables {
+            // Only tables that existed before, unchanged (new or moved tables are the command's own).
+            if !old_sh.data_tables.contains(t) {
+                continue;
+            }
+            let Some(body) = t.body() else { continue };
+            let content = |sh: &gridcraft_model::Sheet, c: CellRef| sh.cell(c).map(|x| (x.value.clone(), x.formula.as_ref().map(|f| f.text.clone())));
+            let mut changed = false;
+            let mut all_empty = true;
+            for c in body.iter() {
+                let now = content(new_sh, c);
+                if now != content(old_sh, c) {
+                    changed = true;
+                }
+                if now.is_some_and(|(v, f)| !v.is_empty() || f.is_some()) {
+                    all_empty = false;
+                }
+            }
+            if changed {
+                if all_empty {
+                    cleared.push(t.clone());
+                } else {
+                    return Err(EngineError::Other(DATA_TABLE_PART.into()));
+                }
+            }
+        }
+        if !cleared.is_empty()
+            && let Some(sh) = new.sheet_mut(si)
+        {
+            sh.data_tables.retain(|t| !cleared.contains(t));
+        }
+    }
+    Ok(())
 }
 
 /// Recomputes an automatic row height from its content: the largest font, and wrapped or

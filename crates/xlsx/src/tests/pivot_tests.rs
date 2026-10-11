@@ -52,7 +52,7 @@ fn workbook() -> Workbook {
         let r = r as u32 + 1;
         data.cells.set(CellRef::new(r, 0), Cell::value(Value::text(*a)));
         data.cells.set(CellRef::new(r, 1), Cell::value(Value::text(*b)));
-        data.cells.set(CellRef::new(r, 2), Cell { value: Value::number(*d), formula: None, style: date_style });
+        data.cells.set(CellRef::new(r, 2), Cell { value: Value::number(*d), formula: None, style: date_style, py: None });
         data.cells.set(CellRef::new(r, 3), Cell::value(Value::number(*u)));
         data.cells.set(CellRef::new(r, 4), Cell::value(Value::number(*s)));
         data.cells.set(CellRef::new(r, 5), Cell::value(Value::text(*ch)));
@@ -98,7 +98,7 @@ fn workbook() -> Workbook {
                 ..PivotValue::default()
             },
         ],
-        filters: vec![PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]) }],
+        filters: vec![PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]), ..PivotFilter::default() }],
         layout: PivotLayout::Tabular,
         grand_totals_rows: false,
         grand_totals_cols: true,
@@ -107,6 +107,11 @@ fn workbook() -> Workbook {
         style: "PivotStyleMedium9".into(),
         show_headers: false,
         last_range: Some(rr("A2:H12")),
+        options: PivotOptions::default(),
+        manual_groups: vec![],
+        calc_fields: vec![],
+        calc_items: vec![],
+        buttons: vec![],
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -116,8 +121,14 @@ fn workbook() -> Workbook {
         source: "SalesTbl".into(),
         anchor: at("K4"),
         rows: vec![
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::None, collapsed_items: vec!["2024".into()] },
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, collapsed_items: vec![] },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Years,
+                sort: PivotSort::None,
+                collapsed_items: vec!["2024".into()],
+                ..PivotField::default()
+            },
+            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, ..PivotField::default() },
         ],
         columns: vec![PivotField { sort: PivotSort::Desc, ..field("Product") }],
         values: vec![
@@ -126,34 +137,42 @@ fn workbook() -> Workbook {
                 func: PivotFunc::Sum,
                 name: "Share".into(),
                 show_as: PivotShowAs::PercentOfGrandTotal,
-                number_format: None,
+                ..PivotValue::default()
             },
-            PivotValue { source_col: "Sales".into(), func: PivotFunc::Max, name: "Rank".into(), show_as: PivotShowAs::Rank, number_format: None },
+            PivotValue {
+                source_col: "Sales".into(),
+                func: PivotFunc::Max,
+                name: "Rank".into(),
+                show_as: PivotShowAs::Rank,
+                base_field: Some("Date".into()),
+                ..PivotValue::default()
+            },
             PivotValue {
                 source_col: "Sales".into(),
                 func: PivotFunc::Average,
                 name: "Running".into(),
                 show_as: PivotShowAs::RunningTotal,
-                number_format: None,
+                base_field: Some("Date".into()),
+                ..PivotValue::default()
             },
             PivotValue {
                 source_col: "Units".into(),
                 func: PivotFunc::StdDevP,
                 name: "Spread".into(),
                 show_as: PivotShowAs::PercentOfColumnTotal,
-                number_format: None,
+                ..PivotValue::default()
             },
             PivotValue {
                 source_col: "Units".into(),
                 func: PivotFunc::VarP,
                 name: "RowPct".into(),
                 show_as: PivotShowAs::PercentOfRowTotal,
-                number_format: None,
+                ..PivotValue::default()
             },
         ],
         filters: vec![
-            PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into(), "North".into()]) },
-            PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into()]) },
+            PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into(), "North".into()]), ..PivotFilter::default() },
+            PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into()]), ..PivotFilter::default() },
         ],
         layout: PivotLayout::Outline,
         grand_totals_rows: true,
@@ -163,6 +182,11 @@ fn workbook() -> Workbook {
         style: "PivotStyleDark3".into(),
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
+        options: PivotOptions::default(),
+        manual_groups: vec![],
+        calc_fields: vec![],
+        calc_items: vec![],
+        buttons: vec![],
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -172,7 +196,7 @@ fn workbook() -> Workbook {
         anchor: at("AB1"),
         rows: vec![field("Product")],
         values: vec![PivotValue { source_col: "Units".into(), func: PivotFunc::Product, name: "Product of Units".into(), ..PivotValue::default() }],
-        filters: vec![PivotFilter { source_col: "Channel".into(), selected: None }],
+        filters: vec![PivotFilter { source_col: "Channel".into(), selected: None, ..PivotFilter::default() }],
         last_range: Some(rr("AB1:AC6")),
         ..PivotTable::default()
     };
@@ -444,8 +468,11 @@ fn hostile_pivot_parts_warn_not_panic() {
     assert_eq!(pt.rows[0].sort, PivotSort::Desc);
     assert!(pt.values.iter().any(|v| v.func == PivotFunc::Sum && v.source_col == "V"));
     assert!(report.warnings.iter().any(|w| w.contains("bogus")), "{:?}", report.warnings);
-    assert!(report.warnings.iter().any(|w| w.contains("grouping")), "{:?}", report.warnings);
-    assert!(report.warnings.iter().any(|w| w.contains("index")), "{:?}", report.warnings);
+    // Number range grouping is read now, so it brings no warning.
+    assert!(!report.warnings.iter().any(|w| w.contains("grouping")), "{:?}", report.warnings);
+    // Index and % of Parent Total are read now.
+    assert!(pt.values.iter().any(|v| v.show_as == PivotShowAs::Index), "{:?}", pt.values);
+    assert!(pt.values.iter().any(|v| v.show_as == PivotShowAs::PercentOfParentTotal), "{:?}", pt.values);
 }
 
 #[test]
@@ -478,4 +505,33 @@ fn cache_found_by_workbook_cache_id() {
     assert_eq!(pts[0].name, "ById");
     assert_eq!(pts[0].values[0].func, PivotFunc::Average);
     assert_eq!(pts[0].rows[0].source_col, "K");
+}
+
+#[test]
+fn pivots_on_one_source_share_a_cache() {
+    let mut wb = workbook();
+    let p1 = wb.sheet(1).unwrap().pivots[0].clone();
+    // A second report on the same range, with different fields and a date grouping.
+    let p4 = PivotTable {
+        id: 4,
+        name: "Same Source".into(),
+        anchor: at("AE1"),
+        rows: vec![PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Quarters, ..PivotField::default() }],
+        columns: vec![],
+        filters: vec![],
+        last_range: Some(rr("AE1:AF6")),
+        ..p1
+    };
+    std::sync::Arc::make_mut(&mut wb.sheets[1]).pivots.push(p4);
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let caches = parts.keys().filter(|k| k.starts_with("xl/pivotCache/pivotCacheDefinition")).count();
+    assert_eq!(caches, 3, "the two reports on Data!A1:F9 share one cache");
+    let t4 = String::from_utf8(parts.get("xl/pivotTables/pivotTable4.xml").unwrap().clone()).unwrap();
+    assert!(t4.contains("cacheId=\"1\""), "{t4}");
+    let c1 = String::from_utf8(parts.get("xl/pivotCache/pivotCacheDefinition1.xml").unwrap().clone()).unwrap();
+    assert!(c1.contains("groupBy=\"quarters\""), "the shared cache carries every member's grouping");
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    assert_eq!(back.sheet(1).unwrap().pivots, wb.sheet(1).unwrap().pivots);
 }

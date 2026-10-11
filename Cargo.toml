@@ -16,6 +16,7 @@ gridcraft-core = { path = "crates/core" }
 gridcraft-numfmt = { path = "crates/numfmt" }
 gridcraft-formula = { path = "crates/formula" }
 gridcraft-functions = { path = "crates/functions" }
+gridcraft-analysis = { path = "crates/analysis" }
 gridcraft-model = { path = "crates/model" }
 gridcraft-calc = { path = "crates/calc" }
 gridcraft-xlsx = { path = "crates/xlsx" }
@@ -24,6 +25,8 @@ gridcraft-engine = { path = "crates/engine" }
 gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
+gridcraft-python = { path = "crates/python" }
+gridcraft-math = { path = "crates/math" }
 
 # foundation
 thiserror = "2"
@@ -35,6 +38,13 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 quick-xml = "0.38"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# equations: RaTeX (MIT) lays LaTeX out as positioned glyphs, rules and paths. Exact pins: it is
+# young (0.1.x), and the M14.28 gate (docs/decisions.md) vetted this release.
+ratex-parser = "=0.1.14"
+ratex-layout = "=0.1.14"
+ratex-types = "=0.1.14"
+ratex-font = "=0.1.14"
 
 # ui
 egui = "0.36"

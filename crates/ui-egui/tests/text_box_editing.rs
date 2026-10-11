@@ -3,7 +3,7 @@
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_engine::model::{Shape, Workbook};
+use gridcraft_engine::model::{ObjKind, ObjRef, Shape, Workbook};
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
 
@@ -108,7 +108,7 @@ fn assert_cell_unchanged(h: &Harness) {
 fn double_click_edits_multiline_text_and_commits_on_outside_click() {
     let (mut h, id) = fixture();
     edit_box(&mut h, id);
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_object, Some(ObjRef::new(ObjKind::Shape, id)));
     let anchor = shape(&h, id).anchor;
     let start = shape_rect(&h, id).min + vec2(5.0, 10.0);
     drag(&mut h, start, start + vec2(60.0, 0.0));

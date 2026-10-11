@@ -506,13 +506,13 @@ fn erfc_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // Complex numbers
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Cx {
-    re: f64,
-    im: f64,
+pub(crate) struct Cx {
+    pub(crate) re: f64,
+    pub(crate) im: f64,
 }
 
 impl Cx {
-    fn new(re: f64, im: f64) -> Cx {
+    pub(crate) fn new(re: f64, im: f64) -> Cx {
         Cx { re, im }
     }
     fn add(self, o: Cx) -> Cx {
@@ -620,7 +620,7 @@ fn parse_complex(s: &str) -> R<(Cx, Option<char>)> {
     Ok((Cx::new(re, im), Some(sfx)))
 }
 
-fn cx_of(v: &Value) -> R<(Cx, Option<char>)> {
+pub(crate) fn cx_of(v: &Value) -> R<(Cx, Option<char>)> {
     match v {
         Value::Number(n) => Ok((Cx::new(*n, 0.0), None)),
         Value::Empty => Ok((Cx::new(0.0, 0.0), None)),
@@ -643,7 +643,7 @@ fn merge_suffix(acc: Option<char>, s: Option<char>) -> R<Option<char>> {
     }
 }
 
-fn fmt_complex(z: Cx, suffix: char) -> R<Value> {
+pub(crate) fn fmt_complex(z: Cx, suffix: char) -> R<Value> {
     if !z.re.is_finite() || !z.im.is_finite() {
         return Err(CellError::Num);
     }

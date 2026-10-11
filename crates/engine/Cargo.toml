@@ -13,6 +13,7 @@ gridcraft-core = { workspace = true }
 gridcraft-numfmt = { workspace = true }
 gridcraft-formula = { workspace = true }
 gridcraft-functions = { workspace = true }
+gridcraft-analysis = { workspace = true }
 gridcraft-model = { workspace = true }
 gridcraft-calc = { workspace = true }
 serde = { workspace = true }
@@ -22,7 +23,14 @@ log = { workspace = true }
 gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
+gridcraft-python = { workspace = true }
+gridcraft-math = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
 zip = { workspace = true }
+# Tests run Python cells on an in-process worker.
+gridcraft-python = { workspace = true, features = ["python"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }

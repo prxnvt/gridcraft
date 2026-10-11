@@ -1,5 +1,5 @@
 //! More ribbon commands: Chart Design and Format, object arrangement, workbook views, table
-//! tools, Get Data, scripts (Automate), cell checkboxes, theme colours and fonts.
+//! tools, Get Data, cell checkboxes, theme colours and fonts.
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::*;
@@ -74,7 +74,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Bring Forward",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape, id, toFront?: bool}",
+            "{kind: chart|image|shape|equation|control, id, toFront?: bool}",
             has_doc,
             |s, p| arrange(s, p, true)
         ),
@@ -83,7 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Send Backward",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape, id, toBack?: bool}",
+            "{kind: chart|image|shape|equation|control, id, toBack?: bool}",
             has_doc,
             |s, p| arrange(s, p, false)
         ),
@@ -93,7 +93,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Align",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape, ids: [..], align: left|center|right|top|middle|bottom}",
+            "{kind: chart|image|shape|equation|control, ids: [..], align: left|center|right|top|middle|bottom}",
             has_doc,
             align
         ),
@@ -127,7 +127,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "view.unhideWindow", "Unhide…", ["View", "Window"], None, "{index?}", has_doc, unhide_window),
         cmd!(query "view.switchWindows", "Switch Windows", ["View", "Window"], None, "{} → open windows", always, switch_windows),
         cmd!(noundo "view.ruler", "Ruler", ["View", "Show"], None, "{on?}", has_doc, |_, _| ok()),
-        cmd!(query "view.macros", "Macros", ["View", "Macros"], None, "{} → scripts", has_doc, all_scripts),
         // Table tools
         cmd!("table.resize", "Resize Table", ["Table Design", "Properties"], None, "{table?, range: \"A1:F20\"}", has_doc, table_resize),
         cmd!("table.removeDuplicates", "Remove Duplicates", ["Table Design", "Tools"], None, "{table?, columns?}", has_doc, |s, p| s
@@ -161,20 +160,6 @@ pub fn specs() -> Vec<CommandSpec> {
             from_table_range
         ),
         cmd!(query "data.queriesConnections", "Queries & Connections", ["Data", "Queries & Connections"], None, "{} → imported tables", has_doc, queries),
-        // Automate
-        cmd!(noundo "automate.recordActions", "Record Actions", ["Automate", "Scripting Tools"], None, "{stop?: bool, name?: script name when stopping}", has_doc, record),
-        cmd!(
-            "automate.newScript",
-            "New Script",
-            ["Automate", "Scripting Tools"],
-            None,
-            "{name, commands: [{command, params}] }",
-            has_doc,
-            new_script
-        ),
-        cmd!(query "automate.allScripts", "All Scripts", ["Automate", "Scripting Tools"], None, "{} → saved scripts", has_doc, all_scripts),
-        cmd!("automate.runScript", "Run Script", [], None, "{name}", has_doc, run_script),
-        cmd!("automate.deleteScript", "Delete Script", [], None, "{name}", has_doc, delete_script),
         // Cell controls, themes, borders, styles
         cmd!(
             "insert.checkbox",
@@ -224,7 +209,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             new_cell_style
         ),
-        cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through MCP and scripts instead of add-ins", always, |_, _| Ok(json!({"addIns": [], "hint": "Use gridcraft-cli mcp or Automate › scripts"}))),
+        cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through MCP and macros instead of add-ins", always, |_, _| Ok(json!({"addIns": [], "hint": "Use gridcraft-cli mcp or Automate › Macros"}))),
         cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → recently used functions in this workbook", has_doc, recently_used),
         cmd!(query "formulas.financial", "Financial", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Financial"}))),
         cmd!(query "formulas.logical", "Logical", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Logical"}))),
@@ -458,6 +443,11 @@ fn arrange(s: &mut Session, p: &Json, forward: bool) -> Result<Json> {
                     reorder(&mut sh.images, i, forward, extreme);
                 }
             }
+            "control" => {
+                if let Some(i) = sh.controls.iter().position(|c| c.id == id) {
+                    reorder(&mut sh.controls, i, forward, extreme);
+                }
+            }
             _ => {
                 if let Some(i) = sh.shapes.iter().position(|c| c.id == id) {
                     reorder(&mut sh.shapes, i, forward, extreme);
@@ -473,13 +463,20 @@ fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let mut v = Vec::new();
     for c in &sh.shapes {
-        v.push(json!({"kind": "shape", "id": c.id, "name": format!("{:?} {}", c.kind, c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
+        let kind = if c.kind == ShapeKind::Equation { "equation" } else { "shape" };
+        v.push(json!({"kind": kind, "id": c.id, "name": format!("{:?} {}", c.kind, c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     for c in &sh.images {
         v.push(json!({"kind": "image", "id": c.id, "name": format!("Picture {}", c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     for c in &sh.charts {
         v.push(json!({"kind": "chart", "id": c.id, "name": format!("Chart {}", c.id), "title": c.title, "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
+    }
+    // Controls stack above everything else.
+    for c in &sh.controls {
+        v.push(
+            json!({"kind": "control", "id": c.id, "name": c.display_name(), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}),
+        );
     }
     Ok(Json::Array(v))
 }
@@ -488,6 +485,7 @@ fn anchors_of<'a>(sh: &'a mut Sheet, kind: &str) -> Vec<(u32, &'a mut Anchor)> {
     match kind {
         "chart" => sh.charts.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         "image" => sh.images.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
+        "control" => sh.controls.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         _ => sh.shapes.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
     }
 }
@@ -545,38 +543,23 @@ fn set_view(s: &mut Session, mode: &str) -> Result<Json> {
     Ok(json!({"view": mode}))
 }
 
-const VIEWS_NAME: &str = "_sc_custom_views";
-const SCRIPTS_NAME: &str = "_sc_scripts";
-const WATCH_NAME: &str = "_sc_watch";
+/// Keys of the workbook data kept in hidden names (see `stash`).
+const VIEWS_KEY: &str = "custom_views";
+const WATCH_KEY: &str = "watch";
 
-/// Workbook-level JSON stored in a hidden defined name (round-trips through XLSX).
+/// A JSON object or list stored in the workbook (`{}` when there is none).
 fn stash_get(wb: &Workbook, key: &str) -> Json {
-    wb.names
-        .iter()
-        .find(|n| n.name == key)
-        .and_then(|n| n.formula.strip_prefix('"').and_then(|t| t.strip_suffix('"')).map(|t| t.replace("\"\"", "\"")))
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or(json!({}))
-}
-
-fn stash_set(wb: &mut Workbook, key: &str, v: &Json) {
-    let text = v.to_string();
-    let formula = format!("\"{}\"", text.replace('"', "\"\""));
-    wb.names.retain(|n| n.name != key);
-    wb.names.push(DefinedName { name: key.into(), scope: None, formula, comment: String::new(), hidden: true });
+    super::stash::get_json(wb, key).unwrap_or(json!({}))
 }
 
 fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
-    let mut views = stash_get(&d.wb, VIEWS_NAME);
+    let mut views = stash_get(&d.wb, VIEWS_KEY);
     if let Some(name) = str_param(p, "save") {
         let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
         views[name] = json!({"sheet": d.wb.active_sheet, "selection": d.selection.a1(), "zoom": sh.zoom, "freeze": sh.freeze});
         let v = views.clone();
-        edit(s, |cx| {
-            stash_set(&mut cx.wb, VIEWS_NAME, &v);
-            Ok(())
-        })?;
+        edit(s, |cx| super::stash::set_json(&mut cx.wb, VIEWS_KEY, &v))?;
     } else if let Some(name) = str_param(p, "show") {
         let v = views.get(name).cloned().ok_or_else(|| bad("view.customViews", "no such view"))?;
         if let Some(si) = v["sheet"].as_u64() {
@@ -593,12 +576,9 @@ fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {
             o.remove(name);
         }
         let v = views.clone();
-        edit(s, |cx| {
-            stash_set(&mut cx.wb, VIEWS_NAME, &v);
-            Ok(())
-        })?;
+        edit(s, |cx| super::stash::set_json(&mut cx.wb, VIEWS_KEY, &v))?;
     }
-    Ok(stash_get(&s.doc()?.wb, VIEWS_NAME))
+    Ok(stash_get(&s.doc()?.wb, VIEWS_KEY))
 }
 
 fn split(s: &mut Session, _: &Json) -> Result<Json> {
@@ -610,6 +590,7 @@ fn new_window(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?.clone();
     let mut copy = crate::DocState::new((*d.wb).clone(), d.path.clone(), format!("{}:2", d.display_title()));
     copy.selection = d.selection.clone();
+    copy.trust = d.trust;
     let i = s.add_document(copy);
     Ok(json!({"index": i}))
 }
@@ -763,68 +744,6 @@ fn queries(s: &mut Session, _: &Json) -> Result<Json> {
     ))
 }
 
-fn record(s: &mut Session, p: &Json) -> Result<Json> {
-    if bool_param(p, "stop").unwrap_or(false) || s.recording.is_some() {
-        let Some(start) = s.recording.take() else { return Ok(json!({"recording": false})) };
-        let cmds: Vec<Json> =
-            s.journal.iter().skip(start).filter(|(id, _)| !id.starts_with("automate.")).map(|(id, p)| json!({"command": id, "params": p})).collect();
-        let name = str_param(p, "name").map(str::to_string).unwrap_or_else(|| format!("Script {}", start));
-        s.execute("automate.newScript", json!({"name": name, "commands": cmds}))?;
-        return Ok(json!({"recording": false, "saved": name, "steps": cmds.len()}));
-    }
-    s.recording = Some(s.journal.len());
-    Ok(json!({"recording": true}))
-}
-
-fn new_script(s: &mut Session, p: &Json) -> Result<Json> {
-    let name = str_param(p, "name").ok_or_else(|| bad("automate.newScript", "missing `name`"))?.to_string();
-    let cmds = p.get("commands").cloned().unwrap_or(json!([]));
-    if !cmds.is_array() {
-        return Err(bad("automate.newScript", "`commands` must be an array"));
-    }
-    edit(s, |cx| {
-        let mut all = stash_get(&cx.wb, SCRIPTS_NAME);
-        all[name.as_str()] = cmds.clone();
-        stash_set(&mut cx.wb, SCRIPTS_NAME, &all);
-        Ok(json!({"name": name}))
-    })
-}
-
-fn all_scripts(s: &mut Session, _: &Json) -> Result<Json> {
-    let all = stash_get(&s.doc()?.wb, SCRIPTS_NAME);
-    Ok(Json::Array(
-        all.as_object().map(|o| o.iter().map(|(k, v)| json!({"name": k, "steps": v.as_array().map_or(0, Vec::len)})).collect()).unwrap_or_default(),
-    ))
-}
-
-fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
-    let name = str_param(p, "name").ok_or_else(|| bad("automate.runScript", "missing `name`"))?;
-    let all = stash_get(&s.doc()?.wb, SCRIPTS_NAME);
-    let steps = all.get(name).and_then(Json::as_array).cloned().ok_or_else(|| bad("automate.runScript", "no such script"))?;
-    let mut n = 0;
-    for st in steps.iter().take(100_000) {
-        let id = st["command"].as_str().unwrap_or("");
-        if id.starts_with("automate.") {
-            continue;
-        }
-        s.execute(id, st["params"].clone())?;
-        n += 1;
-    }
-    Ok(json!({"ran": n}))
-}
-
-fn delete_script(s: &mut Session, p: &Json) -> Result<Json> {
-    let name = str_param(p, "name").ok_or_else(|| bad("automate.deleteScript", "missing `name`"))?.to_string();
-    edit(s, |cx| {
-        let mut all = stash_get(&cx.wb, SCRIPTS_NAME);
-        if let Some(o) = all.as_object_mut() {
-            o.remove(&name);
-        }
-        stash_set(&mut cx.wb, SCRIPTS_NAME, &all);
-        Ok(Json::Null)
-    })
-}
-
 /// Number format that marks checkbox cells (TRUE/FALSE values drawn as boxes).
 pub const CHECKBOX_FORMAT: &str = "\"☐\";\"☐\";\"☐\";[=1]\"☑\"";
 
@@ -845,7 +764,7 @@ fn checkbox(s: &mut Session, p: &Json) -> Result<Json> {
                 let sh = cx.sheet_mut(si)?;
                 let v = sh.value(c);
                 let value = if matches!(v, Value::Bool(_)) { v } else { Value::Bool(false) };
-                sh.set_cell(c, Cell { value, formula: None, style: new });
+                sh.set_cell(c, Cell { value, formula: None, style: new, py: None });
                 cx.touch(si, c);
             }
         }
@@ -866,6 +785,7 @@ fn toggle_checkbox(s: &mut Session, p: &Json) -> Result<Json> {
             if let Some(cell) = sh.cells.get_mut(c)
                 && let Value::Bool(b) = cell.value
                 && cell.formula.is_none()
+                && cell.py.is_none()
             {
                 cell.value = Value::Bool(!b);
                 cx.changed.push((si, c));
@@ -960,7 +880,7 @@ fn use_in_formula(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
     let mut list: Vec<String> =
-        stash_get(&s.doc()?.wb, WATCH_NAME).as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        stash_get(&s.doc()?.wb, WATCH_KEY).as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
     let mut changed = false;
     if let Some(a) = str_param(p, "add") {
         if !list.iter().any(|x| x == a) {
@@ -977,7 +897,7 @@ fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
         let d = s.doc_mut()?;
         // The watch list is view state: don't add an undo step.
         let wb = std::sync::Arc::make_mut(&mut d.wb);
-        stash_set(wb, WATCH_NAME, &v);
+        super::stash::set_json(wb, WATCH_KEY, &v)?;
     }
     let d = s.doc()?;
     let rows: Vec<Json> = list

@@ -467,3 +467,81 @@ fn sumif_resized_sum_range_on_another_sheet_and_through_a_name() {
     assert_eq!(t.num("C1"), 10.0);
     assert_eq!(t.num("C2"), 5.0);
 }
+
+fn table(range: &str, row_input: Option<&str>, col_input: Option<&str>) -> gridcraft_model::DataTable {
+    gridcraft_model::DataTable { range: gridcraft_core::RangeRef::parse(range).unwrap(), row_input: row_input.map(c), col_input: col_input.map(c) }
+}
+
+#[test]
+fn data_tables_stay_live() {
+    let mut t = T::new();
+    // Rate B1, amount B2; a one-variable table with amounts down D3:D5 and two formulas.
+    t.set("B1", "0.1");
+    t.set("B2", "1000");
+    for (cell, v) in [("D3", "100"), ("D4", "200"), ("D5", "300")] {
+        t.set(cell, v);
+    }
+    t.set("E2", "=B2*(1+B1)");
+    t.set("F2", "=B2*2");
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("D2:F5", None, Some("B2")));
+    t.set("H1", "=SUM(E3:E5)");
+    t.calc.recalc_all(&mut t.wb);
+    assert!((t.num("E3") - 110.0).abs() < 1e-9);
+    assert_eq!(t.num("F5"), 600.0);
+    assert!((t.num("H1") - 660.0).abs() < 1e-9, "dependents of the body recalculate");
+    assert_eq!(t.num("B2"), 1000.0, "the input cell is untouched");
+    // Changing a precedent of the edge formulas refreshes the table and its dependents.
+    t.set("B1", "0.5");
+    assert_eq!(t.num("E4"), 300.0);
+    assert_eq!(t.num("H1"), 900.0);
+    // So does changing an input value on the edge.
+    t.set("D3", "1000");
+    assert_eq!(t.num("E3"), 1500.0);
+    // Two-variable: rate across the top (row input B1), amount down the side (column input B2).
+    t.set("J1", "=B2*B1");
+    for (cell, v) in [("K1", "1"), ("L1", "2"), ("J2", "10"), ("J3", "20")] {
+        t.set(cell, v);
+    }
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("J1:L3", Some("B1"), Some("B2")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("K2"), t.num("L2"), t.num("K3"), t.num("L3")), (10.0, 20.0, 20.0, 40.0));
+    // Row-oriented one-variable table: rates across the top, a formula down the left column.
+    t.set("N2", "=B2*B1");
+    for (cell, v) in [("O1", "1"), ("P1", "3")] {
+        t.set(cell, v);
+    }
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("N1:P2", Some("B1"), None));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("O2"), t.num("P2")), (1000.0, 3000.0));
+    // Except-tables mode leaves tables alone until a full recalculation.
+    t.wb.calc.mode = gridcraft_model::CalcMode::AutomaticExceptTables;
+    t.set("B2", "10");
+    assert_eq!(t.num("O2"), 1000.0);
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("O2"), 10.0);
+}
+
+#[test]
+fn many_trial_data_table_matches_direct_evaluation() {
+    // Big enough to take the parallel path on multi-core machines.
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "1");
+    t.set("C1", "=A1*A1+A2");
+    let r = gridcraft_core::RangeRef::parse("C1:F21").unwrap();
+    for col in 3..=5 {
+        t.set(&CellRef::new(0, col).a1(), &format!("{}", col));
+    }
+    // Two-variable table C1:F21: row input A2 (values D1:F1), column input A1 (values C2:C21).
+    for row in 1..=20 {
+        t.set(&CellRef::new(row, 2).a1(), &format!("{}", row));
+    }
+    t.wb.sheet_mut(0).unwrap().data_tables.push(gridcraft_model::DataTable { range: r, row_input: Some(c("A2")), col_input: Some(c("A1")) });
+    t.calc.recalc_all(&mut t.wb);
+    for row in 1..=20u32 {
+        for col in 3..=5u32 {
+            let want = f64::from(row * row + col);
+            assert_eq!(t.num(&CellRef::new(row, col).a1()), want, "{}", CellRef::new(row, col).a1());
+        }
+    }
+}

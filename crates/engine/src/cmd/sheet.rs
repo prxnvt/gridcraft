@@ -124,14 +124,7 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     };
     // Floating objects: snapshot their bottom-right corners against the pre-shift geometry, so a
     // re-fit after the shift measures against the grid the object actually lands on.
-    let obj_corners: Vec<(u32, u32, f32, f32)> = sh
-        .charts
-        .iter()
-        .map(|o| &o.anchor)
-        .chain(sh.images.iter().map(|o| &o.anchor))
-        .chain(sh.shapes.iter().map(|o| &o.anchor))
-        .map(|a| anchor_corner(sh, a))
-        .collect();
+    let obj_corners: Vec<(u32, u32, f32, f32)> = sh.object_anchors().map(|a| anchor_corner(sh, a)).collect();
     // Line info.
     let lines = if axis == Axis::Rows { &mut sh.rows } else { &mut sh.cols };
     let old = std::mem::take(lines);
@@ -191,22 +184,13 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
         std::mem::take(&mut sh.cell_pictures).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
-    // Floating objects follow their anchor lines per their [`AnchorMode`]. Corners were snapshotted
-    // as charts ++ images ++ shapes, matching the three slices below. New anchors are computed
-    // against the post-shift grid first (the re-fit needs its sizes), then written back.
-    let anchored = |ui: usize, a: Anchor| -> Anchor { obj_corners.get(ui).map_or(a, |&corner| shift_anchor(sh, a, corner, axis, at, &map_line)) };
-    let new_charts: Vec<Anchor> = sh.charts.iter().enumerate().map(|(i, o)| anchored(i, o.anchor)).collect();
-    let new_images: Vec<Anchor> = sh.images.iter().enumerate().map(|(i, o)| anchored(new_charts.len() + i, o.anchor)).collect();
-    let base = new_charts.len() + new_images.len();
-    let new_shapes: Vec<Anchor> = sh.shapes.iter().enumerate().map(|(i, o)| anchored(base + i, o.anchor)).collect();
-    for (o, a) in sh.charts.iter_mut().zip(new_charts) {
-        o.anchor = a;
-    }
-    for (o, a) in sh.images.iter_mut().zip(new_images) {
-        o.anchor = a;
-    }
-    for (o, a) in sh.shapes.iter_mut().zip(new_shapes) {
-        o.anchor = a;
+    // Floating objects (controls included) follow their anchor lines per their [`AnchorMode`].
+    // New anchors are computed against the post-shift grid first (the re-fit needs its sizes),
+    // then written back in the same order.
+    let new_anchors: Vec<Anchor> =
+        sh.object_anchors().zip(&obj_corners).map(|(a, &corner)| shift_anchor(sh, *a, corner, axis, at, &map_line)).collect();
+    for (a, n) in sh.object_anchors_mut().zip(new_anchors) {
+        *a = n;
     }
     for sp in sh.sparklines.iter_mut() {
         if let Some(c) = map_cell(sp.cell) {
@@ -216,9 +200,42 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     if let Some(pa) = sh.print.print_area {
         sh.print.print_area = map_range(pa);
     }
+    sh.data_tables = std::mem::take(&mut sh.data_tables)
+        .into_iter()
+        .filter_map(|mut t| {
+            t.range = map_range(t.range)?;
+            t.row_input = t.row_input.and_then(map_cell);
+            t.col_input = t.col_input.and_then(map_cell);
+            (t.row_input.is_some() || t.col_input.is_some()).then_some(t)
+        })
+        .collect();
 }
 
-/// Rewrites every formula reference (and chart series) for a structural edit on `target`.
+/// Whether inserting or deleting lines would cut through a data table (Excel refuses that).
+fn splits_data_table(sh: &Sheet, axis: Axis, at: u32, count: u32, insert: bool) -> bool {
+    sh.data_tables.iter().any(|t| {
+        let (lo, hi) = match axis {
+            Axis::Rows => (t.range.start.row, t.range.end.row),
+            Axis::Cols => (t.range.start.col, t.range.end.col),
+        };
+        if insert {
+            at > lo && at <= hi
+        } else {
+            let end = at.saturating_add(count.saturating_sub(1));
+            at <= hi && end >= lo && !(at <= lo && end >= hi)
+        }
+    })
+}
+
+fn check_data_tables(s: &Session, sheet: usize, axis: Axis, at: u32, count: u32, insert: bool) -> Result<()> {
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| splits_data_table(sh, axis, at, count, insert)) {
+        return Err(EngineError::Other(super::DATA_TABLE_PART.into()));
+    }
+    Ok(())
+}
+
+/// Rewrites every formula reference (chart series and object cell links included) for a
+/// structural edit on `target`.
 fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
     super::edit::rewrite_all_formulas(wb, target, e);
     for si in 0..wb.sheets.len() {
@@ -230,13 +247,6 @@ fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
                 Err(_) => text.to_string(),
             }
         };
-        for ch in sh.charts.iter_mut() {
-            for se in ch.series.iter_mut() {
-                se.values = fix(&se.values);
-                se.categories = se.categories.as_deref().map(fix);
-                se.name = se.name.as_deref().map(fix);
-            }
-        }
         for sp in sh.sparklines.iter_mut() {
             sp.source = fix(&sp.source);
         }
@@ -256,6 +266,7 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
     check_lines_protection(s, p, axis, at, count, true)?;
     let sheet = target_sheet(s, p)?;
+    check_data_tables(s, sheet, axis, at, count, true)?;
     // Refuse to push data off the sheet.
     let limit = if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
@@ -297,6 +308,7 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
     check_lines_protection(s, p, axis, at, count, false)?;
     let sheet = target_sheet(s, p)?;
+    check_data_tables(s, sheet, axis, at, count, false)?;
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         cx.protection_checked = true;
@@ -381,7 +393,7 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(out)
 }
 
-fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+pub(crate) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.protected_structure {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }
@@ -477,6 +489,7 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
+        super::edit::rewrite_cell_links(&mut cx.wb, |_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order));
         cx.wb.names.retain(|n| n.scope != Some(i));
         for n in cx.wb.names.iter_mut() {
             if let Some(sc) = n.scope.as_mut()
@@ -527,19 +540,8 @@ fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                     }
                 }
             }
-            let fix = |t: &str| {
-                gridcraft_formula::parse(t)
-                    .map(|e| gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &old, &name)))
-                    .unwrap_or_else(|_| t.to_string())
-            };
-            for ch in sh.charts.iter_mut() {
-                for se in ch.series.iter_mut() {
-                    se.values = fix(&se.values);
-                    se.categories = se.categories.as_deref().map(fix);
-                    se.name = se.name.as_deref().map(fix);
-                }
-            }
         }
+        super::edit::rewrite_cell_links(&mut cx.wb, |_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name));
         for n in cx.wb.names.iter_mut() {
             if let Ok(e) = gridcraft_formula::parse(&n.formula) {
                 n.formula = gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &old, &name));
@@ -563,6 +565,17 @@ fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             let name = (2..).map(|k| format!("{base} ({k})")).find(|nm| cx.wb.sheet_index(nm).is_none()).unwrap_or(base.clone());
             sh.name = name.chars().take(31).collect();
             sh.tables.clear(); // table names must be unique
+            // Object ids are unique across the workbook: the copies get fresh ones.
+            let mut next = cx.wb.next_object_id();
+            let mut fresh = || {
+                let id = next;
+                next = next.saturating_add(1);
+                id
+            };
+            sh.charts.iter_mut().for_each(|o| o.id = fresh());
+            sh.images.iter_mut().for_each(|o| o.id = fresh());
+            sh.shapes.iter_mut().for_each(|o| o.id = fresh());
+            sh.controls.iter_mut().for_each(|o| o.id = fresh());
             let at = to.min(n);
             // The copy gets its own copies of the sheet's names, referring to the copy.
             let copies: Vec<gridcraft_model::DefinedName> = cx

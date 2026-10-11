@@ -1,0 +1,14 @@
+[package]
+name = "gridcraft-analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft analysis maths: Analysis ToolPak statistics, Solver engines, linear algebra, FFT and seeded random numbers"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-core = { workspace = true }
+gridcraft-functions = { workspace = true }
+thiserror = { workspace = true }

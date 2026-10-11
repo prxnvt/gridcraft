@@ -4,9 +4,10 @@
 use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::SheetApp;
+pub use crate::code_editor::{Lang, code_editor};
 use crate::i18n;
 use crate::icons::{self, Icon};
-use crate::theme::{self, Tokens};
+use crate::theme::{self, Cat, Tokens};
 
 /// Translates a label or tooltip for the language of the frame being drawn (English if untranslated).
 /// Ribbon chrome all flows through these widgets, so translating here localises it in one place.
@@ -24,6 +25,8 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
+    let name = tr(ui, tip);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -43,21 +46,25 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
 
 /// Large ribbon button: 32px icon over a one- or two-line label.
 pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    big_button_accent(ui, icon, None, label, tip, dropdown)
+}
+
+/// The label lines of a big button, laid out, with the width the button needs.
+fn big_label(ui: &Ui, label: &str, dropdown: bool) -> (Vec<std::sync::Arc<egui::Galley>>, f32) {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(11.5);
-    let label = tr(ui, label);
     let lines: Vec<_> = label.split('\n').map(|line| ui.painter().layout_no_wrap(line.to_string(), font.clone(), t.text)).collect();
-    let arrow_size = 10.0;
-    let arrow_space = if dropdown { 4.0 + arrow_size } else { 0.0 };
+    let arrow_space = if dropdown { 4.0 + BIG_ARROW } else { 0.0 };
     let text_w = lines.iter().enumerate().map(|(i, line)| line.size().x + if i + 1 == lines.len() { arrow_space } else { 0.0 }).fold(0.0, f32::max);
-    let w = (text_w + 12.0).max(44.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 72.0), Sense::click());
-    if resp.is_pointer_button_down_on() {
-        ui.painter().rect_filled(rect, 5.0, t.pressed);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 5.0, t.hover);
-    }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    (lines, (text_w + 12.0).max(44.0))
+}
+
+const BIG_ARROW: f32 = 10.0;
+
+/// Paints a big button's label lines (and the dropdown arrow beside the last one) in `rect`.
+fn paint_big_label(ui: &Ui, rect: Rect, lines: &[std::sync::Arc<egui::Galley>], dropdown: bool) {
+    let t = Tokens::get(ui.ctx());
+    let arrow_space = if dropdown { 4.0 + BIG_ARROW } else { 0.0 };
     for (i, line) in lines.iter().enumerate() {
         let has_arrow = dropdown && i + 1 == lines.len();
         let line_w = line.size().x + if has_arrow { arrow_space } else { 0.0 };
@@ -67,17 +74,69 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
         if has_arrow {
             icons::paint(
                 ui.painter(),
-                Rect::from_center_size(pos2(left + line_w - arrow_size / 2.0, y + 1.0), vec2(arrow_size, arrow_size)),
+                Rect::from_center_size(pos2(left + line_w - BIG_ARROW / 2.0, y + 1.0), vec2(BIG_ARROW, BIG_ARROW)),
                 Icon::Chevron,
                 t.text_dim,
             );
         }
     }
+}
+
+/// Large ribbon button with an icon accent colour (`None` draws the icon in the text colour).
+pub fn big_button_accent(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label: &str, tip: &str, dropdown: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let label = tr(ui, label);
+    let (lines, w) = big_label(ui, label, dropdown);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 72.0), Sense::click());
+    if resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, 5.0, t.pressed);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, 5.0, t.hover);
+    }
+    icons::paint_accent(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text, accent);
+    paint_big_label(ui, rect, &lines, dropdown);
+    let name = label.replace('\n', " ");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
     resp.on_hover_text(tr(ui, tip))
+}
+
+/// Large split button: the icon runs the default action, the label (with its arrow) opens the
+/// menu. Returns (main, arrow) responses.
+pub fn big_split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label: &str, tip: &str) -> (Response, Response) {
+    let t = Tokens::get(ui.ctx());
+    let label = tr(ui, label);
+    let (lines, w) = big_label(ui, label, true);
+    let (rect, _) = ui.allocate_exact_size(vec2(w, 72.0), Sense::hover());
+    let split = rect.top() + 38.0;
+    let main_rect = Rect::from_min_max(rect.min, pos2(rect.right(), split));
+    let arrow_rect = Rect::from_min_max(pos2(rect.left(), split), rect.max);
+    let main = ui.interact(main_rect, ui.id().with((label, "big-split-main")), Sense::click());
+    let arrow = ui.interact(arrow_rect, ui.id().with((label, "big-split-arrow")), Sense::click());
+    if main.hovered() || arrow.hovered() {
+        ui.painter().rect_filled(rect, 5.0, t.hover);
+        ui.painter().line_segment([pos2(rect.left() + 4.0, split), pos2(rect.right() - 4.0, split)], Stroke::new(1.0, t.separator));
+    }
+    for (part, r) in [(&main, main_rect), (&arrow, arrow_rect)] {
+        if part.is_pointer_button_down_on() {
+            ui.painter().rect_filled(r, 5.0, t.pressed);
+        }
+    }
+    icons::paint_accent(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text, accent);
+    paint_big_label(ui, rect, &lines, true);
+    let name = label.replace('\n', " ");
+    main.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{name} options")));
+    let tip = tr(ui, tip);
+    (main.on_hover_text(tip), arrow.on_hover_text(tip))
 }
 
 /// Small ribbon button: 16px icon with optional label to the right.
 pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    small_button_accent(ui, icon, None, label, tip, dropdown)
+}
+
+/// Small ribbon button with an icon accent colour.
+pub fn small_button_accent(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label: &str, tip: &str, dropdown: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(12.5);
     let label = tr(ui, label);
@@ -89,7 +148,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    icons::paint_accent(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text, accent);
     if !label.is_empty() {
         ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
     }
@@ -101,7 +160,61 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
             t.text_dim,
         );
     }
+    let name = if label.is_empty() { tr(ui, tip) } else { label };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
     resp.on_hover_text(tr(ui, tip))
+}
+
+/// Small labelled toggle button (Use Relative References): drawn pressed while `on`.
+pub fn small_toggle_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label: &str, tip: &str, on: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(12.5);
+    let label = tr(ui, label);
+    let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(24.0 + tw, 23.0), Sense::click());
+    if on || resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, 4.0, t.pressed);
+        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+    }
+    icons::paint_accent(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text, accent);
+    ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label));
+    resp.on_hover_text(tr(ui, tip))
+}
+
+/// Small labelled split button (AutoSum, Reset): icon and label run the default action, the
+/// arrow opens the menu. Returns (main, arrow) responses.
+pub fn small_split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label: &str, tip: &str) -> (Response, Response) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(12.5);
+    let label = tr(ui, label);
+    let tw = if label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0 };
+    let (rect, _) = ui.allocate_exact_size(vec2(24.0 + tw + 14.0, 23.0), Sense::hover());
+    let main_rect = Rect::from_min_max(rect.min, pos2(rect.right() - 14.0, rect.bottom()));
+    let arrow_rect = Rect::from_min_max(pos2(main_rect.right(), rect.top()), rect.max);
+    let main = ui.interact(main_rect, ui.id().with((label, "small-split-main")), Sense::click());
+    let arrow = ui.interact(arrow_rect, ui.id().with((label, "small-split-arrow")), Sense::click());
+    if main.hovered() || arrow.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+        ui.painter()
+            .line_segment([pos2(main_rect.right(), rect.top() + 3.0), pos2(main_rect.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
+    }
+    for (part, r) in [(&main, main_rect), (&arrow, arrow_rect)] {
+        if part.is_pointer_button_down_on() {
+            ui.painter().rect_filled(r, 4.0, t.pressed);
+        }
+    }
+    icons::paint_accent(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text, accent);
+    if !label.is_empty() {
+        ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(arrow_rect.center() + vec2(0.0, 1.0), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    main.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{label} options")));
+    let tip = tr(ui, tip);
+    (main.on_hover_text(tip), arrow.on_hover_text(tip))
 }
 
 /// A split button: main part runs the default action, the arrow opens a menu.
@@ -128,6 +241,7 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
 /// Our colour palette (theme row + tints + standard colours), returns a picked hex colour,
 /// `Some("none")` for No Fill/Automatic.
 pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
+    let t = Tokens::get(ui.ctx());
     let mut picked = None;
     if ui.button(none_label).clicked() {
         picked = Some("none".to_string());
@@ -144,9 +258,9 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
                 let col = Color32::from_rgb(c[0], c[1], c[2]);
                 let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
                 ui.painter().rect_filled(r, 1.0, col);
-                ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
+                ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
                 if resp.hovered() {
-                    ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                    ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, t.cat(Cat::Orange)), StrokeKind::Outside);
                 }
                 if resp.clicked() {
                     picked = Some(format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]));
@@ -174,14 +288,23 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
 }
 
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
-    let Some((title, msg)) = app.message.clone() else { return };
+    let shown_key = egui::Id::new("message_box_shown");
+    let Some((title, msg)) = app.message.clone() else {
+        ctx.data_mut(|d| d.remove::<u64>(shown_key));
+        return;
+    };
+    // The key that raised the message (Enter on a dialog's OK) mustn't also dismiss it.
+    let frame = ctx.cumulative_pass_nr();
+    let first = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(shown_key, || frame));
+    let keys_live = frame > first;
     let mut close = false;
     egui::Modal::new(egui::Id::new("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-            ui.painter().circle_filled(r.center(), 16.0, Color32::from_rgb(0xF2, 0xC3, 0x2E));
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), Color32::WHITE);
+            let t = Tokens::get(ui.ctx());
+            ui.painter().circle_filled(r.center(), 16.0, t.warning);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), t.on_warning);
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(title).strong());
                 ui.add(egui::Label::new(msg).wrap());
@@ -189,31 +312,162 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button("  OK  ").clicked() || (keys_live && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))) {
                 close = true;
             }
         });
     });
     if close {
         app.message = None;
+        ctx.data_mut(|d| d.remove::<u64>(shown_key));
+    }
+}
+
+/// A command's "replace it?" question: OK runs the command again with `overwrite: true`.
+pub fn confirm_box(app: &mut SheetApp, ctx: &egui::Context) {
+    if app.message.is_some() {
+        return;
+    }
+    let Some(q) = app.confirm.clone() else { return };
+    let mut answer: Option<Option<serde_json::Value>> = None;
+    egui::Modal::new(egui::Id::new("confirm_box")).show(ctx, |ui| {
+        ui.set_width(380.0);
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
+            let t = Tokens::get(ui.ctx());
+            ui.painter().circle_filled(r.center(), 16.0, t.warning);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, "?", theme::ui_bold(20.0), t.on_warning);
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(&q.title).strong());
+                ui.add(egui::Label::new(&q.text).wrap());
+            });
+        });
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(" Cancel ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                answer = Some(None);
+            }
+            if q.choices.is_empty() {
+                if ui.button("   OK   ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    answer = Some(Some(serde_json::json!({"overwrite": true})));
+                }
+            } else {
+                // Right to left: the first choice ends up next to Cancel, so list them reversed.
+                for (k, (label, patch)) in q.choices.iter().enumerate().rev() {
+                    if ui.add(egui::Button::new(label.as_str()).min_size(vec2(72.0, 0.0))).clicked()
+                        || (k == 0 && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                    {
+                        answer = Some(Some(patch.clone()));
+                    }
+                }
+            }
+        });
+    });
+    match answer {
+        Some(Some(patch)) => {
+            app.confirm = None;
+            let mut params = q.params.clone();
+            if let (Some(m), Some(extra)) = (params.as_object_mut(), patch.as_object()) {
+                for (k, v) in extra {
+                    m.insert(k.clone(), v.clone());
+                }
+            }
+            match app.run(&q.command, params.clone()) {
+                Ok(v) => crate::macro_ui::note_result(app, &q.command, &params, &v),
+                Err(e) => {
+                    // A second question (approve, then make room) asks again.
+                    if !crate::macro_ui::ask(app, &q.title, &q.command, &params, &e) {
+                        app.message = Some((q.title.clone(), crate::clean_error(&e)));
+                    }
+                }
+            }
+        }
+        Some(None) => app.confirm = None,
+        None => {}
+    }
+}
+
+/// A paused long-running job: continue it or stop with the best result so far.
+pub fn job_paused(app: &mut SheetApp, ctx: &egui::Context) {
+    let gridcraft_engine::job::JobState::Paused { label, info } = app.session.job_state.clone() else { return };
+    // A job that pauses with a dialog of its own (Solver's Show Trial Solution) shows that.
+    if info.get("dialog").is_some() {
+        return;
+    }
+    let mut answer: Option<bool> = None;
+    egui::Modal::new(egui::Id::new("job_paused")).show(ctx, |ui| {
+        ui.set_width(360.0);
+        ui.label(egui::RichText::new(&label).strong());
+        ui.label(format!("{label} is paused. Continue, or stop and keep the best result found so far?"));
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(" Stop ").clicked() {
+                answer = Some(false);
+            }
+            if ui.button(" Continue ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                answer = Some(true);
+            }
+        });
+    });
+    match answer {
+        Some(true) => app.session.resume_job(),
+        Some(false) => {
+            app.session.stop_job();
+            app.after_engine();
+        }
+        None => {}
     }
 }
 
 pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((msg, at)) = app.toast.clone() else { return };
-    if crate::now_ms() - at > 2500.0 {
+    let extra = app.toast_extra.clone().filter(|e| e.at == at);
+    if crate::now_ms() - at > extra.as_ref().map_or(2500.0, |e| e.ms) {
         app.toast = None;
+        app.toast_extra = None;
         return;
     }
     let Some(rect) = app.grid.rect else { return };
+    let t = Tokens::get(ctx);
+    let mut open_pane = None;
+    let mut close = false;
     egui::Area::new(egui::Id::new("toast")).fixed_pos(pos2(rect.center().x - 160.0, rect.bottom() - 48.0)).order(egui::Order::Tooltip).show(
         ctx,
         |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_max_width(320.0);
-                ui.label(msg);
+            let mut frame = egui::Frame::popup(ui.style());
+            if extra.as_ref().is_some_and(|e| e.danger) {
+                frame = frame.stroke(Stroke::new(1.0, t.danger));
+            }
+            frame.show(ui, |ui| {
+                ui.set_max_width(if extra.is_some() { 420.0 } else { 320.0 });
+                match &extra {
+                    Some(e) => {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(msg.as_str()).wrap());
+                            if let Some((label, pane)) = &e.action
+                                && ui.button(label.as_str()).clicked()
+                            {
+                                open_pane = Some(pane.clone());
+                            }
+                            if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(18.0, 18.0)).clicked() {
+                                close = true;
+                            }
+                        });
+                    }
+                    None => {
+                        ui.label(msg);
+                    }
+                }
             });
         },
     );
+    if let Some(pane) = open_pane {
+        app.grid.pane = Some(pane);
+        close = true;
+    }
+    if close {
+        app.toast = None;
+        app.toast_extra = None;
+    }
     ctx.request_repaint_after(std::time::Duration::from_millis(200));
 }

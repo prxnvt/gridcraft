@@ -7,11 +7,11 @@ use super::*;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, history", has_doc, inspect),
+        cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, trust (local|fromFile|trusted), history", has_doc, inspect),
         cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool} → rows of values", has_doc, read),
-        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link", has_doc, cell_get),
+        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link, python {code, output, typeName, preview, stale}", has_doc, cell_get),
         cmd!(query "selection.stats", "Selection Statistics", [], None, "{} → count, sum, average, min, max", has_doc, sel_stats),
-        cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels", has_doc, history),
+        cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels, grouping (an undo group is open)", has_doc, history),
         cmd!(query "app.commands", "List Commands", [], None, "{search?} → ids, labels, params", always, list_commands),
     ]
 }
@@ -63,6 +63,7 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
         "title": d.display_title(),
         "path": d.path,
         "dirty": d.is_dirty(),
+        "trust": d.trust,
         "activeSheet": wb.active_sheet,
         "sheets": sheets,
         "selection": d.selection.a1(),
@@ -126,7 +127,7 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "cell": c.a1(),
         "value": value_json(&sh.value(c)),
         "type": if sh.cell_pictures.contains_key(&c) { "picture" } else { match sh.value(c) { Value::Empty => "empty", Value::Number(_) => "number", Value::Text(_) => "text", Value::Bool(_) => "boolean", Value::Error(_) => "error", Value::Array(_) => "array" } },
-        "formula": cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text)),
+        "formula": cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text)).or_else(|| sh.data_table_at(c).map(|t| format!("{{={}}}", t.formula_text()))),
         "text": crate::display::cell_text(&d.wb, sh, c),
         "input": sh.input_text(c),
         "picture": sh.cell_pictures.get(&c).map(|picture| json!({"mime": picture.mime, "alt": picture.alt, "bytes": picture.data.len()})),
@@ -136,6 +137,16 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "merge": sh.merge_at(c).map(|m| m.a1()),
         "comment": sh.comments.get(&c),
         "hyperlink": sh.hyperlinks.get(&c),
+        "python": cell.and_then(|x| x.py.as_deref()).map(|py| json!({
+            "code": py.code,
+            "output": if py.object { "object" } else { "value" },
+            "typeName": py.output.as_ref().map(|o| o.type_name.as_str()),
+            "preview": py.output.as_ref().map(|o| o.preview.as_str()),
+            "label": py.output.as_ref().map(|o| o.label.as_str()),
+            "tabular": py.output.as_ref().is_some_and(|o| o.tabular),
+            "lines": if py.lines { "rows" } else { "cell" },
+            "stale": py.stale,
+        })),
     }))
 }
 
@@ -148,9 +159,11 @@ fn sel_stats(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn history(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?;
-    Ok(
-        json!({"undo": d.undo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>(), "redo": d.redo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>()}),
-    )
+    Ok(json!({
+        "undo": d.undo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>(),
+        "redo": d.redo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>(),
+        "grouping": s.in_group(d.uid),
+    }))
 }
 
 fn list_commands(s: &mut Session, p: &Json) -> Result<Json> {

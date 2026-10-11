@@ -1,0 +1,196 @@
+//! Form controls: the three parts written for each control agree, they read back, and files with
+//! only VML or with odd values give valid controls.
+
+use gridcraft_core::CellRef;
+use gridcraft_model::{Anchor, AnchorMode, Comment, ControlAction, ControlKind, FormControl, MacroInput, Sheet, Workbook};
+
+use super::minimal;
+use crate::package::Package;
+use crate::{read_xlsx, write_xlsx};
+
+fn at(a: &str) -> CellRef {
+    CellRef::parse(a).unwrap()
+}
+
+fn anchor(cell: &str, width: f32, height: f32) -> Anchor {
+    Anchor { cell: at(cell), dx: 4.0, dy: 3.0, width, height, mode: AnchorMode::MoveOnly }
+}
+
+fn note(author: &str, text: &str) -> Comment {
+    Comment { author: author.into(), text: text.into(), replies: vec![], threaded: false, resolved: false, visible: false }
+}
+
+fn book() -> Workbook {
+    let mut wb = Workbook::default();
+    wb.sheets.clear();
+    let mut sh = Sheet::new("Data");
+    sh.comments.insert(at("A1"), note("Me", "a note"));
+    sh.controls.push(FormControl {
+        id: 1,
+        kind: ControlKind::Slider,
+        anchor: anchor("C3", 150.0, 20.0),
+        link: Some("$B$1".into()),
+        min: 5,
+        max: 500,
+        step: 5,
+        page: 50,
+        value: 35,
+        name: "Rate".into(),
+        ..Default::default()
+    });
+    sh.controls.push(FormControl {
+        id: 2,
+        kind: ControlKind::Spin,
+        anchor: Anchor { mode: AnchorMode::Absolute, ..anchor("F3", 20.0, 40.0) },
+        link: Some("'Other Sheet'!$A$2".into()),
+        max: 30_000,
+        step: 100,
+        value: 30_000,
+        print: false,
+        ..Default::default()
+    });
+    sh.controls.push(FormControl {
+        id: 3,
+        kind: ControlKind::Button,
+        anchor: Anchor { mode: AnchorMode::MoveAndSize, ..anchor("C8", 100.0, 28.0) },
+        text: "Run <it> & go".into(),
+        action: Some(ControlAction::Macro { name: "Fill Down".into(), input: MacroInput::Selection, output: None }),
+        locked: false,
+        ..Default::default()
+    });
+    sh.controls.push(FormControl { id: 4, kind: ControlKind::Slider, anchor: anchor("H3", 20.0, 120.0), horizontal: false, ..Default::default() });
+    wb.sheets.push(sh.into());
+    wb.sheets.push(Sheet::new("Other Sheet").into());
+    wb
+}
+
+fn text(pkg: &mut Package<'_>, part: &str) -> String {
+    String::from_utf8(pkg.read(part).unwrap().unwrap_or_else(|| panic!("missing {part}"))).unwrap()
+}
+
+#[test]
+fn the_three_parts_agree_and_read_back() {
+    let wb = book();
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = text(&mut pkg, "xl/worksheets/sheet1.xml");
+    let vml = text(&mut pkg, "xl/drawings/vmlDrawing1.vml");
+    let types = text(&mut pkg, "[Content_Types].xml");
+    assert!(sheet.contains("<mc:Choice xmlns:x14=") && sheet.contains("<controls>"), "{sheet}");
+    // Each control's shape id is a VML shape of the same kind; the note keeps its own id.
+    let ids: Vec<String> = sheet.split("<control shapeId=\"").skip(1).map(|s| s.split('"').next().unwrap().to_string()).collect();
+    assert_eq!(ids.len(), 8, "a Choice and a Fallback per control");
+    for (i, kind) in ["Scroll", "Spin", "Button", "Scroll"].iter().enumerate() {
+        let id = &ids[i * 2];
+        let shape = vml.split(&format!("id=\"_x0000_s{id}\"")).nth(1).unwrap_or_else(|| panic!("no shape {id}"));
+        assert!(shape.starts_with(" type=\"#_x0000_t201\""), "{shape}");
+        assert!(shape.split("</v:shape>").next().unwrap().contains(&format!("ObjectType=\"{kind}\"")), "{id}");
+    }
+    assert!(vml.contains("id=\"_x0000_s1025\"") && vml.contains("ObjectType=\"Note\""), "the note is shape 1025");
+    assert!(!ids.contains(&"1025".to_string()));
+    for n in 1..=4 {
+        assert!(types.contains(&format!("/xl/ctrlProps/ctrlProp{n}.xml")), "content type {n}");
+    }
+    let prop = text(&mut pkg, "xl/ctrlProps/ctrlProp1.xml");
+    assert!(
+        prop.contains("objectType=\"Scroll\"") && prop.contains("fmlaLink=\"$B$1\"") && prop.contains("page=\"50\"") && prop.contains("horiz=\"1\""),
+        "{prop}"
+    );
+    assert!(sheet.contains("macro=\"[0]!Fill Down\""));
+
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let got = &back.sheet(0).unwrap().controls;
+    assert_eq!(got.len(), 4);
+    for (a, b) in wb.sheet(0).unwrap().controls.iter().zip(got) {
+        let same = |x: &FormControl| {
+            (x.kind, x.link.clone(), x.min, x.max, x.step, x.value, x.horizontal, x.print, x.locked, x.action.clone(), x.anchor.cell, x.anchor.mode)
+        };
+        assert_eq!(same(a), same(b));
+        assert!(
+            (a.anchor.width - b.anchor.width).abs() < 1.0
+                && (a.anchor.height - b.anchor.height).abs() < 1.0
+                && (a.anchor.dx - b.anchor.dx).abs() < 1.0
+        );
+        if a.kind == ControlKind::Slider {
+            assert_eq!(a.page, b.page);
+        }
+    }
+    assert_eq!(got[0].name, "Rate");
+    assert_eq!(got[2].text, "Run <it> & go");
+    assert_eq!(back.sheet(0).unwrap().comments.len(), 1, "notes still read");
+}
+
+#[test]
+fn many_shapes_take_several_id_blocks() {
+    let mut wb = Workbook::default();
+    wb.sheets.clear();
+    let mut sh = Sheet::new("Data");
+    for i in 0..1100u32 {
+        sh.controls.push(FormControl { id: i + 1, kind: ControlKind::Spin, anchor: anchor("C3", 20.0, 30.0), ..Default::default() });
+    }
+    wb.sheets.push(sh.into());
+    wb.sheets.push(Sheet::new("Next").into());
+    if let Some(s) = wb.sheet_mut(1) {
+        s.comments.insert(at("B2"), note("x", "y"));
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    assert!(text(&mut pkg, "xl/drawings/vmlDrawing1.vml").contains("data=\"1,2\""));
+    let second = text(&mut pkg, "xl/drawings/vmlDrawing2.vml");
+    assert!(second.contains("data=\"3\"") && second.contains("_x0000_s3073"), "the next sheet's ids don't collide");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheet(0).unwrap().controls.len(), 1100);
+}
+
+const VML_ONLY: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+<v:shape id="_x0000_s1025" type="#_x0000_t201"><x:ClientData ObjectType="Scroll"><x:Anchor>2, 0, 3, 0, 5, 0, 4, 0</x:Anchor><x:FmlaLink>$B$1</x:FmlaLink><x:Val>50000</x:Val><x:Min>-5</x:Min><x:Max>99999</x:Max><x:Inc>0</x:Inc><x:Page>-3</x:Page><x:Horiz/></x:ClientData></v:shape>
+<v:shape id="_x0000_s1026" type="#_x0000_t201"><x:ClientData ObjectType="Spin"><x:Anchor>1, 0, 1, 0, 1, 20, 3, 0</x:Anchor><x:Val>7</x:Val><x:Min>9</x:Min><x:Max>9</x:Max></x:ClientData></v:shape>
+<v:shape id="_x0000_s1027" o:button="t"><v:textbox><div>Go</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>1, 0, 6, 0, 3, 0, 7, 0</x:Anchor><x:FmlaMacro>[0]!Tidy</x:FmlaMacro></x:ClientData></v:shape>
+<v:shape id="_x0000_s1028"><x:ClientData ObjectType="Drop"><x:Anchor>1, 0, 1, 0, 2, 0, 2, 0</x:Anchor></x:ClientData></v:shape>
+<v:shape id="_x0000_s1029"><x:ClientData ObjectType="Scroll"><x:Anchor>junk</x:Anchor></x:ClientData></v:shape>
+</xml>"##;
+
+#[test]
+fn vml_only_controls_are_read_and_clamped() {
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/></Relationships>"#;
+    let bytes = minimal(
+        r#"<sheetData/><legacyDrawing r:id="rId9"/>"#,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/drawings/vmlDrawing1.vml", VML_ONLY)],
+        "",
+        "",
+    );
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.contains("form controls are not supported")), "{:?}", report.warnings);
+    let c = &wb.sheet(0).unwrap().controls;
+    assert_eq!(c.len(), 3, "the drop-down and the shape without an anchor are skipped");
+    assert_eq!((c[0].kind, c[0].min, c[0].max, c[0].step, c[0].value, c[0].horizontal), (ControlKind::Slider, 0, 30_000, 1, 30_000, true));
+    assert!(c[0].page >= c[0].step && c[0].check_numbers().is_ok());
+    assert_eq!((c[1].min, c[1].max), (9, 10), "a range with no width gets one");
+    assert!(c[1].check_numbers().is_ok());
+    assert_eq!(c[2].text, "Go");
+    assert_eq!(c[2].action, Some(ControlAction::Macro { name: "Tidy".into(), input: MacroInput::Selection, output: None }));
+}
+
+#[test]
+fn the_properties_part_wins_over_the_vml() {
+    let mut wb = book();
+    if let Some(s) = wb.sheet_mut(0) {
+        s.comments.clear();
+        s.controls.truncate(1);
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    // Rewrite the VML's numbers: the reader still takes the properties part's.
+    let mut pkg = Package::open(&bytes).unwrap();
+    let mut parts = Vec::new();
+    for name in pkg.names() {
+        let mut data = pkg.read(&name).unwrap().unwrap();
+        if name.ends_with(".vml") {
+            data = String::from_utf8(data).unwrap().replace("<x:Max>500</x:Max>", "<x:Max>9</x:Max>").into_bytes();
+        }
+        parts.push((name, data));
+    }
+    let zipped = super::make_zip(&parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect::<Vec<_>>());
+    let (back, _) = read_xlsx(&zipped).unwrap();
+    assert_eq!(back.sheet(0).unwrap().controls[0].max, 500);
+}

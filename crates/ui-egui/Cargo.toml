@@ -19,6 +19,8 @@ image = { workspace = true }
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+# Tests run Python cells on an in-process worker, or on this test binary as a worker process.
+gridcraft-python = { workspace = true, features = ["python"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The desktop's preferred language for the first-run interface language.

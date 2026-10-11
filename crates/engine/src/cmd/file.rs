@@ -62,7 +62,10 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     {
         s.close_document(0);
     }
-    let i = s.add_document(DocState::new(wb, path, title));
+    let mut doc = DocState::new(wb, path, title);
+    // Someone else may have made the file: its active content waits until the person enables it.
+    doc.trust = crate::Trust::FromFile;
+    let i = s.add_document(doc);
     if !warnings.is_empty() {
         let mut message = warnings.iter().take(5).cloned().collect::<Vec<_>>().join("\n\n");
         if warnings.len() > 5 {

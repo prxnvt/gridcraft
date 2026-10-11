@@ -43,7 +43,110 @@ pub struct Tokens {
     pub menu_bg: Color32,
     pub shadow: Color32,
     pub danger: Color32,
+    /// Text and glyphs drawn on an `accent` fill (primary buttons, switched-on toggles).
+    pub on_accent: Color32,
+    /// The category palette, indexed by [`Cat`]: icon accents and Function Library categories.
+    pub cat: [Color32; 8],
+    /// The page/sheet colour inside icons (documents, cells, clipboards) and its outline.
+    pub paper: Color32,
+    pub paper_line: Color32,
+    /// Reference colours for formulas edited in the window-coloured formula bar.
+    pub ref_colors: [Color32; 8],
+    /// Reference colours on the sheet (outlines and the in-cell editor). The sheet stays white.
+    pub sheet_ref_colors: [Color32; 8],
+    /// Code colours in the window-coloured formula bar and code editors.
+    pub syntax: Syntax,
+    /// Code colours on the sheet (in-cell editor).
+    pub sheet_syntax: Syntax,
+    /// The PY badge fill and its text.
+    pub badge_py: Color32,
+    pub on_badge: Color32,
+    /// The macro recorder's dot.
+    pub recording: Color32,
+    /// A code breakpoint marker.
+    pub breakpoint: Color32,
+    /// Text of a stale (not yet recalculated) cell, drawn on the sheet.
+    pub stale_text: Color32,
+    /// The message box warning disc and its glyph.
+    pub warning: Color32,
+    pub on_warning: Color32,
+    /// Scroll thumbs in the window chrome (sheet tab bar).
+    pub scrollbar: Color32,
+    pub scrollbar_hover: Color32,
+    /// Controls drawn on the sheet (filter buttons, form controls, object handles). They follow
+    /// the sheet, so they are light in both themes.
+    pub sheet_control_bg: Color32,
+    pub sheet_control_border: Color32,
+    pub sheet_control_text: Color32,
+    pub sheet_track: Color32,
+    pub sheet_thumb: Color32,
+    /// A sheet button under the pointer, and pressed.
+    pub sheet_control_hover: Color32,
+    pub sheet_control_pressed: Color32,
+    /// The filled part of a slider's track (from the minimum to the thumb).
+    pub sheet_fill: Color32,
+    /// The ring around the form control that takes the arrow keys.
+    pub sheet_focus: Color32,
+    /// Macro overlays on the sheet (Check and debugging): the inputs, the cells the macro writes,
+    /// the cells it would write over, and the current step's target. Sheet colours.
+    pub sheet_macro_input: Color32,
+    pub sheet_macro_footprint: Color32,
+    pub sheet_macro_conflict: Color32,
+    pub sheet_macro_target: Color32,
 }
+
+/// The eight category colours, in the order of [`Tokens::cat`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Cat {
+    Blue,
+    Green,
+    Orange,
+    Red,
+    Purple,
+    Teal,
+    Amber,
+    Slate,
+}
+
+impl Cat {
+    pub const ALL: [Cat; 8] = [Cat::Blue, Cat::Green, Cat::Orange, Cat::Red, Cat::Purple, Cat::Teal, Cat::Amber, Cat::Slate];
+}
+
+/// Code colours for one background; plain text uses the surface's own text colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Syntax {
+    pub keyword: Color32,
+    pub string: Color32,
+    pub number: Color32,
+    pub comment: Color32,
+    pub builtin: Color32,
+}
+
+const fn rgb(hex: u32) -> Color32 {
+    Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
+}
+
+/// Colours for text on the white sheet, the same in both themes (the sheet does not follow the theme).
+const SHEET_REF_COLORS: [Color32; 8] =
+    [rgb(0x2E6FD8), rgb(0xD03C3C), rgb(0x7A4FC9), rgb(0x23803D), rgb(0xB5531A), rgb(0x16798A), rgb(0xB83B8E), rgb(0x77681A)];
+const SHEET_MACRO_INPUT: Color32 = rgb(0x2E6FD8);
+const SHEET_MACRO_FOOTPRINT: Color32 = rgb(0x23803D);
+const SHEET_MACRO_CONFLICT: Color32 = rgb(0xC42B1C);
+const SHEET_MACRO_TARGET: Color32 = rgb(0x6B3FC0);
+const LIGHT_SYNTAX: Syntax =
+    Syntax { keyword: rgb(0x0B57B3), string: rgb(0xA3361B), number: rgb(0x157A5A), comment: rgb(0x6B7280), builtin: rgb(0x7B3FB5) };
+const DARK_SYNTAX: Syntax =
+    Syntax { keyword: rgb(0x6FAEFF), string: rgb(0xF09A7A), number: rgb(0x7FD1A8), comment: rgb(0x9AA3AE), builtin: rgb(0xC69BF2) };
+const SHEET_CONTROL_BG: Color32 = rgb(0xF3F3F3);
+const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
+const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
+const SHEET_TRACK: Color32 = rgb(0xD6D6D6);
+const SHEET_THUMB: Color32 = rgb(0x6B6B6B);
+const SHEET_CONTROL_HOVER: Color32 = rgb(0xE4E4E4);
+const SHEET_CONTROL_PRESSED: Color32 = rgb(0xCFCFCF);
+const SHEET_FILL: Color32 = rgb(0x107C41);
+const SHEET_FOCUS: Color32 = rgb(0x107C41);
+const STALE_TEXT: Color32 = rgb(0x767676);
 
 impl Tokens {
     pub fn light() -> Tokens {
@@ -67,7 +170,7 @@ impl Tokens {
             header_text: Color32::from_rgb(0x42, 0x42, 0x42),
             header_line: Color32::from_rgb(0xD6, 0xD6, 0xD6),
             header_sel_bg: Color32::from_rgb(0xE1, 0xE1, 0xE1),
-            header_sel_text: Color32::from_rgb(0x10, 0x7C, 0x41),
+            header_sel_text: Color32::from_rgb(0x0B, 0x5E, 0x31),
             header_all_bg: Color32::from_rgb(0xC8, 0xE6, 0xD3),
             sel_fill: Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x1C),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
@@ -80,6 +183,36 @@ impl Tokens {
             menu_bg: Color32::WHITE,
             shadow: Color32::from_black_alpha(40),
             danger: Color32::from_rgb(0xC4, 0x2B, 0x1C),
+            on_accent: Color32::WHITE,
+            cat: [rgb(0x2F6FCF), rgb(0x1E8A4C), rgb(0xC8601A), rgb(0xC8372D), rgb(0x8350C8), rgb(0x13808A), rgb(0x9C6C00), rgb(0x5A6B7D)],
+            paper: Color32::WHITE,
+            paper_line: rgb(0x5F5F5F),
+            ref_colors: SHEET_REF_COLORS,
+            sheet_ref_colors: SHEET_REF_COLORS,
+            syntax: LIGHT_SYNTAX,
+            sheet_syntax: LIGHT_SYNTAX,
+            badge_py: rgb(0x1E7A45),
+            on_badge: Color32::WHITE,
+            recording: rgb(0xC42B1C),
+            breakpoint: rgb(0xD13438),
+            stale_text: STALE_TEXT,
+            warning: rgb(0xF2C32E),
+            on_warning: rgb(0x1F1F1F),
+            scrollbar: Color32::from_gray(190),
+            scrollbar_hover: Color32::from_gray(150),
+            sheet_control_bg: SHEET_CONTROL_BG,
+            sheet_control_border: SHEET_CONTROL_BORDER,
+            sheet_control_text: SHEET_CONTROL_TEXT,
+            sheet_track: SHEET_TRACK,
+            sheet_thumb: SHEET_THUMB,
+            sheet_control_hover: SHEET_CONTROL_HOVER,
+            sheet_control_pressed: SHEET_CONTROL_PRESSED,
+            sheet_fill: SHEET_FILL,
+            sheet_focus: SHEET_FOCUS,
+            sheet_macro_input: SHEET_MACRO_INPUT,
+            sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
+            sheet_macro_conflict: SHEET_MACRO_CONFLICT,
+            sheet_macro_target: SHEET_MACRO_TARGET,
         }
     }
 
@@ -104,7 +237,7 @@ impl Tokens {
             header_text: Color32::from_rgb(0xCC, 0xCC, 0xCC),
             header_line: Color32::from_rgb(0x45, 0x45, 0x45),
             header_sel_bg: Color32::from_rgb(0x45, 0x45, 0x45),
-            header_sel_text: Color32::from_rgb(0x5C, 0xC5, 0x87),
+            header_sel_text: Color32::from_rgb(0x6F, 0xD3, 0x9A),
             header_all_bg: Color32::from_rgb(0x2E, 0x55, 0x3E),
             sel_fill: Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x24),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
@@ -116,13 +249,69 @@ impl Tokens {
             cell_text: Color32::BLACK,
             menu_bg: Color32::from_rgb(0x30, 0x30, 0x30),
             shadow: Color32::from_black_alpha(90),
-            danger: Color32::from_rgb(0xF1, 0x70, 0x5F),
+            danger: Color32::from_rgb(0xFF, 0x95, 0x85),
+            on_accent: rgb(0x0F2A1A),
+            cat: [rgb(0x6EA8F7), rgb(0x5CC587), rgb(0xF0965A), rgb(0xF07B6E), rgb(0xB394EE), rgb(0x4CC7CF), rgb(0xF2C14E), rgb(0xA9B6C4)],
+            paper: rgb(0x454545),
+            paper_line: rgb(0xC8C8C8),
+            ref_colors: [rgb(0x6FA3F5), rgb(0xF27C7C), rgb(0xB394EE), rgb(0x6CCB85), rgb(0xF0A061), rgb(0x5CC9DA), rgb(0xE77FC4), rgb(0xD4C25A)],
+            sheet_ref_colors: SHEET_REF_COLORS,
+            syntax: DARK_SYNTAX,
+            sheet_syntax: LIGHT_SYNTAX,
+            badge_py: rgb(0x1F6B40),
+            on_badge: Color32::WHITE,
+            recording: rgb(0xF1705F),
+            breakpoint: rgb(0xF1707A),
+            stale_text: STALE_TEXT,
+            warning: rgb(0xF2C32E),
+            on_warning: rgb(0x1F1F1F),
+            scrollbar: Color32::from_gray(0x5A),
+            scrollbar_hover: Color32::from_gray(0x7A),
+            sheet_control_bg: SHEET_CONTROL_BG,
+            sheet_control_border: SHEET_CONTROL_BORDER,
+            sheet_control_text: SHEET_CONTROL_TEXT,
+            sheet_track: SHEET_TRACK,
+            sheet_thumb: SHEET_THUMB,
+            sheet_control_hover: SHEET_CONTROL_HOVER,
+            sheet_control_pressed: SHEET_CONTROL_PRESSED,
+            sheet_fill: SHEET_FILL,
+            sheet_focus: SHEET_FOCUS,
+            sheet_macro_input: SHEET_MACRO_INPUT,
+            sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
+            sheet_macro_conflict: SHEET_MACRO_CONFLICT,
+            sheet_macro_target: SHEET_MACRO_TARGET,
         }
     }
 
     pub fn get(ctx: &egui::Context) -> Tokens {
         if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() }
     }
+
+    /// One colour of the category palette.
+    pub fn cat(&self, c: Cat) -> Color32 {
+        self.cat.get(c as usize).copied().unwrap_or(self.text)
+    }
+
+    /// The reference colour for a formula's `index`-th reference, on the bar or on the sheet.
+    pub fn ref_color(&self, index: usize, on_sheet: bool) -> Color32 {
+        let set = if on_sheet { &self.sheet_ref_colors } else { &self.ref_colors };
+        set.get(index % set.len()).copied().unwrap_or(self.text)
+    }
+}
+
+/// WCAG 2 relative luminance of an opaque colour.
+pub fn luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// WCAG 2 contrast ratio between two opaque colours (1 to 21).
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
 pub const UI: &str = "ui";
@@ -133,6 +322,11 @@ pub const CELL_ITALIC: &str = "cell-italic";
 pub const CELL_BOLD_ITALIC: &str = "cell-bold-italic";
 pub const SERIF: &str = "serif";
 pub const MONO: &str = "mono";
+/// Equation faces: a maths font (upright letters, operators, Greek, double-struck and script
+/// letters), its italic for variables, and a bold. System fonts only; nothing is bundled.
+pub const MATH: &str = "math";
+pub const MATH_ITALIC: &str = "math-italic";
+pub const MATH_BOLD: &str = "math-bold";
 
 pub fn ui_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(UI.into()))
@@ -274,6 +468,40 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
                 add(format!("{d}/dejavu/DejaVuSerif.ttf"), 0);
             }
         }
+        "math" => {
+            add(format!("{mac_sup}/STIXTwoMath.otf"), 0);
+            add(format!("{win}\\cambria.ttc"), 1);
+            for d in lin {
+                add(format!("{d}/opentype/stix/STIXTwoMath-Regular.otf"), 0);
+                add(format!("{d}/stix/STIXTwoMath-Regular.otf"), 0);
+                add(format!("{d}/opentype/lmodern/latinmodern-math.otf"), 0);
+                add(format!("{d}/dejavu/DejaVuSerif.ttf"), 0);
+                add(format!("{d}/liberation/LiberationSerif-Regular.ttf"), 0);
+            }
+            add(format!("{mac_sup}/Times New Roman.ttf"), 0);
+            add(format!("{win}\\times.ttf"), 0);
+        }
+        "math-italic" => {
+            add(format!("{mac_sup}/STIXTwoText-Italic.ttf"), 0);
+            add(format!("{mac_sup}/Times New Roman Italic.ttf"), 0);
+            add(format!("{win}\\cambriai.ttf"), 0);
+            add(format!("{win}\\timesi.ttf"), 0);
+            for d in lin {
+                add(format!("{d}/opentype/stix/STIXTwoText-Italic.otf"), 0);
+                add(format!("{d}/liberation/LiberationSerif-Italic.ttf"), 0);
+                add(format!("{d}/dejavu/DejaVuSerif-Italic.ttf"), 0);
+            }
+        }
+        "math-bold" => {
+            add(format!("{mac_sup}/Times New Roman Bold.ttf"), 0);
+            add(format!("{win}\\cambriab.ttf"), 0);
+            add(format!("{win}\\timesbd.ttf"), 0);
+            for d in lin {
+                add(format!("{d}/opentype/stix/STIXTwoText-Bold.otf"), 0);
+                add(format!("{d}/liberation/LiberationSerif-Bold.ttf"), 0);
+                add(format!("{d}/dejavu/DejaVuSerif-Bold.ttf"), 0);
+            }
+        }
         "mono" => {
             add(format!("{mac_sys}/SFNSMono.ttf"), 0);
             add(format!("{mac_sys}/Menlo.ttc"), 0);
@@ -318,7 +546,7 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
     // The non-Latin fallback faces have to sit at the end of each chain: a Latin font owns Latin,
     // and epaint picks the first face that has the glyph, so they only catch their own scripts.
     let fallback = load_fallback(&mut fonts, HanOrder::of(language));
-    for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+    for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
         let mut chain: Vec<String> = Vec::new();
@@ -330,6 +558,14 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
             chain.push(format!("sys-{UI}"));
         } else if role.starts_with("cell-") {
             chain.push(format!("sys-{CELL}"));
+        }
+        // Equation faces fall back to the maths font (for the symbols a text face lacks), then
+        // to the serif face.
+        if role == MATH_ITALIC || role == MATH_BOLD {
+            chain.push(format!("sys-{MATH}"));
+        }
+        if role.starts_with("math") {
+            chain.push(format!("sys-{SERIF}"));
         }
         chain.extend(if role == MONO { base_mono.clone() } else { base_prop.clone() });
         chain.extend(fallback.iter().cloned());
@@ -555,6 +791,141 @@ pub fn color32(rgb: [u8; 3]) -> Color32 {
     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    /// Body text needs 4.5:1 (WCAG AA); glyphs, icons and other graphics need 3:1.
+    const TEXT: f32 = 4.5;
+    const GLYPH: f32 = 3.0;
+
+    /// Every foreground/background pair the chrome draws: ribbon, popups, dialogs, panes, formula
+    /// bar, status bar, plus the colours that sit on the white sheet.
+    fn pairs(t: &Tokens) -> Vec<(String, Color32, Color32, f32)> {
+        let mut v: Vec<(String, Color32, Color32, f32)> = Vec::new();
+        let mut add = |name: &str, fg: Color32, bg: Color32, min: f32| v.push((name.to_string(), fg, bg, min));
+        let surfaces = [
+            ("window", t.window),
+            ("ribbon", t.ribbon),
+            ("menu", t.menu_bg),
+            ("input", t.input_bg),
+            ("status bar", t.status_bar),
+            ("tab bar", t.tab_bar),
+            ("active tab", t.tab_active),
+            ("hover", t.hover),
+        ];
+        for (name, bg) in surfaces {
+            add(&format!("text on {name}"), t.text, bg, TEXT);
+            add(&format!("dim text on {name}"), t.text_dim, bg, TEXT);
+            add(&format!("accent glyph on {name}"), t.accent, bg, GLYPH);
+            add(&format!("danger on {name}"), t.danger, bg, TEXT);
+        }
+        add("text on pressed", t.text, t.pressed, TEXT);
+        add("accent text (File, contextual tabs) on window", t.accent, t.window, TEXT);
+        for (name, bg) in [("ribbon", t.ribbon), ("menu", t.menu_bg), ("hover", t.hover), ("pressed", t.pressed)] {
+            for c in Cat::ALL {
+                add(&format!("{c:?} icon accent on {name}"), t.cat(c), bg, GLYPH);
+            }
+        }
+        add("icon outline on paper", t.paper_line, t.paper, GLYPH);
+        add("icon stroke on paper", t.text, t.paper, GLYPH);
+        add("on_accent on accent", t.on_accent, t.accent, TEXT);
+        add("PY badge text", t.on_badge, t.badge_py, TEXT);
+        add("warning glyph", t.on_warning, t.warning, TEXT);
+        add("recording dot on ribbon", t.recording, t.ribbon, GLYPH);
+        add("recording dot on status bar", t.recording, t.status_bar, GLYPH);
+        add("breakpoint on code editor", t.breakpoint, t.input_bg, GLYPH);
+        add("header text", t.header_text, t.header_bg, TEXT);
+        add("selected header text", t.header_sel_text, t.header_sel_bg, TEXT);
+        for (i, c) in t.ref_colors.iter().enumerate() {
+            add(&format!("formula bar reference {i}"), *c, t.input_bg, TEXT);
+        }
+        for (name, s, bg) in [("formula bar", t.syntax, t.input_bg), ("sheet", t.sheet_syntax, t.grid_bg)] {
+            add(&format!("{name} keyword"), s.keyword, bg, TEXT);
+            add(&format!("{name} string"), s.string, bg, TEXT);
+            add(&format!("{name} number"), s.number, bg, TEXT);
+            add(&format!("{name} comment"), s.comment, bg, TEXT);
+            add(&format!("{name} builtin"), s.builtin, bg, TEXT);
+        }
+        // On the sheet.
+        add("cell text", t.cell_text, t.grid_bg, TEXT);
+        add("stale cell text", t.stale_text, t.grid_bg, TEXT);
+        for (i, c) in t.sheet_ref_colors.iter().enumerate() {
+            add(&format!("sheet reference {i}"), *c, t.grid_bg, TEXT);
+        }
+        add("selection border on sheet", t.sel_border, t.grid_bg, GLYPH);
+        add("sheet control text", t.sheet_control_text, t.sheet_control_bg, TEXT);
+        add("sheet control border on sheet", t.sheet_control_border, t.grid_bg, GLYPH);
+        add("sheet thumb on track", t.sheet_thumb, t.sheet_track, GLYPH);
+        add("sheet control text on hover", t.sheet_control_text, t.sheet_control_hover, TEXT);
+        add("sheet control text when pressed", t.sheet_control_text, t.sheet_control_pressed, TEXT);
+        add("slider fill on sheet", t.sheet_fill, t.grid_bg, GLYPH);
+        add("slider fill on track", t.sheet_fill, t.sheet_track, GLYPH);
+        add("sheet control arrows when pressed", t.sheet_control_text, t.sheet_control_pressed, GLYPH);
+        add("control focus ring on sheet", t.sheet_focus, t.grid_bg, GLYPH);
+        for (name, c) in [
+            ("macro input", t.sheet_macro_input),
+            ("macro footprint", t.sheet_macro_footprint),
+            ("macro conflict", t.sheet_macro_conflict),
+            ("macro target", t.sheet_macro_target),
+        ] {
+            add(&format!("{name} outline on sheet"), c, t.grid_bg, GLYPH);
+        }
+        // The macro step editor: breakpoint dots in the gutter, error markers, the current step.
+        add("breakpoint on window", t.breakpoint, t.window, GLYPH);
+        add("breakpoint on current step", t.breakpoint, t.accent_soft, GLYPH);
+        add("text on current step", t.text, t.accent_soft, TEXT);
+        add("current step arrow", t.accent, t.accent_soft, GLYPH);
+        add("error marker on window", t.danger, t.window, GLYPH);
+        v
+    }
+
+    #[test]
+    fn token_pairs_meet_wcag_contrast_in_both_themes() {
+        let mut failures = Vec::new();
+        for t in [Tokens::light(), Tokens::dark()] {
+            for (name, fg, bg, min) in pairs(&t) {
+                let ratio = contrast(fg, bg);
+                if ratio < min {
+                    failures.push(format!("{} theme: {name} is {ratio:.2}:1, needs {min}:1", if t.dark { "dark" } else { "light" }));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "contrast failures:\n{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn contrast_matches_wcag_reference_values() {
+        assert!((contrast(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+        assert!((contrast(Color32::WHITE, Color32::WHITE) - 1.0).abs() < 0.001);
+        // #767676 on white is the classic 4.54:1 grey.
+        assert!((contrast(rgb(0x767676), Color32::WHITE) - 4.54).abs() < 0.01);
+    }
+
+    #[test]
+    fn sheet_tokens_follow_the_sheet_not_the_theme() {
+        let (l, d) = (Tokens::light(), Tokens::dark());
+        assert_eq!(l.grid_bg, d.grid_bg);
+        assert_eq!(l.sheet_ref_colors, d.sheet_ref_colors);
+        assert_eq!(l.sheet_syntax, d.sheet_syntax);
+        assert_eq!(
+            (l.sheet_control_bg, l.sheet_control_border, l.sheet_control_text, l.sheet_track, l.sheet_thumb),
+            (d.sheet_control_bg, d.sheet_control_border, d.sheet_control_text, d.sheet_track, d.sheet_thumb)
+        );
+        assert_eq!(
+            (l.sheet_control_hover, l.sheet_control_pressed, l.sheet_fill, l.sheet_focus),
+            (d.sheet_control_hover, d.sheet_control_pressed, d.sheet_fill, d.sheet_focus)
+        );
+        assert_eq!(
+            (l.sheet_macro_input, l.sheet_macro_footprint, l.sheet_macro_conflict, l.sheet_macro_target),
+            (d.sheet_macro_input, d.sheet_macro_footprint, d.sheet_macro_conflict, d.sheet_macro_target)
+        );
+        for c in Cat::ALL {
+            assert_ne!(l.cat(c), d.cat(c), "{c:?} has a dark-mode value of its own");
+        }
+    }
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
@@ -572,7 +943,7 @@ mod tests {
             if fb_keys.is_empty() {
                 return; // no fallback face on this machine (minimal Linux)
             }
-            for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+            for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
                 let chain = fonts.families.get(&FontFamily::Name(role.into())).map(Vec::as_slice).unwrap_or_default();
                 assert!(chain.len() >= fb_keys.len(), "{role} chain too short for its fallback");
                 let tail = &chain[chain.len() - fb_keys.len()..];

@@ -1,6 +1,6 @@
 //! Writing worksheet parts and the parts they own (tables, comments, drawings, charts).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
@@ -96,7 +96,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let dynamic: BTreeMap<CellRef, RangeRef> = sheet
         .spill_ranges
         .iter()
-        .filter(|(a, r)| !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.formula.as_ref().is_some_and(|f| f.array.is_none())))
+        .filter(|(a, r)| {
+            !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.py.is_some() || c.formula.as_ref().is_some_and(|f| f.array.is_none()))
+        })
         .map(|(a, r)| (*a, *r))
         .collect();
     let mut extra: BTreeMap<CellRef, Value> = BTreeMap::new();
@@ -255,6 +257,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     keys.extend(sheet.cell_pictures.keys().copied());
     keys.extend(extra.keys().copied());
     keys.extend(overrides.keys().copied());
+    // Each data table's `<f t="dataTable">` sits on the first result cell.
+    let table_at: HashMap<CellRef, &gridcraft_model::DataTable> = sheet.data_tables.iter().filter_map(|t| t.body().map(|b| (b.start, t))).collect();
+    keys.extend(table_at.keys().copied());
     let mut rows: BTreeMap<u32, Vec<CellRef>> = BTreeMap::new();
     for k in keys {
         rows.entry(k.row).or_default().push(k);
@@ -293,11 +298,16 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let cell = sheet.cells.get(*c);
             let ov = overrides.get(c);
             let ex = extra.get(c);
-            let array = dynamic.get(c).copied().or_else(|| {
-                let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
-            });
-            write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
+            match table_at.get(c) {
+                Some(t) => write_table_cell(&mut s, *c, cell, t, &sid, out),
+                None => {
+                    let array = dynamic.get(c).copied().or_else(|| {
+                        let f = cell?.formula.as_ref()?;
+                        (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
+                    });
+                    write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
+                }
+            }
         }
         s.push_str("</row>");
     }
@@ -500,17 +510,38 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         let rid = rels.add("drawing", &format!("../drawings/drawing{dn}.xml"));
         let _ = write!(s, "<drawing r:id=\"{rid}\"/>");
     }
-    // Notes: comments part + VML so Excel shows them.
-    if !sheet.comments.is_empty() {
-        out.comments += 1;
-        let n = out.comments;
-        out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet).into_bytes());
+    // Notes and form controls share one legacy VML drawing (notes need it for Excel to show them,
+    // controls carry their x:ClientData there). Shape ids come from 1024-id blocks listed in the
+    // drawing's idmap, notes first, so a control's `shapeId` matches its VML shape.
+    let mut controls_xml = String::new();
+    if !sheet.comments.is_empty() || !sheet.controls.is_empty() {
+        let shapes = (sheet.comments.len() + sheet.controls.len()) as u64;
+        let blocks = (shapes + 1).div_ceil(1024).max(1) as u32;
+        let first = out.vml_block.saturating_add(1);
+        out.vml_block = out.vml_block.saturating_add(blocks);
+        let base = u64::from(first) * 1024;
+        let notes = sheet.comments.len() as u64;
+        let mut extra = String::new();
+        if !sheet.controls.is_empty() {
+            let w = crate::controls::write(out, &mut rels, sheet, |i| base + 1 + notes + i as u64);
+            controls_xml = w.sheet_xml;
+            extra = format!("{}{}", crate::controls::SHAPETYPE, w.vml);
+        }
+        out.vmls += 1;
+        let v = out.vmls;
+        if !sheet.comments.is_empty() {
+            out.comments += 1;
+            let n = out.comments;
+            out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet).into_bytes());
+            rels.add("comments", &format!("../comments{n}.xml"));
+        }
+        let idmap = (first..first.saturating_add(blocks)).map(|b| b.to_string()).collect::<Vec<_>>().join(",");
         out.default_type("vml", "application/vnd.openxmlformats-officedocument.vmlDrawing");
-        out.part(&format!("xl/drawings/vmlDrawing{n}.vml"), None, vml_xml(sheet, n).into_bytes());
-        rels.add("comments", &format!("../comments{n}.xml"));
-        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{n}.vml"));
+        out.part(&format!("xl/drawings/vmlDrawing{v}.vml"), None, vml_xml(sheet, &idmap, base, &extra).into_bytes());
+        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{v}.vml"));
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
     }
+    s.push_str(&controls_xml);
     // Tables.
     if !tables.is_empty() {
         let mut parts = String::new();
@@ -574,6 +605,9 @@ fn write_cell(
         return;
     }
     let formula = if ov.is_some() { None } else { cell.and_then(|x| x.formula.as_ref()) };
+    // A Python cell is saved as `PY("code"&"code",0|1)` with its cached value; other apps show
+    // the value (and #NAME? if they recalculate).
+    let py_text = if ov.is_some() || formula.is_some() { None } else { cell.and_then(|x| x.py.as_ref()).map(|p| p.to_formula()) };
     let value: Value = match (ov, extra) {
         (Some(t), _) => Value::text(t.as_str()),
         (None, Some(v)) => v.clone(),
@@ -586,16 +620,19 @@ fn write_cell(
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
-        // caches them); Excel itself caches them as #VALUE!.
-        Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
+        // caches them); Excel itself caches them as #VALUE!. The Python errors are the same kind.
+        Value::Error(CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked) => {
+            Value::Error(CellError::Value)
+        }
         v => v,
     };
     // A non-spilling formula may still need array evaluation to avoid implicit intersection.
-    if dynamic.is_some() && formula.is_some_and(|f| f.array.is_none()) {
+    if dynamic.is_some() && (formula.is_some_and(|f| f.array.is_none()) || py_text.is_some()) {
         s.push_str(" cm=\"1\"");
         out.dynamic_arrays = true;
     }
-    if let Some(f) = formula {
+    let text = formula.map(|f| esc(&crate::fmla::to_file(f))).or_else(|| py_text.map(|t| esc(&t)));
+    if let Some(text) = text {
         let t = match &value {
             Value::Text(_) => " t=\"str\"",
             Value::Bool(_) => " t=\"b\"",
@@ -604,8 +641,7 @@ fn write_cell(
         };
         s.push_str(t);
         s.push('>');
-        let text = esc(&crate::fmla::to_file(f));
-        match (f.array, dynamic) {
+        match (formula.and_then(|f| f.array), dynamic) {
             (Some(r), _) => {
                 let _ = write!(s, "<f t=\"array\" ref=\"{}\">{text}</f>", r.a1());
             }
@@ -650,6 +686,61 @@ fn write_cell(
             let _ = write!(s, " t=\"e\"><v>{}</v></c>", e.as_str());
         }
     }
+}
+
+/// The first result cell of a data table: its cached value plus the `dataTable` formula that
+/// describes the whole table.
+fn write_table_cell(
+    s: &mut String,
+    c: CellRef,
+    cell: Option<&Cell>,
+    t: &gridcraft_model::DataTable,
+    sid: &dyn Fn(gridcraft_model::StyleId) -> u32,
+    out: &mut Out,
+) {
+    let style = cell.map(|x| sid(x.style)).unwrap_or(0);
+    let _ = write!(s, "<c r=\"{}\"", c.a1());
+    if style != 0 {
+        let _ = write!(s, " s=\"{style}\"");
+    }
+    let value = cell.map(|x| x.value.scalar()).unwrap_or(Value::Empty);
+    let t_attr = match &value {
+        Value::Text(_) => " t=\"str\"",
+        Value::Bool(_) => " t=\"b\"",
+        Value::Error(_) => " t=\"e\"",
+        _ => "",
+    };
+    s.push_str(t_attr);
+    let body = t.body().unwrap_or(RangeRef::cell(c));
+    let (dt2d, dtr, r1, r2) = match (t.row_input, t.col_input) {
+        (Some(r), Some(col)) => (true, false, Some(r), Some(col)),
+        (Some(r), None) => (false, true, Some(r), None),
+        (None, col) => (false, false, col, None),
+    };
+    let _ = write!(s, "><f t=\"dataTable\" ref=\"{}\" dt2D=\"{}\" dtr=\"{}\"", body.a1(), u8::from(dt2d), u8::from(dtr));
+    if let Some(r) = r1 {
+        let _ = write!(s, " r1=\"{}\"", r.a1());
+    }
+    if let Some(r) = r2 {
+        let _ = write!(s, " r2=\"{}\"", r.a1());
+    }
+    s.push_str("/>");
+    match &value {
+        Value::Number(n) => {
+            let _ = write!(s, "<v>{}</v>", num(*n));
+        }
+        Value::Text(x) => {
+            let _ = write!(s, "<v>{}</v>", esc(&encode_xstring(x)));
+        }
+        Value::Bool(b) => {
+            let _ = write!(s, "<v>{}</v>", *b as u8);
+        }
+        Value::Error(e) => {
+            let _ = write!(s, "<v>{}</v>", e.as_str());
+        }
+        _ => out.needs_calc = true,
+    }
+    s.push_str("</c>");
 }
 
 fn cfvo_xml(v: &CfValueKind) -> String {
@@ -997,12 +1088,12 @@ fn comments_xml(sheet: &Sheet) -> String {
 }
 
 /// Legacy VML shapes Excel uses to display notes.
-fn vml_xml(sheet: &Sheet, n: u32) -> String {
+fn vml_xml(sheet: &Sheet, idmap: &str, base: u64, controls: &str) -> String {
     let mut s = format!(
-        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{n}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
+        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{idmap}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
     );
     for (i, (cell, c)) in sheet.comments.iter().enumerate() {
-        let id = n as u64 * 1024 + 1 + i as u64;
+        let id = base + 1 + i as u64;
         let vis = if c.visible { "visible" } else { "hidden" };
         let _ = write!(
             s,
@@ -1017,6 +1108,7 @@ fn vml_xml(sheet: &Sheet, n: u32) -> String {
             if c.visible { "<x:Visible/>" } else { "" }
         );
     }
+    s.push_str(controls);
     s.push_str("</xml>");
     s
 }

@@ -4,9 +4,36 @@ use egui::{Context, Event, Key, Modifiers, os::OperatingSystem};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    Home,
+    /// Show a ribbon tab (keytips stay on for its buttons).
+    Tab(&'static str),
     Command(&'static str),
     Dialog(&'static str),
+}
+
+/// Fixed sequences: the tabs, and the Home sequences that predate per-button registration. Every
+/// other button registers its own sequence while it is painted ([`KeyTips::register`]).
+const FIXED: &[(&str, Action)] = &[
+    ("H", Action::Tab("Home")),
+    ("N", Action::Tab("Insert")),
+    ("D", Action::Tab("Draw")),
+    ("P", Action::Tab("Page Layout")),
+    ("M", Action::Tab("Formulas")),
+    ("A", Action::Tab("Data")),
+    ("R", Action::Tab("Review")),
+    ("W", Action::Tab("View")),
+    ("Y", Action::Tab("Automate")),
+    ("HAR", Action::Command("home.alignRight")),
+    ("HAL", Action::Command("home.alignLeft")),
+    ("HAC", Action::Command("home.alignCenter")),
+    ("HVS", Action::Dialog("pasteSpecial")),
+    ("ES", Action::Dialog("pasteSpecial")),
+    ("HOI", Action::Command("home.autofitColumnWidth")),
+    ("OCA", Action::Command("home.autofitColumnWidth")),
+];
+
+/// The keytip that shows a ribbon tab.
+pub fn tab_key(tab: &str) -> Option<&'static str> {
+    FIXED.iter().find(|(_, a)| matches!(a, Action::Tab(t) if *t == tab)).map(|(k, _)| *k)
 }
 
 #[derive(Default)]
@@ -15,6 +42,12 @@ pub struct KeyTips {
     alt_armed: bool,
     // Keep consuming a held mnemonic after its action closes keytips.
     held: Vec<Key>,
+    /// Sequences registered by the buttons painted this frame.
+    registered: Vec<String>,
+    /// Sequences registered last frame: the ones a key press can complete now.
+    known: Vec<String>,
+    /// A registered sequence that was just typed; its button takes it when painted.
+    activated: Option<String>,
 }
 
 impl KeyTips {
@@ -28,6 +61,34 @@ impl KeyTips {
         self.held.clear();
     }
 
+    /// Registers a button's sequence for this frame. Call it every frame the button is painted.
+    pub fn register(&mut self, sequence: &str) {
+        if !self.registered.iter().any(|s| s == sequence) {
+            self.registered.push(sequence.to_string());
+        }
+    }
+
+    /// The sequences buttons registered last frame: the ones keys can reach now.
+    pub fn reachable(&self) -> &[String] {
+        &self.known
+    }
+
+    /// Whether `sequence` was just typed; true once, for the button that registered it.
+    pub fn take_activation(&mut self, sequence: &str) -> bool {
+        if self.activated.as_deref() == Some(sequence) {
+            self.activated = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether `sequence` is a known sequence's proper prefix (more letters are needed).
+    fn is_prefix(&self, sequence: &str) -> bool {
+        let longer = |s: &str| s.len() > sequence.len() && s.starts_with(sequence);
+        FIXED.iter().any(|(s, _)| longer(s)) || self.known.iter().any(|s| longer(s))
+    }
+
     fn toggle(&mut self) {
         self.prefix = if self.prefix.is_some() { None } else { Some(String::new()) };
         self.alt_armed = false;
@@ -35,6 +96,10 @@ impl KeyTips {
 
     /// Remove only handled events before any text editors or the grid see them.
     pub fn process(&mut self, ctx: &Context, enabled: bool) -> Vec<Action> {
+        // Buttons register while painting, after this runs: what they registered last frame is
+        // what the keys can reach now. An activation nobody took (its tab closed) expires.
+        self.known = std::mem::take(&mut self.registered);
+        self.activated = None;
         if !enabled || !ctx.input(|i| i.focused) {
             self.clear();
             return Vec::new();
@@ -92,18 +157,18 @@ impl KeyTips {
                             }
                         } else if key.name().len() == 1 {
                             let next = format!("{}{key_name}", self.prefix.as_deref().unwrap_or_default(), key_name = key.name());
-                            match next.as_str() {
-                                "H" => {
+                            match FIXED.iter().find(|(s, _)| *s == next).map(|(_, a)| *a) {
+                                Some(Action::Tab(tab)) => {
                                     self.prefix = Some(next);
-                                    actions.push(Action::Home);
+                                    actions.push(Action::Tab(tab));
                                 }
-                                "HA" | "HV" | "HO" | "E" | "O" | "OC" => self.prefix = Some(next),
-                                "HAR" => self.finish(Action::Command("home.alignRight"), &mut actions),
-                                "HAL" => self.finish(Action::Command("home.alignLeft"), &mut actions),
-                                "HAC" => self.finish(Action::Command("home.alignCenter"), &mut actions),
-                                "HVS" | "ES" => self.finish(Action::Dialog("pasteSpecial"), &mut actions),
-                                "HOI" | "OCA" => self.finish(Action::Command("home.autofitColumnWidth"), &mut actions),
-                                _ => {}
+                                Some(action) => self.finish(action, &mut actions),
+                                None if self.is_prefix(&next) => self.prefix = Some(next),
+                                None if self.known.contains(&next) => {
+                                    self.prefix = None;
+                                    self.activated = Some(next);
+                                }
+                                None => {}
                             }
                         }
                     }

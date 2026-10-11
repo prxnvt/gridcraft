@@ -1,20 +1,10 @@
 //! In-cell / formula-bar editing state: point mode, reference colouring, function
 //! autocomplete and argument hints.
 
-use egui::Color32;
 use gridcraft_engine::core::{CellRef, RangeRef};
 
-/// Colours for references in a formula being edited (our own palette).
-pub const REF_COLORS: [Color32; 8] = [
-    Color32::from_rgb(0x2E, 0x6F, 0xD8),
-    Color32::from_rgb(0xD0, 0x3C, 0x3C),
-    Color32::from_rgb(0x7A, 0x4F, 0xC9),
-    Color32::from_rgb(0x2B, 0x9A, 0x4A),
-    Color32::from_rgb(0xC2, 0x5E, 0x1E),
-    Color32::from_rgb(0x1D, 0x92, 0xA6),
-    Color32::from_rgb(0xB8, 0x3B, 0x8E),
-    Color32::from_rgb(0x8A, 0x7A, 0x1F),
-];
+/// How many distinct reference colours a formula cycles through (`Tokens::ref_colors`).
+pub const REF_COLOR_COUNT: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct EditState {
@@ -41,6 +31,15 @@ pub struct EditState {
     pub completion: Option<String>,
     /// Move the caret to the end on the next frame.
     pub caret_to_end: bool,
+    /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
+    /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
+    pub python: bool,
+    /// Python mode's point mode, on when Python mode starts (F2 toggles it): clicking or dragging
+    /// on the grid inserts `xl("A1:B5")`. A click on the grid never commits code.
+    pub py_point: bool,
+    /// The edit left Python mode on a Python cell: committing it empty turns the cell back into a
+    /// normal cell (`python.clear`, which undo reverses).
+    pub py_left: bool,
 }
 
 impl EditState {
@@ -62,7 +61,57 @@ impl EditState {
             sync_caret: true,
             caret_to_end: true,
             completion: None,
+            python: false,
+            py_point: false,
+            py_left: false,
         }
+    }
+
+    /// An edit of a Python cell's code, in the formula bar.
+    pub fn python(sheet: usize, cell: CellRef, code: String) -> EditState {
+        EditState { python: true, py_point: true, ..EditState::new(sheet, cell, code, false, true) }
+    }
+
+    /// Whether the text is a bare `=PY` (or `=PY(`), which enters Python mode on Tab or Enter.
+    pub fn is_py_trigger(&self) -> bool {
+        !self.python && {
+            let t = self.text.trim();
+            t.eq_ignore_ascii_case("=PY") || t.eq_ignore_ascii_case("=PY(")
+        }
+    }
+
+    /// Switches to Python mode. A bare `=PY` trigger becomes empty code; other text is kept as the
+    /// code (so a shortcut pressed mid-edit loses nothing).
+    pub fn enter_python(&mut self) {
+        if self.is_py_trigger() {
+            self.text.clear();
+        }
+        self.python = true;
+        self.py_point = true;
+        self.py_left = false;
+        self.from_formula_bar = true;
+        self.enter_mode = false;
+        self.point = None;
+        self.point_cell = None;
+        self.autocomplete.clear();
+        self.completion = None;
+        self.caret = self.text.chars().count();
+        self.request_focus = true;
+        self.sync_caret = true;
+    }
+
+    /// Leaves Python mode: Python goes off for the cell and the input is cleared. `was_python`
+    /// says whether the cell is a Python cell now (committing then converts it back).
+    pub fn leave_python(&mut self, was_python: bool) {
+        self.python = false;
+        self.py_point = false;
+        self.py_left = was_python;
+        self.text.clear();
+        self.caret = 0;
+        self.point = None;
+        self.point_cell = None;
+        self.request_focus = true;
+        self.sync_caret = true;
     }
 
     pub fn is_formula(&self) -> bool {
@@ -78,6 +127,9 @@ impl EditState {
     /// Point mode: the caret follows an operator, `(`, `,` or `=` in a formula, so clicking a
     /// cell or pressing an arrow inserts a reference.
     pub fn can_point(&self) -> bool {
+        if self.python {
+            return self.py_point;
+        }
         if !self.is_formula() {
             return false;
         }
@@ -91,8 +143,16 @@ impl EditState {
         matches!(last, Some('=' | '(' | ',' | '+' | '-' | '*' | '/' | '^' | '&' | '<' | '>' | ':' | ';' | '{'))
     }
 
-    /// Inserts (or replaces the last pointed) reference text at the caret.
+    /// Inserts (or replaces the last pointed) reference text at the caret. In Python mode the
+    /// reference goes in as an `xl("…")` call.
     pub fn insert_ref(&mut self, r: &str) {
+        let wrapped;
+        let r = if self.python {
+            wrapped = format!("xl(\"{}\")", r.replace('"', "\\\""));
+            wrapped.as_str()
+        } else {
+            r
+        };
         let caret_b = self.byte_caret();
         let (start, end) = match self.point {
             Some((s, e)) if e == caret_b => (s, e),
@@ -110,7 +170,7 @@ impl EditState {
     /// Updates function autocomplete for the word before the caret.
     pub fn update_autocomplete(&mut self, names: &[String]) {
         self.autocomplete.clear();
-        if !self.is_formula() {
+        if self.python || !self.is_formula() {
             return;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
@@ -146,7 +206,7 @@ impl EditState {
 
     /// The function call the caret is inside and the argument index (for the hint tooltip).
     pub fn current_function(&self) -> Option<(String, usize)> {
-        if !self.is_formula() {
+        if self.python || !self.is_formula() {
             return None;
         }
         let before = self.text.get(..self.byte_caret())?;
@@ -230,10 +290,37 @@ pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, 
                     seen.len() - 1
                 }
             };
-            out.push((start + offset, end + offset, range, sheet, idx % REF_COLORS.len()));
+            out.push((start + offset, end + offset, range, sheet, idx % REF_COLOR_COUNT));
             continue;
         }
         i += 1;
+    }
+    out
+}
+
+/// The references in Python code's `xl("…")` calls, like [`formula_refs`]: the literal's byte span
+/// (between the quotes), the range, its sheet and a colour index (same reference, same colour).
+/// Names and tables have no range here and are left out.
+pub fn python_refs(code: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
+    let mut out = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for call in gridcraft_engine::model::python::xl_calls(code) {
+        let (Some(reference), Some(span)) = (call.reference, call.span) else { continue };
+        let refs = formula_refs(&format!("={reference}"));
+        // Only a literal that is one reference (a cell or a range, maybe on another sheet).
+        let [(a, b, range, sheet, _)] = refs.as_slice() else { continue };
+        if *a != 1 || *b != reference.len() + 1 || !code.is_char_boundary(span.start) || !code.is_char_boundary(span.end) {
+            continue;
+        }
+        let key = reference.replace('$', "").to_ascii_uppercase();
+        let idx = match seen.iter().position(|k| *k == key) {
+            Some(k) => k,
+            None => {
+                seen.push(key);
+                seen.len() - 1
+            }
+        };
+        out.push((span.start, span.end, *range, sheet.clone(), idx % REF_COLOR_COUNT));
     }
     out
 }
@@ -311,6 +398,45 @@ mod tests {
         assert_eq!(e.text, "=SUM(");
         let e = EditState::new(0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
         assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
+    }
+
+    #[test]
+    fn python_mode_points_with_xl_calls() {
+        let mut e = EditState::new(0, CellRef::new(0, 0), "=py".into(), true, false);
+        assert!(e.is_py_trigger());
+        e.enter_python();
+        assert!(e.python && e.from_formula_bar && e.text.is_empty());
+        assert!(e.can_point(), "Python mode points from the start");
+        e.py_point = false;
+        assert!(!e.can_point(), "until F2 turns it off");
+        e.text = "df = ".into();
+        e.caret = 5;
+        e.py_point = true;
+        assert!(e.can_point());
+        e.insert_ref("A1");
+        assert_eq!(e.text, "df = xl(\"A1\")");
+        e.insert_ref("A1:B5");
+        assert_eq!(e.text, "df = xl(\"A1:B5\")", "a drag replaces the pointed call");
+        e.leave_python(true);
+        assert!(!e.python && e.py_left && e.text.is_empty());
+        let mut e = EditState::new(0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        e.update_autocomplete(&["PY".to_string()]);
+        assert!(!e.is_py_trigger());
+    }
+
+    #[test]
+    fn python_reference_spans() {
+        let code = "a = xl(\"A1:B5\")\n# xl(\"C1\")\nb = xl('Sheet2!C3') + xl(\"a1:b5\") + xl(\"Sales\") + xl(name)";
+        let r = python_refs(code);
+        assert_eq!(r.len(), 3, "{r:?}");
+        assert_eq!(code.get(r[0].0..r[0].1), Some("A1:B5"));
+        assert_eq!(r[1].3.as_deref(), Some("Sheet2"));
+        assert_eq!(r[0].4, r[2].4, "the same range takes the same colour");
+        for hostile in ["xl(\"", "xl('é", "xl(\"A1\"", "\u{1F600}xl(\"A1\")", "xl(\"A1:\")", "xl(\"=A1\")"] {
+            for (a, b, ..) in python_refs(hostile) {
+                assert!(hostile.get(a..b).is_some());
+            }
+        }
     }
 
     #[test]

@@ -365,11 +365,13 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Set inside a what-if trial: data tables aren't refreshed there (no recursion).
+    in_trial: bool,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0, in_trial: false }
     }
 }
 
@@ -644,7 +646,7 @@ impl Calc {
         self.graph.settle();
     }
 
-    /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
+    /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading), data tables included.
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
@@ -657,8 +659,17 @@ impl Calc {
                 sh.spill_ranges.clear();
             }
         }
+        // Python cells' arrays are laid out first, from their kept results.
+        for si in 0..wb.sheets.len() {
+            let anchors: Vec<CellRef> =
+                wb.sheet(si).map(|sh| sh.cells.iter().filter(|(_, c)| c.py.is_some()).map(|(c, _)| c).collect()).unwrap_or_default();
+            for a in anchors {
+                lay_python_spill(wb, si, a);
+            }
+        }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
         self.run(wb, all, true);
+        self.refresh_tables(wb, None);
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -674,7 +685,10 @@ impl Calc {
                 None => {
                     self.graph.remove(k);
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.
-                    if let Some(sh) = wb.sheet_mut(k.0)
+                    // A Python cell's spill is its own result's, laid out by `lay_python_spill`.
+                    let python = wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.py.is_some());
+                    if !python
+                        && let Some(sh) = wb.sheet_mut(k.0)
                         && let Some(r) = sh.spill_ranges.remove(&k.1)
                     {
                         for c in r.iter() {
@@ -743,7 +757,12 @@ impl Calc {
         let dirty = self.dirty_closure(wb, &seeds);
         let t1 = prof_now();
         let n = dirty.len();
+        let tables = wb.calc.mode == CalcMode::Automatic && wb.sheets.iter().any(|s| !s.data_tables.is_empty());
+        let trigger: Option<HashSet<Key>> = tables.then(|| changed.iter().chain(dirty.iter()).copied().collect());
         self.run(wb, dirty, false);
+        if let Some(t) = trigger {
+            self.refresh_tables(wb, Some(t));
+        }
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
@@ -919,6 +938,56 @@ impl Calc {
     }
 }
 
+/// Lays out a Python cell's result: an array spills from the cell (or the cell shows `#SPILL!`
+/// when the area is blocked, as a formula's would), anything else is the cell's value. A cell
+/// that hasn't run keeps its value. Returns the cells whose values may have changed (the cell and
+/// its old and new spill areas), for [`Calc::cells_changed`].
+pub fn lay_python_spill(wb: &mut Workbook, sheet: usize, anchor: CellRef) -> Vec<Key> {
+    let mut changed = vec![(sheet, anchor)];
+    let Some(sh) = wb.sheet_mut(sheet) else { return changed };
+    if let Some(old) = sh.spill_ranges.remove(&anchor) {
+        for c in old.iter() {
+            sh.spill.remove(&c);
+        }
+        changed.extend(old.iter().take(65536).map(|c| (sheet, c)));
+    }
+    let Some(result) = sh.cells.get(anchor).and_then(|c| c.py.as_ref()).and_then(|p| p.result_value()) else { return changed };
+    let value = match result {
+        // A malformed or oversized array (only a crafted file can hold one) can't spill.
+        Value::Array(arr) if arr.rows.checked_mul(arr.cols).is_none_or(|n| n != arr.data.len() || n > 1_000_000) => Value::Error(CellError::Spill),
+        Value::Array(arr) if arr.rows > 1 || arr.cols > 1 => {
+            let end = CellRef::new(anchor.row.saturating_add(arr.rows as u32 - 1), anchor.col.saturating_add(arr.cols as u32 - 1));
+            let range = RangeRef::new(anchor, end);
+            let blocked = arr.rows as u64 > gridcraft_core::MAX_ROWS as u64
+                || arr.cols as u64 > gridcraft_core::MAX_COLS as u64
+                || end.row >= gridcraft_core::MAX_ROWS
+                || end.col >= gridcraft_core::MAX_COLS
+                || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && cell.has_content())
+                || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c))
+                || sh.merges.iter().any(|m| m.intersects(&range))
+                || sh.tables.iter().any(|t| t.range.contains(anchor));
+            if blocked {
+                Value::Error(CellError::Spill)
+            } else {
+                for (i, c) in range.iter().enumerate() {
+                    if c != anchor {
+                        sh.spill.insert(c, arr.data.get(i).cloned().unwrap_or_default());
+                    }
+                }
+                sh.spill_ranges.insert(anchor, range);
+                changed.extend(range.iter().take(65536).map(|c| (sheet, c)));
+                arr.data.first().cloned().unwrap_or_default()
+            }
+        }
+        Value::Array(arr) => arr.data.first().cloned().unwrap_or_default(),
+        v => v,
+    };
+    if let Some(cell) = sh.cells.get_mut(anchor) {
+        cell.value = value;
+    }
+    changed
+}
+
 /// Local date-time as a serial (1900 system). Wasm without a clock returns a fixed date.
 #[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn now_serial() -> f64 {
@@ -930,6 +999,123 @@ pub fn now_serial() -> f64 {
         }
     }
     46302.5
+}
+
+// ---------------------------------------------------------------- what-if trials and data tables
+
+/// Evaluates a workbook with some cells replaced by constants, without touching the original:
+/// the workbook is cloned (cheap; sheets are copy-on-write) and only the replaced cells'
+/// dependents are recalculated. Goal Seek, Scenario Manager, Solver and data tables use it.
+#[derive(Clone)]
+pub struct Trial {
+    base: Workbook,
+    calc: Calc,
+}
+
+impl Trial {
+    pub fn new(wb: &Workbook, calc: &Calc) -> Trial {
+        let mut base = wb.clone();
+        // What-if analysis always recalculates, even in manual mode.
+        base.calc.mode = CalcMode::Automatic;
+        let mut calc = calc.clone();
+        calc.in_trial = true;
+        Trial { base, calc }
+    }
+
+    /// The workbook the trials start from.
+    pub fn base(&self) -> &Workbook {
+        &self.base
+    }
+
+    /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
+    pub fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Vec<Value> {
+        let mut wb = self.base.clone();
+        let mut keys = Vec::with_capacity(sets.len());
+        for (si, c, v) in sets {
+            if let Some(sh) = wb.sheet_mut(*si) {
+                let style = sh.style_id(*c);
+                sh.set_cell(*c, gridcraft_model::Cell { value: v.clone(), formula: None, style, py: None });
+                keys.push((*si, *c));
+            }
+        }
+        self.calc.cells_changed(&mut wb, &keys);
+        reads.iter().map(|(si, c)| wb.sheet(*si).map(|s| s.value(*c)).unwrap_or_default()).collect()
+    }
+}
+
+/// Most result cells one data table may have.
+pub const MAX_TABLE_CELLS: u64 = 100_000;
+
+/// Computes one data table's body: `(cell, value)` for every result cell.
+fn compute_table(wb: &Workbook, calc: &Calc, si: usize, t: &gridcraft_model::DataTable) -> Vec<(CellRef, Value)> {
+    if t.body().is_none_or(|b| b.count() > MAX_TABLE_CELLS) {
+        return vec![];
+    }
+    let Some(sh) = wb.sheet(si) else { return vec![] };
+    let trials = t.trials();
+    let run_chunk = |chunk: &[gridcraft_model::TableTrial]| -> Vec<(CellRef, Value)> {
+        let mut trial = Trial::new(wb, calc);
+        let mut out = Vec::new();
+        for tt in chunk {
+            let sets: Vec<(usize, CellRef, Value)> = tt.inputs.iter().map(|(input, from)| (si, *input, sh.value(*from))).collect();
+            let reads: Vec<(usize, CellRef)> = tt.outputs.iter().map(|(f, _)| (si, *f)).collect();
+            let vals = trial.run(&sets, &reads);
+            out.extend(tt.outputs.iter().map(|(_, o)| *o).zip(vals));
+        }
+        out
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        // Each worker clones the workbook and graph once, then runs its share of trials.
+        let workers = rayon::current_num_threads().clamp(1, 16);
+        if trials.len() >= 8 && workers > 1 {
+            let size = trials.len().div_ceil(workers).max(1);
+            return trials.par_chunks(size).flat_map_iter(run_chunk).collect();
+        }
+    }
+    run_chunk(&trials)
+}
+
+impl Calc {
+    /// Recomputes data tables: all of them (`trigger = None`), or those whose edge cells (input
+    /// values or formulas) are in `trigger`. Results are written as values and their dependents
+    /// recalculated; tables fed by other tables update in later passes.
+    pub fn refresh_tables(&mut self, wb: &mut Workbook, trigger: Option<HashSet<Key>>) {
+        if self.in_trial {
+            return;
+        }
+        let mut trigger = trigger;
+        for _pass in 0..8 {
+            let mut written: Vec<Key> = Vec::new();
+            for si in 0..wb.sheets.len() {
+                let tables = wb.sheet(si).map(|s| s.data_tables.clone()).unwrap_or_default();
+                for t in tables {
+                    if let Some(tr) = &trigger
+                        && !t.edges().iter().any(|c| tr.contains(&(si, *c)))
+                    {
+                        continue;
+                    }
+                    let results = compute_table(wb, self, si, &t);
+                    let Some(sh) = wb.sheet_mut(si) else { continue };
+                    for (c, v) in results {
+                        if sh.value(c) != v || sh.cell(c).is_some_and(|x| x.formula.is_some()) {
+                            let style = sh.style_id(c);
+                            sh.set_cell(c, gridcraft_model::Cell { value: v, formula: None, style, py: None });
+                            written.push((si, c));
+                        }
+                    }
+                }
+            }
+            if written.is_empty() {
+                break;
+            }
+            let dirty = self.dirty_closure(wb, &written);
+            let next: HashSet<Key> = written.iter().chain(dirty.iter()).copied().collect();
+            self.run(wb, dirty, false);
+            trigger = Some(next);
+        }
+    }
 }
 
 /// Evaluates a formula in the context of a cell without storing it (conditional formats, data

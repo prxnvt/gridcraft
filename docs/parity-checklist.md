@@ -4,24 +4,24 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 258 / 290 commands implemented (89.0%).**
+**Overall: 270 / 298 commands implemented (90.6%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
 | File | 10 | 11 | 91% |
 | Home | 94 | 94 | 100% |
-| Insert | 15 | 25 | 60% |
+| Insert | 19 | 28 | 68% |
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
-| Formulas | 23 | 23 | 100% |
-| Data | 20 | 28 | 71% |
+| Formulas | 27 | 27 | 100% |
+| Data | 22 | 28 | 79% |
 | Review | 9 | 18 | 50% |
-| View | 18 | 20 | 90% |
+| View | 19 | 21 | 90% |
 | Automate | 3 | 3 | 100% |
 | Table Design | 12 | 13 | 92% |
 | Chart Design | 8 | 8 | 100% |
 | Format | 3 | 3 | 100% |
-| PivotTable Analyze | 12 | 13 | 92% |
+| PivotTable Analyze | 13 | 13 | 100% |
 | PivotTable Design | 4 | 4 | 100% |
 
 ## File (10 / 11, 91%)
@@ -142,7 +142,7 @@ Implemented:
 - `edit.goToSpecial` Go To Special (Editing)
 - `home.addIns` Add-ins (Add-ins)
 
-## Insert (15 / 25, 60%)
+## Insert (19 / 28, 68%)
 
 Implemented:
 
@@ -159,8 +159,12 @@ Implemented:
 - `review.newComment` Comment (Comments)
 - `insert.textBox` Text Box (Text)
 - `pageLayout.headerFooter` Header & Footer (Text)
+- `insert.equation` Equation (Symbols)
 - `insert.symbol` Symbol (Symbols)
 - `insert.checkbox` Checkbox (Cell Controls)
+- `insert.button` Button (Controls)
+- `insert.slider` Scroll Bar (Controls)
+- `insert.spinButton` Spin Button (Controls)
 
 Missing:
 
@@ -173,7 +177,6 @@ Missing:
 - `insert.wordArt` WordArt (Text)
 - `insert.signatureLine` Signature Line (Text)
 - `insert.object` Object (Text)
-- `insert.equation` Equation (Symbols)
 
 ## Draw (4 / 4, 100%)
 
@@ -212,7 +215,7 @@ Implemented:
 - `arrange.group` Group (Arrange)
 - `arrange.rotate` Rotate (Arrange)
 
-## Formulas (23 / 23, 100%)
+## Formulas (27 / 27, 100%)
 
 Implemented:
 
@@ -239,8 +242,12 @@ Implemented:
 - `formulas.calculationOptions` Calculation Options (Calculation)
 - `formulas.calculateNow` Calculate Now (Calculation)
 - `formulas.calculateSheet` Calculate Sheet (Calculation)
+- `python.insert` Insert Python (Python)
+- `python.reset` Reset (Python)
+- `python.diagnostics` Diagnostics (Python)
+- `python.initialization` Initialization (Python)
 
-## Data (20 / 28, 71%)
+## Data (22 / 28, 79%)
 
 Implemented:
 
@@ -264,6 +271,8 @@ Implemented:
 - `data.subtotal` Subtotal (Outline)
 - `data.showDetail` Show Detail (Outline)
 - `data.hideDetail` Hide Detail (Outline)
+- `data.solver` Solver (Analysis)
+- `data.analysisToolPak` Data Analysis (Analysis)
 
 Missing:
 
@@ -273,8 +282,6 @@ Missing:
 - `data.relationships` Relationships (Data Tools)
 - `data.forecastSheet` Forecast Sheet (Forecast)
 - `data.analyzeData` Analyze Data (Analysis)
-- `data.solver` Solver (Analysis)
-- `data.analysisToolPak` Data Analysis (Analysis)
 
 ## Review (9 / 18, 50%)
 
@@ -302,7 +309,7 @@ Missing:
 - `review.allowEditRanges` Allow Edit Ranges (Protect)
 - `review.showChanges` Show Changes (Changes)
 
-## View (18 / 20, 90%)
+## View (19 / 21, 90%)
 
 Implemented:
 
@@ -324,6 +331,7 @@ Implemented:
 - `view.unhideWindow` Unhide (Window)
 - `view.switchWindows` Switch Windows (Window)
 - `view.macros` Macros (Macros)
+- `macro.record` Record Macro (Macros)
 
 Missing:
 
@@ -380,13 +388,14 @@ Implemented:
 - `chart.shapeFill` Shape Fill (Shape Styles)
 - `chart.shapeOutline` Shape Outline (Shape Styles)
 
-## PivotTable Analyze (12 / 13, 92%)
+## PivotTable Analyze (13 / 13, 100%)
 
 Implemented:
 
 - `pivot.fieldList` Field List (Show)
 - `pivot.refresh` Refresh (Data)
 - `pivot.changeSource` Change Data Source (Data)
+- `pivot.calculatedField` Fields, Items & Sets (Calculations)
 - `pivot.addField` Add Field (Fields)
 - `pivot.removeField` Remove Field (Fields)
 - `pivot.moveField` Move Field (Fields)
@@ -396,10 +405,6 @@ Implemented:
 - `pivot.group` Group Field (Group)
 - `pivot.collapse` Collapse Field (Active Field)
 - `pivot.delete` Clear All (Actions)
-
-Missing:
-
-- `pivot.calculatedField` Fields, Items & Sets (Calculations)
 
 ## PivotTable Design (4 / 4, 100%)
 
