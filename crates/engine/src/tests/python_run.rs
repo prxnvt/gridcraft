@@ -266,3 +266,83 @@ fn a_killed_worker_is_replaced_and_earlier_cells_run_again() {
     let cells: Vec<String> = s.doc().unwrap().py_log.iter().map(|e| format!("{}:{}", e.cell, e.status)).collect();
     assert_eq!(cells, ["A1:ok", "A2:timeout", "A1:ok", "A3:ok"]);
 }
+
+#[test]
+fn stop_kills_a_cell_that_loops_forever_and_nothing_reruns_until_an_edit() {
+    let mut s = py_session();
+    // A real process, so the kill really ends the endless loop.
+    s.set_python_launcher(process_launcher());
+    s.set_python_background(true);
+    s.prefs.python_timeout_seconds = 60.0;
+    plant(&mut s, "A1", "base = 1\nbase");
+    plant(&mut s, "A2", "while True:\n    pass");
+    plant(&mut s, "A3", "base + 1");
+    s.python_reset().unwrap();
+    // A1 finishes; A2 then runs until stopped.
+    for _ in 0..2000 {
+        s.step_python();
+        if v(&s, "A1") == Value::Number(1.0) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    for _ in 0..20 {
+        s.step_python();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(v(&s, "A2"), err(CellError::Busy));
+    assert_eq!(v(&s, "A3"), err(CellError::Busy));
+    let r = s.execute("python.stop", json!({})).unwrap();
+    assert_eq!(r["stopped"], 2);
+    assert!(!s.python_busy());
+    assert_eq!(v(&s, "A1"), Value::Number(1.0), "a finished cell keeps its value");
+    assert_eq!(v(&s, "A2"), err(CellError::Python));
+    assert_eq!(v(&s, "A3"), err(CellError::Python));
+    let log: Vec<(String, &str, Option<String>)> = s.doc().unwrap().py_log.iter().map(|e| (e.cell.clone(), e.status, e.error.clone())).collect();
+    assert!(log.ends_with(&[("A2".into(), "stopped", Some("Stopped".into())), ("A3".into(), "stopped", Some("Stopped".into()))]), "{log:?}");
+    // Nothing reruns by itself, and stopping again does nothing.
+    for _ in 0..20 {
+        assert!(!s.step_python());
+    }
+    assert_eq!(s.execute("python.stop", json!({})).unwrap()["stopped"], 0);
+    assert_eq!(v(&s, "A3"), err(CellError::Python));
+    // An edit runs again from a fresh namespace: A1 first, so A3 still finds `base`.
+    s.execute("python.set", json!({"cell": "A2", "code": "2"})).unwrap();
+    for _ in 0..2000 {
+        if !s.step_python() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(v(&s, "A2"), Value::Number(2.0));
+    assert_eq!(v(&s, "A3"), Value::Number(2.0));
+}
+
+#[test]
+fn stop_without_python_running_is_harmless() {
+    let mut s = py_session();
+    assert_eq!(s.execute("python.stop", json!({})).unwrap()["stopped"], 0);
+}
+
+#[test]
+fn background_edits_during_the_first_run_of_a_worker_process() {
+    let mut s = py_session();
+    s.set_python_launcher(process_launcher());
+    s.set_python_background(true);
+    s.execute("python.set", json!({"cell": "A1", "code": "1"})).unwrap();
+    s.step_python();
+    s.execute("python.set", json!({"cell": "A3", "code": "3"})).unwrap();
+    s.step_python();
+    s.execute("python.set", json!({"cell": "A5", "code": "5"})).unwrap();
+    for _ in 0..3000 {
+        if !s.step_python() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let log: Vec<(String, &str, Option<String>)> = s.doc().unwrap().py_log.iter().map(|e| (e.cell.clone(), e.status, e.error.clone())).collect();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0), "{log:?}");
+    assert_eq!(v(&s, "A3"), Value::Number(3.0), "{log:?}");
+    assert_eq!(v(&s, "A5"), Value::Number(5.0), "{log:?}");
+}

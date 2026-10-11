@@ -1901,6 +1901,7 @@ dependencies = [
  "egui_kittest",
  "gridcraft-chart",
  "gridcraft-engine",
+ "gridcraft-python",
  "image",
  "log",
  "serde",

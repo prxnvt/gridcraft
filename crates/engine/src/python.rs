@@ -478,6 +478,32 @@ impl Session {
         Ok(())
     }
 
+    /// Stops the active workbook's Python cells: kills its worker and drops the queued run. Every
+    /// cell that hadn't finished shows `#PYTHON!` ("Stopped"), and nothing runs again until the
+    /// next edit or Reset Runtime (which start from a fresh namespace). Returns how many cells
+    /// were stopped.
+    pub fn python_stop(&mut self) -> crate::Result<usize> {
+        let uid = self.doc()?.uid;
+        let Some(dp) = self.python.docs.get_mut(&uid) else { return Ok(0) };
+        let Some(job) = dp.job.take() else { return Ok(0) };
+        if let Some(w) = dp.worker.as_mut() {
+            w.kill();
+        }
+        // The namespace went with the worker: the next refresh starts over.
+        dp.dirty = true;
+        let mut pending: Vec<Key> = job.inflight.map(|i| i.key).into_iter().chain(job.replay).chain(job.queue).collect();
+        let mut seen = HashSet::new();
+        pending.retain(|k| seen.insert(*k));
+        let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid) else { return Ok(0) };
+        for &key in &pending {
+            write_error(d, key, CellError::Python);
+            let mut e = log_entry(&d.wb, key, "stopped");
+            e.error = Some("Stopped".into());
+            push_log(d, e);
+        }
+        Ok(pending.len())
+    }
+
     /// Throws the namespace away and runs every Python cell of the workbook again.
     pub(crate) fn python_rerun_all(&mut self, uid: u64) {
         let dp = self.python.docs.entry(uid).or_default();

@@ -71,7 +71,9 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "window": [r.width(), r.height()],
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
-        "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point()})),
+        "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})),
+        // Python cells running or waiting in the background (they show #BUSY!).
+        "pythonBusy": app.session.python_busy(),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
         "selectedObject": app.selected_object,

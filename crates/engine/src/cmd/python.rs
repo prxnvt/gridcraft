@@ -50,6 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             output
         ),
+        cmd!(noundo "python.stop", "Stop", ["Formulas", "Python"], None, "{} → {stopped}: stops the Python cells running or waiting in the active workbook; they show #PYTHON! (\"Stopped\") until the next edit or Reset", has_doc, stop),
         cmd!(noundo "python.reset", "Reset Runtime", ["Formulas", "Python"], None, "{clearDiagnostics?: bool} starts Python afresh and runs every Python cell again", has_doc, reset),
         cmd!(
             query "python.diagnostics",
@@ -200,6 +201,11 @@ fn reset(s: &mut Session, p: &Json) -> Result<Json> {
     }
     s.python_reset()?;
     Ok(json!({"runs": s.doc()?.py_log.len()}))
+}
+
+fn stop(s: &mut Session, _p: &Json) -> Result<Json> {
+    let stopped = s.python_stop()?;
+    Ok(json!({"stopped": stopped}))
 }
 
 fn diagnostics(s: &mut Session, p: &Json) -> Result<Json> {

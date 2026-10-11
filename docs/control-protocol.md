@@ -47,6 +47,12 @@ commands. `selectedChart` is kept as an alias: the id when the selection is a ch
 `null`. With an object selected, `ui.key {key: "Delete"}` (or Backspace) deletes the object
 instead of clearing cells, and Escape clears the selection.
 
+Python cells run in the background in the app, so `python.set` answers at once and the cells it
+starts show `#BUSY!` until they finish. `ui.inspect` reports `pythonBusy: true` while any are
+running or waiting; poll it (or `cell.get`) for the results. `python.stop` (or `ui.key {key:
+"Escape"}` with no editor open) stops them. `editor.python` is true while the formula bar edits a
+Python cell's code; Ctrl+Enter (Cmd+Enter on macOS) commits it.
+
 Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
 to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.
 System follows live OS appearance changes and falls back to Light when the platform supplies no preference.
