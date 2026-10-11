@@ -1783,7 +1783,12 @@ fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
 /// Grid keyboard handling when no text field has focus.
 fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     // Focus left on an editor that no longer exists goes back to the grid.
-    let stale = [egui::Id::new("gridcraft.cell_editor"), egui::Id::new("gridcraft.formula_bar"), crate::text_box::editor_id()];
+    let stale = [
+        egui::Id::new("gridcraft.cell_editor"),
+        egui::Id::new("gridcraft.formula_bar"),
+        crate::text_box::editor_id(),
+        crate::python_window::editor_id(),
+    ];
     let editing = app.editor.is_some() || app.text_box_editor.is_some();
     if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
         resp.request_focus();

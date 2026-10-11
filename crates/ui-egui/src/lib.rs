@@ -33,6 +33,7 @@ pub mod pivot_calc_ui;
 pub mod pivot_filter;
 pub mod pivot_pane;
 pub mod python_ui;
+pub mod python_window;
 pub mod ribbon;
 pub mod solver_ui;
 pub mod tabs;
@@ -197,6 +198,8 @@ pub struct SheetApp {
     pub macros: macro_ui::MacroUi,
     /// How much of the session's journal Recently Used has read (see [`function_library::harvest`]).
     pub(crate) journal_seen: usize,
+    /// The Python editor window, when open (kept apart from `dialog`, so dialogs don't close it).
+    pub py_window: Option<python_window::PyWindow>,
 }
 
 /// A pending "replace it?" question from a command (see [`confirm_text`]).
@@ -268,6 +271,7 @@ impl SheetApp {
             dialog_next: None,
             macros: macro_ui::MacroUi::default(),
             journal_seen,
+            py_window: None,
         }
     }
 
@@ -437,6 +441,7 @@ impl SheetApp {
                 self.grid.pane = p.get("name").and_then(Json::as_str).filter(|n| !n.is_empty()).map(str::to_string);
                 Ok(json!({"pane": self.grid.pane}))
             }
+            "ui.pythonEditor" => python_window::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
@@ -902,6 +907,7 @@ impl SheetApp {
             grid::show(self, ui);
             self.perf.grid_ms = now_ms() - g0;
         });
+        python_window::show(self, &ctx);
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::confirm_box(self, &ctx);

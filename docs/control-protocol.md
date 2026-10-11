@@ -35,6 +35,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs. `{name: "macroEditor", macro, debug?, check?}` opens the macro step editor (`debug: true` pauses before the first step, `check: true` shows the dry run on the grid); `{name: "macros"}` the Macros dialog |
 | `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs |
 | `ui.pane` (through `engine.execute`) | `{name?}` | Show a task pane (`comments`, `watch`, `selection`, `formatChart`, `pythonDiagnostics`); no name closes it |
+| `ui.pythonEditor` (through `engine.execute`) | `{cell?, sheet?, close?}` | Open the Python editor window on a cell (default: the active cell, or the Python cell being edited; a selected Python cell starts being edited in it); `close: true` closes it and keeps any edit. Replies `{open, sheet, cell, editing, dirty, python}`, which `ui.inspect` also reports as `pythonEditor` |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path) |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?}` | UI preferences |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |

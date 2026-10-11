@@ -84,6 +84,8 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})),
         // Python cells running or waiting in the background (they show #BUSY!).
         "pythonBusy": app.session.python_busy(),
+        // The Python editor window: {open, sheet, cell, editing, dirty, python}.
+        "pythonEditor": crate::python_window::state(app),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
         "selectedObject": app.selected_object,
@@ -218,6 +220,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.zoom100", "100%", ""),
                 ("ui.dialog", "Open Dialog", ""),
                 ("ui.pane", "Task Pane", "{name?: comments|watch|selection|formatChart|pythonDiagnostics} shows a task pane; no name closes it"),
+                (
+                    "ui.pythonEditor",
+                    "Python Editor",
+                    "{cell?, sheet?, close?} opens the Python editor window on a cell (default: the active cell, or the Python cell being edited); close: true closes it, keeping any edit",
+                ),
                 ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"} (alias: code)"),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),

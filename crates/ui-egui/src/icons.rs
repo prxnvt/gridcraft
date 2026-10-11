@@ -186,6 +186,9 @@ pub enum Icon {
     StopCell,
     /// Re-run a Python cell (the formula bar): a circular arrow.
     Rerun,
+    /// Open in the Python editor window (the formula bar): two arrows pointing out to opposite
+    /// corners.
+    ExpandEditor,
 }
 
 struct G<'a> {
@@ -903,6 +906,12 @@ pub fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette
                 .collect();
             g.line(&pts, c, 1.4);
             g.poly(&[(10.2, 0.9), (13.9, 4.6), (9.0, 5.6)], c);
+        }
+        Icon::ExpandEditor => {
+            g.line(&[(9.2, 6.8), (13.0, 3.0)], c, 1.3);
+            g.line(&[(8.8, 3.0), (13.0, 3.0), (13.0, 7.2)], c, 1.3);
+            g.line(&[(6.8, 9.2), (3.0, 13.0)], c, 1.3);
+            g.line(&[(3.0, 8.8), (3.0, 13.0), (7.2, 13.0)], c, 1.3);
         }
     }
 }

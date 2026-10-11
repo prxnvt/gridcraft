@@ -103,20 +103,7 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
                 } else if ui.link(RichText::new(format!("{}!{}", gridcraft_engine::formula::quote_sheet(&r.sheet), r.cell)).strong()).clicked() {
                     goto = Some((r.sheet.clone(), r.cell.clone()));
                 }
-                let (status, color) = match r.status {
-                    "ok" => ("OK", t.text_dim),
-                    "error" => ("Error", t.danger),
-                    "timeout" => ("Time limit", t.danger),
-                    "memory" => ("Memory limit", t.danger),
-                    "stopped" => ("Stopped", t.danger),
-                    "blocked" => ("Turned off", t.text_dim),
-                    "cycle" => ("Cycle", t.danger),
-                    "refused" => ("Not run", t.danger),
-                    "installed" => ("Installed", t.text_dim),
-                    "installFailed" => ("Install failed", t.danger),
-                    "cancelled" => ("Cancelled", t.text_dim),
-                    other => (other, t.text_dim),
-                };
+                let (status, color) = status_label(r.status, &t);
                 ui.label(RichText::new(status).color(color).font(theme::ui_bold(12.0)));
                 if r.count > 1 {
                     ui.label(RichText::new(format!("\u{d7}{}", r.count)).color(t.text_dim).font(theme::ui_bold(12.0)))
@@ -174,6 +161,24 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
         }
         app.run_or_alert("selection.set", json!({"cell": cell}));
         app.grid.ensure_visible = true;
+    }
+}
+
+/// A run's status as Diagnostics shows it, with its colour.
+pub fn status_label<'a>(status: &'a str, t: &Tokens) -> (&'a str, egui::Color32) {
+    match status {
+        "ok" => ("OK", t.text_dim),
+        "error" => ("Error", t.danger),
+        "timeout" => ("Time limit", t.danger),
+        "memory" => ("Memory limit", t.danger),
+        "stopped" => ("Stopped", t.danger),
+        "blocked" => ("Turned off", t.text_dim),
+        "cycle" => ("Cycle", t.danger),
+        "refused" => ("Not run", t.danger),
+        "installed" => ("Installed", t.text_dim),
+        "installFailed" => ("Install failed", t.danger),
+        "cancelled" => ("Cancelled", t.text_dim),
+        other => (other, t.text_dim),
     }
 }
 

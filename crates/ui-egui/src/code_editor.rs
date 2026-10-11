@@ -284,6 +284,63 @@ pub fn underline(job: &mut egui::text::LayoutJob, mark: Range<usize>, color: egu
     job.sections = out;
 }
 
+/// The width of a line-number gutter for `lines` lines in `font` (the widest number, padded).
+pub fn gutter_width(ui: &Ui, lines: usize, font: &FontId) -> f32 {
+    let digits = lines.max(1).to_string().len().max(2);
+    let w = ui.fonts_mut(|f| f.glyph_width(font, '0'));
+    w * digits as f32 + 12.0
+}
+
+/// Paints line numbers in a gutter whose right edge is at `right`, beside `galley` laid out at
+/// `galley_pos`: one number per line of the text, on the first row of each wrapped line.
+pub fn paint_line_numbers(painter: &egui::Painter, galley: &egui::Galley, galley_pos: egui::Pos2, right: f32, font: &FontId, color: egui::Color32) {
+    let mut line = 1usize;
+    let mut starts_line = true;
+    for row in &galley.rows {
+        if starts_line {
+            let y = galley_pos.y + row.pos.y;
+            painter.text(egui::pos2(right, y), egui::Align2::RIGHT_TOP, line.to_string(), font.clone(), color);
+            line = line.saturating_add(1);
+        }
+        starts_line = row.ends_with_newline;
+    }
+}
+
+/// The byte range of line `line` (1-based) of `text` without its indentation, for underlining an
+/// error's line; `None` when the text has no such line.
+pub fn line_range(text: &str, line: u32) -> Option<Range<usize>> {
+    let index = usize::try_from(line).ok()?.checked_sub(1)?;
+    let mut start = 0usize;
+    for (i, l) in text.split('\n').enumerate() {
+        if i == index {
+            let indent = l.len() - l.trim_start().len();
+            let body = l.trim_end();
+            let (a, b) = (start + indent, start + body.len().max(indent));
+            return Some(a..b);
+        }
+        start = start.saturating_add(l.len() + 1);
+    }
+    None
+}
+
+/// The char index where line `line` (1-based) of `text` starts, clamped to the text.
+pub fn line_start_char(text: &str, line: u32) -> usize {
+    let want = usize::try_from(line).unwrap_or(usize::MAX).saturating_sub(1);
+    if want == 0 {
+        return 0;
+    }
+    let mut seen = 0usize;
+    for (i, c) in text.chars().enumerate() {
+        if c == '\n' {
+            seen += 1;
+            if seen == want {
+                return i + 1;
+            }
+        }
+    }
+    text.chars().count()
+}
+
 fn byte_of(text: &str, char_index: usize) -> usize {
     text.char_indices().nth(char_index).map(|(b, _)| b).unwrap_or(text.len())
 }
@@ -577,6 +634,23 @@ mod tests {
         let mut s = "é".to_string();
         let e = newline(&mut s, (99, 99), Lang::Plain);
         assert_eq!((s.as_str(), e.caret), ("é\n", 2));
+    }
+
+    #[test]
+    fn error_lines_map_to_ranges_and_carets() {
+        let text = "x = 1\n    y = x +\nz";
+        assert_eq!(line_range(text, 1), Some(0..5));
+        assert_eq!(line_range(text, 2).and_then(|r| text.get(r)), Some("y = x +"));
+        assert_eq!(line_range(text, 3), Some(18..19));
+        assert_eq!(line_range(text, 4), None);
+        assert_eq!(line_range(text, 0), None);
+        assert_eq!(line_range("", 1), Some(0..0));
+        assert_eq!(line_start_char(text, 1), 0);
+        assert_eq!(line_start_char(text, 2), 6);
+        assert_eq!(line_start_char(text, 3), 18);
+        assert_eq!(line_start_char(text, 99), text.chars().count());
+        assert_eq!(line_start_char("é\nb", 2), 2);
+        assert_eq!(line_start_char(text, u32::MAX), text.chars().count());
     }
 
     #[test]
