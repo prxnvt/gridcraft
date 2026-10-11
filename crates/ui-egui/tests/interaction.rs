@@ -371,6 +371,7 @@ fn confirm_question_reruns_the_command_on_ok() {
         text: "Replace it?".into(),
         command: "cell.set".into(),
         params: json!({"cell": "A1", "input": "5"}),
+        choices: vec![],
     });
     h.run_steps(2);
     key(&mut h, Key::Enter, Modifiers::NONE);
@@ -382,6 +383,7 @@ fn confirm_question_reruns_the_command_on_ok() {
         text: "Replace it?".into(),
         command: "cell.set".into(),
         params: json!({"cell": "A1", "input": "6"}),
+        choices: vec![],
     });
     h.run_steps(2);
     key(&mut h, Key::Escape, Modifiers::NONE);

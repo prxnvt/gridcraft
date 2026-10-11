@@ -7,7 +7,9 @@ use serde_json::json;
 use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{
+    big_button, color_palette, icon_button, small_button, small_button_accent, small_split_button, small_toggle_button, split_button, toggle_button,
+};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -1829,18 +1831,90 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn automate(app: &mut SheetApp, ui: &mut Ui) {
-    if kt(app, big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false), "YC").clicked() {
-        app.open_dialog("commandSearch", json!({}));
-    }
-    if kt(app, big_button(ui, Icon::Script, "Agent\nControl", "How agents drive GridCraft (MCP / control channel)", false), "YA").clicked() {
-        app.open_dialog("agents", json!({}));
-    }
-    if kt(app, big_button(ui, Icon::Script, "Action\nJournal", "Every command run in this session (replayable)", false), "YJ").clicked() {
-        app.open_dialog("journal", json!({}));
-    }
-    if kt(app, big_button(ui, Icon::Script, "About\nGridCraft", "Version, contributors and the AI models that helped", false), "YG").clicked() {
-        app.open_dialog("about", json!({}));
-    }
+    let t = Tokens::get(ui.ctx());
+    let recording = app.session.is_recording();
+    // Macros: Record Macro, Use Relative References, Macros… and New Macro.
+    ui.vertical(|ui| {
+        let (label, tip) =
+            if recording { ("Stop Recording", "Stop recording and save the macro") } else { ("Record Macro", "Record your actions as a macro") };
+        if kt(app, small_button(ui, Icon::Record, label, tip, false), "YR").clicked() {
+            crate::macro_ui::toggle_recording(app);
+        }
+        let rel = app.macros.relative;
+        let tip = "Record steps relative to the cells selected when recording starts, so the macro works on other data";
+        let r = ui.add_enabled_ui(!recording, |ui| small_toggle_button(ui, Icon::Relative, None, "Use Relative References", tip, rel)).inner;
+        if kt(app, r, "YU").clicked() && !recording {
+            app.macros.relative = !rel;
+        }
+        if kt(app, small_button(ui, Icon::Script, "Macros…", "View, run, edit or delete macros", false), "YM").clicked() {
+            app.open_dialog("macros", json!({}));
+        }
+    });
+    ui.vertical(|ui| {
+        if kt(app, small_button_accent(ui, Icon::Macro, Some(t.cat(Cat::Blue)), "New Macro", "Write a macro step by step", false), "YN").clicked() {
+            app.open_dialog("macroEditor", json!({}));
+        }
+    });
+    sep(ui);
+    // Run: Run Macro runs the last macro; its menu lists recent macros, then all of them.
+    ui.vertical(|ui| {
+        let macros = crate::macro_ui::macro_list(app);
+        let recent: Vec<String> = app.macros.recent.iter().filter(|r| macros.iter().any(|(n, ..)| n.eq_ignore_ascii_case(r))).cloned().collect();
+        let (main, arrow) = small_split_button(ui, Icon::Macro, Some(t.cat(Cat::Green)), "Run Macro", "Run a macro on the selection");
+        if kt(app, main, "YP").clicked() {
+            match recent.first().or(macros.first().map(|m| &m.0)) {
+                Some(name) if macros.len() == 1 || !recent.is_empty() => {
+                    let name = name.clone();
+                    crate::macro_ui::run_macro(app, &name);
+                }
+                _ => app.open_dialog("macros", json!({})),
+            }
+        }
+        let arrow = kt(app, arrow, "YQ");
+        egui::Popup::menu(&arrow).show(|ui| {
+            if !recent.is_empty() {
+                ui.label(egui::RichText::new("Recent").small().color(t.text_dim));
+                for n in &recent {
+                    if ui.add(egui::Button::new(n.as_str()).frame(false).min_size(vec2(200.0, 22.0))).clicked() {
+                        crate::macro_ui::run_macro(app, n);
+                    }
+                }
+                ui.separator();
+            }
+            if macros.is_empty() {
+                ui.label(egui::RichText::new("No macros in this workbook").italics().color(t.text_dim));
+            }
+            for (n, desc, _) in macros.iter().take(30) {
+                let r = ui.add(egui::Button::new(n.as_str()).frame(false).min_size(vec2(200.0, 22.0)));
+                let r = if desc.is_empty() { r } else { r.on_hover_text(desc) };
+                if r.clicked() {
+                    crate::macro_ui::run_macro(app, n);
+                }
+            }
+            ui.separator();
+            if ui.add(egui::Button::new("Macros…").frame(false).min_size(vec2(200.0, 22.0))).clicked() {
+                app.open_dialog("macros", json!({}));
+            }
+        });
+    });
+    sep(ui);
+    // Agents.
+    ui.vertical(|ui| {
+        if kt(app, small_button(ui, Icon::Search, "Command Palette", "Search and run any command", false), "YC").clicked() {
+            app.open_dialog("commandSearch", json!({}));
+        }
+        if kt(app, small_button(ui, Icon::Script, "Action Journal", "Every command run in this session (replayable)", false), "YJ").clicked() {
+            app.open_dialog("journal", json!({}));
+        }
+        if kt(app, small_button(ui, Icon::Settings, "Agent Control", "How agents drive GridCraft (MCP / control channel)", false), "YA").clicked() {
+            app.open_dialog("agents", json!({}));
+        }
+    });
+    ui.vertical(|ui| {
+        if kt(app, small_button(ui, Icon::Home, "About GridCraft", "Version, contributors and the AI models that helped", false), "YG").clicked() {
+            app.open_dialog("about", json!({}));
+        }
+    });
 }
 
 fn pivot_analyze(app: &mut SheetApp, ui: &mut Ui) {
@@ -2015,6 +2089,10 @@ fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
 /// Command-key shortcuts when the grid has focus.
 pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
     let shift = m.shift;
+    // Ctrl+Shift+letter (⌘⇧letter) runs the macro with that shortcut, unless GridCraft uses it.
+    if shift && crate::macro_ui::run_shortcut(app, key) {
+        return;
+    }
     let id: Option<(&str, serde_json::Value)> = match key {
         Key::B => Some(("home.bold", json!({}))),
         Key::I => Some(("home.italic", json!({}))),

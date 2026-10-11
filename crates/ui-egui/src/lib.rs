@@ -20,6 +20,7 @@ pub mod grid;
 pub mod i18n;
 pub mod icons;
 pub mod keytips;
+pub mod macro_ui;
 pub mod objects;
 pub mod panes;
 pub mod pivot_calc_ui;
@@ -174,6 +175,8 @@ pub struct SheetApp {
     pub confirm: Option<Confirm>,
     /// Dialog to open when the current one closes (Data Analysis → a tool's form).
     pub dialog_next: Option<dialogs::Dialog>,
+    /// Automate › Macros: relative recording, recent macros.
+    pub macros: macro_ui::MacroUi,
 }
 
 /// A pending "replace it?" question from a command (see [`confirm_text`]).
@@ -183,6 +186,9 @@ pub struct Confirm {
     pub text: String,
     pub command: String,
     pub params: Json,
+    /// Buttons other than OK, each with the params it adds when it runs the command again
+    /// (Overwrite, Shift Down, Shift Right for a macro). Empty: OK adds `overwrite: true`.
+    pub choices: Vec<(String, Json)>,
 }
 
 /// What [`SheetApp::run_confirming`] did.
@@ -234,6 +240,7 @@ impl SheetApp {
             started: now_ms(),
             confirm: None,
             dialog_next: None,
+            macros: macro_ui::MacroUi::default(),
         }
     }
 
@@ -327,8 +334,7 @@ impl SheetApp {
         match self.run(id, params.clone()) {
             Ok(v) => Outcome::Done(v),
             Err(e) => {
-                if let Some(text) = confirm_text(&e) {
-                    self.confirm = Some(Confirm { title: title.into(), text, command: id.into(), params });
+                if macro_ui::ask(self, title, id, &params, &e) {
                     return Outcome::Asked;
                 }
                 if e.contains("is not available right now") {

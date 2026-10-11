@@ -166,6 +166,8 @@ pub enum Icon {
     Slider,
     /// A form spin button.
     Spin,
+    /// Use Relative References: a cell and an arrow to a cell offset from it.
+    Relative,
 }
 
 struct G<'a> {
@@ -841,6 +843,12 @@ pub fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette
             g.stroke(&[(4.0, 8.0), (12.0, 8.0)], c);
             g.poly(&[(8.0, 3.2), (10.5, 6.3), (5.5, 6.3)], c);
             g.poly(&[(5.5, 9.7), (10.5, 9.7), (8.0, 12.8)], c);
+        }
+        Icon::Relative => {
+            g.rect(1.5, 1.5, 5.5, 5.0, Some(paper), Some(c));
+            g.rect(9.0, 9.5, 5.5, 5.0, None, Some(c));
+            g.line(&[(5.0, 7.5), (5.0, 12.0), (8.0, 12.0)], c, 1.1);
+            g.poly(&[(7.5, 10.2), (9.6, 12.0), (7.5, 13.8)], c);
         }
     }
 }

@@ -156,6 +156,27 @@ pub fn small_button_accent(ui: &mut Ui, icon: Icon, accent: Option<Color32>, lab
             t.text_dim,
         );
     }
+    let name = if label.is_empty() { tr(ui, tip) } else { label };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+    resp.on_hover_text(tr(ui, tip))
+}
+
+/// Small labelled toggle button (Use Relative References): drawn pressed while `on`.
+pub fn small_toggle_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label: &str, tip: &str, on: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(12.5);
+    let label = tr(ui, label);
+    let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(24.0 + tw, 23.0), Sense::click());
+    if on || resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, 4.0, t.pressed);
+        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+    }
+    icons::paint_accent(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text, accent);
+    ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label));
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -304,7 +325,7 @@ pub fn confirm_box(app: &mut SheetApp, ctx: &egui::Context) {
         return;
     }
     let Some(q) = app.confirm.clone() else { return };
-    let mut answer: Option<bool> = None;
+    let mut answer: Option<Option<serde_json::Value>> = None;
     egui::Modal::new(egui::Id::new("confirm_box")).show(ctx, |ui| {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
@@ -320,25 +341,44 @@ pub fn confirm_box(app: &mut SheetApp, ctx: &egui::Context) {
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button(" Cancel ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                answer = Some(false);
+                answer = Some(None);
             }
-            if ui.button("   OK   ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                answer = Some(true);
+            if q.choices.is_empty() {
+                if ui.button("   OK   ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    answer = Some(Some(serde_json::json!({"overwrite": true})));
+                }
+            } else {
+                // Right to left: the first choice ends up next to Cancel, so list them reversed.
+                for (k, (label, patch)) in q.choices.iter().enumerate().rev() {
+                    if ui.add(egui::Button::new(label.as_str()).min_size(vec2(72.0, 0.0))).clicked()
+                        || (k == 0 && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                    {
+                        answer = Some(Some(patch.clone()));
+                    }
+                }
             }
         });
     });
     match answer {
-        Some(true) => {
+        Some(Some(patch)) => {
             app.confirm = None;
             let mut params = q.params.clone();
-            if let Some(m) = params.as_object_mut() {
-                m.insert("overwrite".into(), serde_json::json!(true));
+            if let (Some(m), Some(extra)) = (params.as_object_mut(), patch.as_object()) {
+                for (k, v) in extra {
+                    m.insert(k.clone(), v.clone());
+                }
             }
-            if let Err(e) = app.run(&q.command, params) {
-                app.message = Some((q.title.clone(), crate::clean_error(&e)));
+            match app.run(&q.command, params.clone()) {
+                Ok(v) => crate::macro_ui::note_result(app, &q.command, &params, &v),
+                Err(e) => {
+                    // A second question (approve, then make room) asks again.
+                    if !crate::macro_ui::ask(app, &q.title, &q.command, &params, &e) {
+                        app.message = Some((q.title.clone(), crate::clean_error(&e)));
+                    }
+                }
             }
         }
-        Some(false) => app.confirm = None,
+        Some(None) => app.confirm = None,
         None => {}
     }
 }

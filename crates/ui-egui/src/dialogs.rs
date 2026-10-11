@@ -571,6 +571,7 @@ impl Dialog {
                 d
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
+            "macros" => crate::macro_ui::open_dialog(app, &params),
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
                 d.result = app.session.run("review.workbookStatistics", json!({})).ok();
@@ -790,6 +791,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "solverResults" => 480.0,
         "solverTrial" => 380.0,
         "dataAnalysis" => 340.0,
+        "macros" => 440.0,
         _ => 380.0,
     };
     let window = egui::Window::new(d.title.clone())
@@ -825,6 +827,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solverTrial" => crate::solver_ui::trial(app, ui, &mut d, &mut open),
                 "toolpak" => crate::toolpak::show(app, ui, &mut d, &mut confirm, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "macros" => crate::macro_ui::macros_dialog(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);
