@@ -208,3 +208,98 @@ fn a_script_run_is_one_undo_step_and_rolls_back_on_error() {
     assert_eq!(v(&s, "A1").display(), "before", "the first step was rolled back");
     assert_eq!(undo_labels(&s).len(), n);
 }
+
+// ---------------------------------------------------------------- recording buffer
+
+fn recorded_ids(s: &Session) -> Vec<String> {
+    s.recorder.as_ref().unwrap().steps.iter().map(|st| st.id.clone()).collect()
+}
+
+#[test]
+fn the_recorder_keeps_top_level_calls_with_where_they_ran() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:C3"})).unwrap();
+    s.start_recording();
+    assert_eq!(s.depth(), 0);
+    set(&mut s, "B2", "10");
+    s.execute("cell.get", json!({"cell": "B2"})).unwrap(); // a query: not recorded
+    assert!(s.execute("sheet.move", json!({})).is_err()); // failed: not recorded
+    s.execute("view.customViews", json!({"save": "Mine"})).unwrap();
+    // Show runs sheet.activate, selection.set and view.zoom inside: one step.
+    s.execute("view.customViews", json!({"show": "Mine"})).unwrap();
+    assert_eq!(recorded_ids(&s), ["cell.set", "view.customViews", "view.customViews"]);
+    let first = &s.recorder.as_ref().unwrap().steps[0];
+    let d = s.doc().unwrap();
+    assert_eq!((first.doc, first.sheet), (d.uid, d.wb.active_sheet));
+    assert_eq!(first.sheet_name, d.wb.active().unwrap().name);
+    assert_eq!(first.selection.a1(), "B2:C3", "the selection before the command ran");
+    assert_eq!(first.params, json!({"cell": "B2", "input": "10"}));
+    assert_eq!(s.depth(), 0);
+    let rec = s.stop_recording().unwrap();
+    assert_eq!(rec.dropped, 0);
+    set(&mut s, "A1", "after");
+    assert!(s.recorder.is_none());
+}
+
+#[test]
+fn the_recorder_survives_journal_trimming() {
+    let mut s = s();
+    s.start_recording();
+    for i in 0..10_050u32 {
+        s.execute("selection.set", json!({"range": format!("A{}", i % 50 + 1)})).unwrap();
+    }
+    set(&mut s, "C1", "last");
+    assert!(s.journal.len() < 10_051, "the journal was trimmed");
+    let steps = &s.recorder.as_ref().unwrap().steps;
+    assert_eq!(steps.len(), 10_051);
+    assert_eq!(steps[0].params, json!({"range": "A1"}));
+    assert_eq!(steps[10_050].id, "cell.set");
+}
+
+#[test]
+fn the_recorder_has_a_cap() {
+    let mut rec = crate::record::Recorder::default();
+    let step = crate::record::RecordedStep {
+        doc: 1,
+        sheet: 0,
+        sheet_name: "Sheet1".into(),
+        selection: crate::Selection::default(),
+        id: "cell.set".into(),
+        params: json!({}),
+    };
+    for _ in 0..crate::record::RECORD_LIMIT + 3 {
+        rec.push(step.clone());
+    }
+    assert_eq!(rec.steps.len(), crate::record::RECORD_LIMIT);
+    assert_eq!(rec.dropped, 3);
+}
+
+#[test]
+fn record_actions_saves_top_level_steps_without_duplicates() {
+    let mut s = s();
+    let steps = json!([{"command": "cell.set", "params": {"cell": "B1", "input": "from script"}}]);
+    s.execute("automate.newScript", json!({"name": "Inner", "commands": steps})).unwrap();
+    assert_eq!(s.execute("automate.recordActions", json!({})).unwrap(), json!({"recording": true}));
+    assert!(s.is_recording());
+    set(&mut s, "A1", "typed");
+    s.execute("automate.runScript", json!({"name": "Inner"})).unwrap();
+    s.execute("home.bold", json!({"range": "A1"})).unwrap();
+    let r = s.execute("automate.recordActions", json!({"stop": true})).unwrap();
+    assert!(!s.is_recording());
+    assert_eq!(r["saved"], "Script 1");
+    assert_eq!(r["steps"], 3, "{r}");
+    let saved: Vec<String> = {
+        let all = s.execute("automate.allScripts", json!({})).unwrap();
+        all.as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap().to_string()).collect()
+    };
+    assert!(saved.contains(&"Script 1".to_string()));
+    // Playing it back on a new sheet does the same thing.
+    s.execute("home.insertSheet", json!({})).unwrap();
+    assert!(v(&s, "A1").is_empty());
+    s.execute("automate.runScript", json!({"name": "Script 1"})).unwrap();
+    assert_eq!(v(&s, "A1").display(), "typed");
+    assert_eq!(v(&s, "B1").display(), "from script");
+    let d = s.doc().unwrap();
+    assert!(d.wb.styles.get(d.wb.active().unwrap().style_id(gridcraft_core::CellRef::parse("A1").unwrap())).font.bold);
+}

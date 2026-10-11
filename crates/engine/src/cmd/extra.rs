@@ -162,7 +162,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "data.queriesConnections", "Queries & Connections", ["Data", "Queries & Connections"], None, "{} → imported tables", has_doc, queries),
         // Automate
-        cmd!(noundo "automate.recordActions", "Record Actions", ["Automate", "Scripting Tools"], None, "{stop?: bool, name?: script name when stopping}", has_doc, record),
+        cmd!(noundo "automate.recordActions", "Record Actions", ["Automate", "Scripting Tools"], None, "{stop?: bool, name?: script name when stopping} records top-level commands only; stopping saves them as a script → {saved, steps, dropped}", has_doc, record),
         cmd!(
             "automate.newScript",
             "New Script",
@@ -780,15 +780,30 @@ fn queries(s: &mut Session, _: &Json) -> Result<Json> {
 }
 
 fn record(s: &mut Session, p: &Json) -> Result<Json> {
-    if bool_param(p, "stop").unwrap_or(false) || s.recording.is_some() {
-        let Some(start) = s.recording.take() else { return Ok(json!({"recording": false})) };
-        let cmds: Vec<Json> =
-            s.journal.iter().skip(start).filter(|(id, _)| !id.starts_with("automate.")).map(|(id, p)| json!({"command": id, "params": p})).collect();
-        let name = str_param(p, "name").map(str::to_string).unwrap_or_else(|| format!("Script {}", start));
+    if bool_param(p, "stop").unwrap_or(false) || s.is_recording() {
+        let Some(rec) = s.stop_recording() else { return Ok(json!({"recording": false})) };
+        let scripts = stash_get(&s.doc()?.wb, SCRIPTS_NAME);
+        let mut cmds: Vec<Json> = Vec::new();
+        for st in &rec.steps {
+            if st.id == "automate.runScript" {
+                // A script run while recording is recorded as its steps, so the new script stands
+                // on its own (scripts never run other scripts).
+                let inner = st.params["name"].as_str().and_then(|n| scripts.get(n)).and_then(Json::as_array);
+                let inner = inner.into_iter().flatten().filter(|x| !x["command"].as_str().unwrap_or("").starts_with("automate."));
+                cmds.extend(inner.map(|x| json!({"command": x["command"], "params": x["params"]})));
+            } else if !st.id.starts_with("automate.") {
+                cmds.push(json!({"command": st.id, "params": st.params}));
+            }
+        }
+        cmds.truncate(crate::record::RECORD_LIMIT);
+        let name = match str_param(p, "name") {
+            Some(n) => n.to_string(),
+            None => (1..).map(|n| format!("Script {n}")).find(|n| scripts.get(n).is_none()).unwrap_or_else(|| "Script".into()),
+        };
         s.execute("automate.newScript", json!({"name": name, "commands": cmds}))?;
-        return Ok(json!({"recording": false, "saved": name, "steps": cmds.len()}));
+        return Ok(json!({"recording": false, "saved": name, "steps": cmds.len(), "dropped": rec.dropped}));
     }
-    s.recording = Some(s.journal.len());
+    s.start_recording();
     Ok(json!({"recording": true}))
 }
 

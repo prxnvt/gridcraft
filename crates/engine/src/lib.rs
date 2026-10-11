@@ -16,6 +16,7 @@ pub mod io;
 pub mod job;
 pub mod pivot;
 pub mod pivot_formula;
+pub mod record;
 pub mod report;
 pub mod sample;
 pub mod selection;
@@ -229,8 +230,10 @@ pub struct Session {
     pub last_find: Option<Json>,
     /// Workbook view: normal, pageLayout or pageBreakPreview.
     pub view_mode: String,
-    /// Journal position where action recording started.
-    pub recording: Option<usize>,
+    /// The action recorder, while recording (top-level commands only; see [`record`]).
+    pub recorder: Option<record::Recorder>,
+    /// How many `execute` calls are running (0 between top-level commands).
+    depth: u32,
     /// Windows hidden with View › Hide.
     pub hidden_windows: Vec<usize>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
@@ -319,7 +322,14 @@ impl Session {
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         let (first_group, group_epoch) = (self.next_group, self.group_epoch);
+        // The recorder keeps top-level calls with the place they ran in.
+        let recording = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
+            Some(d) => (d.uid, d.wb.active_sheet, d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
+            None => (0, 0, String::new(), Selection::default()),
+        });
+        self.depth = self.depth.saturating_add(1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
+        self.depth = self.depth.saturating_sub(1);
         let result = match result {
             Ok(r) => r,
             Err(p) => {
@@ -338,6 +348,13 @@ impl Session {
             }
         };
         if spec.journal && result.is_ok() {
+            // A command that started recording isn't part of the recording; one that stopped it
+            // finds no recorder.
+            if let Some((doc, sheet, sheet_name, selection)) = recording
+                && let Some(rec) = self.recorder.as_mut()
+            {
+                rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params: params.clone() });
+            }
             self.journal.push((id.to_string(), params.clone()));
             if self.journal.len() > 10_000 {
                 self.journal.drain(..5_000);
@@ -438,6 +455,26 @@ impl Session {
         d.redo = g.redo;
         d.revision += 1;
         Ok(())
+    }
+
+    /// Starts recording top-level commands (an empty buffer, replacing any recording in progress).
+    pub fn start_recording(&mut self) {
+        self.recorder = Some(record::Recorder::default());
+    }
+
+    /// Stops recording and hands back what was recorded (`None` if nothing was recording).
+    pub fn stop_recording(&mut self) -> Option<record::Recorder> {
+        self.recorder.take()
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.recorder.is_some()
+    }
+
+    /// How many commands are running: 0 between top-level commands, 1 inside one, 2 inside a
+    /// command run by a command, and so on.
+    pub fn depth(&self) -> u32 {
+        self.depth
     }
 
     /// Whether an undo group is open on the document with this uid.
