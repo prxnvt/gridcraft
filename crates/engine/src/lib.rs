@@ -108,6 +108,35 @@ pub struct Clipboard {
     pub doc_uid: u64,
     /// Plain text (tab-separated) for the system clipboard.
     pub text: String,
+    /// Trust of the source document: pasting from a file someone else made carries that along.
+    pub trust: Trust,
+}
+
+/// Whether a document's active content (Python cells, macros) may run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Trust {
+    /// Made here (a new workbook or a sample).
+    #[default]
+    Local,
+    /// Opened from a file, or holds content pasted from one: nothing active runs until the person
+    /// enables it.
+    FromFile,
+    /// Opened from a file, and the person enabled its content.
+    Trusted,
+}
+
+impl Trust {
+    /// Whether active content may run without asking.
+    pub fn allows_code(self) -> bool {
+        self != Trust::FromFile
+    }
+
+    /// The trust of a document after it receives content from a document with trust `source`:
+    /// content from an untrusted file keeps it untrusted.
+    pub fn receive(self, source: Trust) -> Trust {
+        if source == Trust::FromFile { Trust::FromFile } else { self }
+    }
 }
 
 /// In-cell edit mode as shown in the status bar.
@@ -134,6 +163,8 @@ pub struct DocState {
     pub title: String,
     /// Per-sheet selection memory.
     pub sheet_selections: Vec<Selection>,
+    /// Whether the workbook's active content may run.
+    pub trust: Trust,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -157,6 +188,7 @@ impl DocState {
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             title,
             sheet_selections: vec![],
+            trust: Trust::Local,
         }
     }
     pub fn is_dirty(&self) -> bool {

@@ -36,8 +36,192 @@ impl FileKind {
 }
 
 /// Parses a file's bytes into a workbook. `name` picks the format by extension when the bytes
-/// don't say.
+/// don't say. Whatever the format, content over the [`LOAD_LIMITS`] is dropped with a warning.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, mut warnings) = read_bytes(name, bytes)?;
+    warnings.extend(enforce_limits(&mut wb, &LOAD_LIMITS));
+    Ok((wb, warnings))
+}
+
+/// What a file may hold. A file is somebody else's work: these keep a crafted one from handing
+/// the engine (or the Python and macro runners) more than they are built to take.
+#[derive(Clone, Copy, Debug)]
+pub struct LoadLimits {
+    /// Characters in a cell formula (Excel's limit is 8,192).
+    pub formula_len: usize,
+    /// Levels of parentheses in a cell or name formula (Excel nests functions 64 deep).
+    pub formula_nesting: usize,
+    /// Characters of Python code in a `PY(…)` cell formula.
+    pub python_code: usize,
+    /// Characters in a defined name's formula, other than GridCraft's hidden data names.
+    pub name_formula_len: usize,
+    /// Characters of one item of GridCraft's hidden data (all its `_gc_<key>_<k>` names together,
+    /// or one older `_sc_<key>` name).
+    pub stash_len: usize,
+    /// Macros (`_gc_macro_<n>` items) in one workbook.
+    pub macros: usize,
+}
+
+pub const LOAD_LIMITS: LoadLimits =
+    LoadLimits { formula_len: 8_192, formula_nesting: 64, python_code: 7_000, name_formula_len: 8_192, stash_len: 4 * 1024 * 1024, macros: 1_000 };
+
+/// Drops what is over `limits` (a cell keeps its cached value without the formula; a name or
+/// hidden data item is removed) and says what was dropped.
+pub fn enforce_limits(wb: &mut Workbook, limits: &LoadLimits) -> Vec<String> {
+    let mut warnings = Vec::new();
+    // Cell formulas: too long, too deeply nested, or a Python cell with too much code.
+    let (mut long, mut deep, mut python) = (Vec::new(), Vec::new(), Vec::new());
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let mut over = Vec::new();
+        for (c, cell) in sh.cells.iter() {
+            let Some(f) = cell.formula.as_ref() else { continue };
+            let why = formula_problem(&f.text, limits);
+            if let Some(why) = why {
+                let at = format!("{}!{}", sh.name, c.a1());
+                match why {
+                    Over::Length => long.push(at),
+                    Over::Nesting => deep.push(at),
+                    Over::Python => python.push(at),
+                }
+                over.push(c);
+            }
+        }
+        if over.is_empty() {
+            continue;
+        }
+        if let Some(sh) = wb.sheets.get_mut(si) {
+            let sh = std::sync::Arc::make_mut(sh);
+            for c in over {
+                if let Some(cell) = sh.cells.get_mut(c) {
+                    cell.formula = None;
+                }
+            }
+        }
+    }
+    let mut report = |cells: Vec<String>, what: String| {
+        if let Some(first) = cells.first() {
+            let more = if cells.len() > 1 { format!(" (and {} more)", cells.len() - 1) } else { String::new() };
+            warnings.push(format!("{what}, so {first}{more} kept only its last calculated value."));
+        }
+    };
+    report(long, format!("A formula is longer than {} characters", thousands(limits.formula_len)));
+    report(deep, format!("A formula nests more than {} levels deep", limits.formula_nesting));
+    report(python, format!("A Python cell holds more than {} characters of code", thousands(limits.python_code)));
+
+    // Defined names, and GridCraft's hidden data kept in names.
+    let mut dropped = Vec::new();
+    let mut stash_len: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for n in &wb.names {
+        if let Some(key) = stash_key(&n.name) {
+            let len = stash_len.entry(key).or_default();
+            *len = len.saturating_add(n.formula.chars().count());
+        }
+    }
+    let too_big: std::collections::HashSet<String> = stash_len.iter().filter(|(_, len)| **len > limits.stash_len).map(|(k, _)| k.clone()).collect();
+    let mut macros: Vec<(u64, String)> =
+        stash_len.keys().filter_map(|k| k.strip_prefix("macro_").and_then(|n| n.parse::<u64>().ok()).map(|n| (n, k.clone()))).collect();
+    macros.sort();
+    let extra_macros: std::collections::HashSet<String> = macros.into_iter().skip(limits.macros).map(|(_, k)| k).collect();
+    wb.names.retain(|n| {
+        let keep = match stash_key(&n.name) {
+            Some(key) => !too_big.contains(&key) && !extra_macros.contains(&key),
+            None => n.formula.chars().count() <= limits.name_formula_len && nesting(&n.formula) <= limits.formula_nesting,
+        };
+        if !keep {
+            dropped.push(n.name.clone());
+        }
+        keep
+    });
+    if !extra_macros.is_empty() {
+        warnings.push(format!("The workbook has more than {} macros; {} were not opened.", thousands(limits.macros), extra_macros.len()));
+    }
+    if !too_big.is_empty() {
+        let mut keys: Vec<&String> = too_big.iter().collect();
+        keys.sort();
+        warnings.push(format!(
+            "GridCraft data in the workbook ({}) is larger than {} MB and was not opened.",
+            keys.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", "),
+            limits.stash_len / (1024 * 1024)
+        ));
+    }
+    let plain: Vec<&String> = dropped.iter().filter(|n| stash_key(n).is_none()).collect();
+    if let Some(first) = plain.first() {
+        let more = if plain.len() > 1 { format!(" and {} more", plain.len() - 1) } else { String::new() };
+        warnings.push(format!(
+            "The name {first}{more} refers to a formula longer than {} characters or nested more than {} levels deep, and was removed.",
+            thousands(limits.name_formula_len),
+            limits.formula_nesting
+        ));
+    }
+    warnings
+}
+
+enum Over {
+    Length,
+    Nesting,
+    Python,
+}
+
+fn formula_problem(text: &str, limits: &LoadLimits) -> Option<Over> {
+    // Count only up to the limit: a formula can be megabytes long.
+    if text.chars().nth(limits.formula_len).is_some() {
+        return Some(Over::Length);
+    }
+    if nesting(text) > limits.formula_nesting {
+        return Some(Over::Nesting);
+    }
+    let body = text.trim_start().trim_start_matches('=');
+    let body = body.strip_prefix("_xlfn.").unwrap_or(body);
+    if body.get(..3).is_some_and(|h| h.eq_ignore_ascii_case("PY(")) && crate::cmd::whatif::string_literals(body).chars().count() > limits.python_code
+    {
+        return Some(Over::Python);
+    }
+    None
+}
+
+/// The deepest parenthesis nesting outside string literals and quoted sheet names.
+fn nesting(f: &str) -> usize {
+    let (mut depth, mut max, mut quote) = (0usize, 0usize, None::<char>);
+    for c in f.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(') => {
+                depth = depth.saturating_add(1);
+                max = max.max(depth);
+            }
+            (None, ')') => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    max
+}
+
+/// The GridCraft data item a hidden name belongs to: `_gc_<key>_<k>` → `<key>`, `_sc_<key>` → `<key>`.
+fn stash_key(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("_gc_") {
+        let (key, k) = rest.rsplit_once('_')?;
+        return (!key.is_empty() && !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit())).then(|| key.to_string());
+    }
+    lower.strip_prefix("_sc_").filter(|k| !k.is_empty()).map(str::to_string)
+}
+
+fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn read_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Encrypted {

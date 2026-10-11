@@ -4,7 +4,7 @@
 use serde_json::json;
 
 use super::{s, v};
-use crate::{EngineError, Session};
+use crate::{EngineError, Session, Trust};
 
 fn undo_labels(s: &Session) -> Vec<String> {
     s.doc().unwrap().undo.iter().map(|e| e.label.clone()).collect()
@@ -302,4 +302,149 @@ fn record_actions_saves_top_level_steps_without_duplicates() {
     assert_eq!(v(&s, "B1").display(), "from script");
     let d = s.doc().unwrap();
     assert!(d.wb.styles.get(d.wb.active().unwrap().style_id(gridcraft_core::CellRef::parse("A1").unwrap())).font.bold);
+}
+
+// ---------------------------------------------------------------- trust
+
+fn open_json(s: &mut Session, wb: &gridcraft_model::Workbook) {
+    let bytes = serde_json::to_vec(wb).unwrap();
+    s.execute("file.open", json!({"name": "theirs.json", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+}
+
+fn trust(s: &Session) -> Trust {
+    s.doc().unwrap().trust
+}
+
+#[test]
+fn documents_know_where_they_came_from() {
+    let mut s = s();
+    assert_eq!(trust(&s), Trust::Local);
+    assert!(Trust::Local.allows_code() && Trust::Trusted.allows_code() && !Trust::FromFile.allows_code());
+    s.execute("file.new", json!({"sample": "sales"})).unwrap();
+    assert_eq!(trust(&s), Trust::Local);
+    open_json(&mut s, &gridcraft_model::Workbook::new());
+    assert_eq!(trust(&s), Trust::FromFile);
+    assert_eq!(s.execute("document.inspect", json!({})).unwrap()["trust"], "fromFile");
+    // A second window on the same workbook is the same workbook.
+    s.execute("view.newWindow", json!({})).unwrap();
+    assert_eq!(trust(&s), Trust::FromFile);
+    // Moving and copying sheets inside it changes nothing.
+    s.execute("sheet.move", json!({"to": 0, "copy": true})).unwrap();
+    assert_eq!(trust(&s), Trust::FromFile);
+}
+
+#[test]
+fn pasting_from_a_file_carries_its_trust() {
+    let mut s = s(); // doc 0: Local
+    open_json(&mut s, &gridcraft_model::Workbook::new()); // doc 1: FromFile
+    let theirs = s.active_index();
+    set(&mut s, "A1", "=1+1");
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.new_workbook();
+    let mine = s.active_index();
+    // Values carry nothing that runs.
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "B1"})).unwrap();
+    assert_eq!(trust(&s), Trust::Local);
+    s.execute("edit.paste", json!({"at": "C1"})).unwrap();
+    assert_eq!(trust(&s), Trust::FromFile);
+    assert_eq!(v(&s, "C1").display(), "2");
+
+    // Content from a local or trusted workbook leaves the destination as it was.
+    s.set_active(theirs);
+    s.doc_mut().unwrap().trust = Trust::Trusted;
+    set(&mut s, "A2", "=3");
+    s.execute("edit.copy", json!({"range": "A2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A3"})).unwrap();
+    assert_eq!(trust(&s), Trust::Trusted, "pasting within a workbook");
+    s.set_active(mine);
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    assert_eq!(trust(&s), Trust::FromFile, "still untrusted from the earlier paste");
+    s.new_workbook();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    assert_eq!(trust(&s), Trust::Local);
+    assert_eq!(Trust::Trusted.receive(Trust::FromFile), Trust::FromFile);
+    assert_eq!(Trust::Trusted.receive(Trust::Local), Trust::Trusted);
+}
+
+// ---------------------------------------------------------------- load caps
+
+fn formula_cell(text: &str) -> gridcraft_model::Cell {
+    gridcraft_model::Cell {
+        value: gridcraft_core::Value::text("cached"),
+        formula: Some(std::sync::Arc::new(gridcraft_model::Formula::new(text))),
+        style: Default::default(),
+    }
+}
+
+fn name(n: &str, formula: String) -> gridcraft_model::DefinedName {
+    gridcraft_model::DefinedName { name: n.into(), scope: None, formula, comment: String::new(), hidden: true }
+}
+
+/// A workbook with one of everything over the limits, next to things just under them.
+fn hostile_workbook() -> gridcraft_model::Workbook {
+    let mut wb = gridcraft_model::Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let cell = |a: &str| gridcraft_core::CellRef::parse(a).unwrap();
+    // Long but shallow (a long `1+1+…` chain is deep, and that is another matter).
+    sh.set_cell(cell("A1"), formula_cell(&format!("LEN(\"{}\")", "a".repeat(8_190)))); // 8,197 characters
+    sh.set_cell(cell("A2"), formula_cell(&format!("LEN(\"{}\")", "a".repeat(8_000)))); // 8,007: fine
+    sh.set_cell(cell("B1"), formula_cell(&format!("{}1{}", "(".repeat(65), ")".repeat(65))));
+    sh.set_cell(cell("B2"), formula_cell(&format!("{}1{}", "(".repeat(64), ")".repeat(64))));
+    // Parentheses inside text and quoted sheet names don't count.
+    sh.set_cell(cell("B3"), formula_cell(&format!("LEN(\"{}\")", "(".repeat(100))));
+    let chunks = |n: usize| vec![format!("\"{}\"", "x".repeat(250)); n.div_ceil(250)].join("&");
+    sh.set_cell(cell("C1"), formula_cell(&format!("PY({}&\"y\",0)", chunks(7_000))));
+    sh.set_cell(cell("C2"), formula_cell(&format!("PY({},0)", chunks(7_000))));
+    wb.names.push(name("LongName", format!("\"{}\"", "z".repeat(9_000))));
+    wb.names.push(name("ShortName", "1".into()));
+    wb.names.push(name("_gc_blob_0", format!("\"{}\"", "b".repeat(6_000))));
+    wb.names.push(name("_gc_blob_1", format!("\"{}\"", "b".repeat(6_000))));
+    wb.names.push(name("_gc_small_0", "\"ok\"".into()));
+    wb.names.push(name("_sc_scripts", format!("\"{}\"", "s".repeat(20_000))));
+    for i in 0..5 {
+        wb.names.push(name(&format!("_gc_macro_{i}_0"), "\"{}\"".into()));
+    }
+    wb
+}
+
+#[test]
+fn load_limits_drop_what_is_over_and_keep_the_rest() {
+    let mut wb = hostile_workbook();
+    let limits = crate::io::LoadLimits { stash_len: 11_000, macros: 3, ..crate::io::LOAD_LIMITS };
+    let warnings = crate::io::enforce_limits(&mut wb, &limits);
+    let sh = wb.sheet(0).unwrap();
+    let has_formula = |a: &str| sh.cell(gridcraft_core::CellRef::parse(a).unwrap()).unwrap().formula.is_some();
+    for (a, kept) in [("A1", false), ("A2", true), ("B1", false), ("B2", true), ("B3", true), ("C1", false), ("C2", true)] {
+        assert_eq!(has_formula(a), kept, "{a}");
+    }
+    assert_eq!(sh.value(gridcraft_core::CellRef::parse("A1").unwrap()).display(), "cached", "the cached value stays");
+    let names: Vec<&str> = wb.names.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(names, ["ShortName", "_gc_small_0", "_gc_macro_0_0", "_gc_macro_1_0", "_gc_macro_2_0"]);
+    let all = warnings.join("\n");
+    for needle in
+        ["longer than 8,192 characters, so Sheet1!A1 kept", "more than 64 levels", "Python cell", "LongName", "blob, scripts", "3 macros; 2 were"]
+    {
+        assert!(all.contains(needle), "missing `{needle}` in:\n{all}");
+    }
+}
+
+#[test]
+fn load_limits_apply_to_every_format() {
+    let wb = hostile_workbook();
+    let json = serde_json::to_vec(&wb).unwrap();
+    let xlsx = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    for (file, bytes) in [("hostile.json", json), ("hostile.xlsx", xlsx)] {
+        let (wb, warnings) = crate::io::open_bytes(file, &bytes).unwrap();
+        let sh = wb.sheet(0).unwrap();
+        let formula = |a: &str| sh.cell(gridcraft_core::CellRef::parse(a).unwrap()).and_then(|c| c.formula.clone());
+        assert!(formula("A1").is_none() && formula("B1").is_none() && formula("C1").is_none(), "{file}");
+        assert!(formula("A2").is_some() && formula("C2").is_some(), "{file}");
+        assert!(!wb.names.iter().any(|n| n.name == "LongName"), "{file}");
+        assert!(warnings.len() >= 4, "{file}: {warnings:?}");
+    }
+    // Text formats go through the same checks; they only ever hold values.
+    let csv = format!("\"=LEN(\"\"{}\"\")\"\n=2\n", "a".repeat(8_190));
+    let (wb, warnings) = crate::io::open_bytes("hostile.csv", csv.as_bytes()).unwrap();
+    assert!(wb.sheet(0).unwrap().cells.iter().all(|(_, c)| c.formula.is_none()));
+    assert!(warnings.is_empty(), "{warnings:?}");
 }

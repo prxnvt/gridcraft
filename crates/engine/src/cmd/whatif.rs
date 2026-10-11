@@ -338,7 +338,7 @@ pub(crate) fn load_scenarios(wb: &Workbook) -> Vec<Scenario> {
 }
 
 /// Concatenates the string literals of a `"a"&"b""c"` formula.
-fn string_literals(f: &str) -> String {
+pub(crate) fn string_literals(f: &str) -> String {
     let mut out = String::new();
     let mut it = f.chars().peekable();
     let mut in_str = false;
