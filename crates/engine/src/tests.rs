@@ -1634,5 +1634,6 @@ fn notes_comments_and_links_survive_a_json_save() {
     assert_eq!(after.cells, before.cells);
 }
 
+mod macros;
 mod objects;
 mod seams;

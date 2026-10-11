@@ -54,6 +54,9 @@ pub enum EngineError {
     /// The command would replace something; run it again with `overwrite: true` to go ahead.
     #[error("confirm: {0} (run again with `overwrite: true`)")]
     Confirm(String),
+    /// Active content (a macro) asks to run; run again with `approve: true` to allow it.
+    #[error("approve: {0} (run again with `approve: true`)")]
+    Approve(String),
     #[error("internal error in `{0}` (the workbook was kept as it was): {1}")]
     Internal(String, String),
 }
@@ -265,6 +268,8 @@ pub struct Session {
     pub view_mode: String,
     /// The action recorder, while recording (top-level commands only; see [`record`]).
     pub recorder: Option<record::Recorder>,
+    /// Macros the person allowed to run this session: (document uid, macro content hash).
+    pub macro_approvals: std::collections::HashSet<(u64, u64)>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
     /// Windows hidden with View › Hide.
