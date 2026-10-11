@@ -1022,6 +1022,11 @@ pub fn begin(s: &mut Session, name: &str, p: &Json) -> Result<Begun> {
         .ok_or_else(|| EngineError::Other(format!("There is no macro called “{name}”.")))?;
     let asks = gate(&m, trust)?;
     approve(s, &m, doc, &asks, p.get("approve").and_then(Json::as_bool).unwrap_or(false))?;
+    // A button can send the output elsewhere than the macro's own anchor.
+    let mut m = m;
+    if let Some(o) = p.get("output").and_then(Json::as_str).map(str::trim).filter(|o| !o.is_empty()) {
+        m.output.anchor = Some(o.to_string());
+    }
     let prepared = prepare(s, &m, p.get("inputs"))?;
     let rule = conflict_rule(p, &m)?;
     let time_limit_ms = p.get("timeLimit").and_then(Json::as_f64).map(|t| (t * 1000.0).clamp(1.0, 600_000.0)).unwrap_or(DEFAULT_TIME_LIMIT_MS);

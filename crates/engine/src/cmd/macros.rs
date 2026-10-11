@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Run Macro",
             ["Automate", "Macros"],
             None,
-            "{name, inputs?: {Input: \"B2:D9\"} | \"B2:D9\", onConflict?: ask|fail|overwrite|shiftDown|shiftRight, approve?: bool, timeLimit?: seconds} runs as one undo step; any error rolls it all back → {macro, ran, inputs, stopped?, shifted?}",
+            "{name, inputs?: {Input: \"B2:D9\"} | \"B2:D9\", output?: \"F2\" (instead of the macro's output anchor), onConflict?: ask|fail|overwrite|shiftDown|shiftRight, approve?: bool, timeLimit?: seconds} runs as one undo step; any error rolls it all back → {macro, ran, inputs, stopped?, shifted?}",
             has_doc,
             run
         ),
@@ -167,7 +167,21 @@ fn rename(s: &mut Session, p: &Json) -> Result<Json> {
         let mut renamed = m.clone();
         renamed.name = to.clone();
         renamed.check_limits().map_err(EngineError::Other)?;
-        *m = renamed;
+        let from = std::mem::replace(m, renamed).name;
+        // Buttons that run the macro follow the new name.
+        for si in 0..cx.wb.sheets.len() {
+            let runs = |c: &gridcraft_model::FormControl| matches!(&c.action, Some(gridcraft_model::ControlAction::Macro { name, .. }) if name.eq_ignore_ascii_case(&from));
+            if !cx.wb.sheet(si).is_some_and(|sh| sh.controls.iter().any(runs)) {
+                continue;
+            }
+            for c in cx.sheet_mut(si)?.controls.iter_mut() {
+                if let Some(gridcraft_model::ControlAction::Macro { name, .. }) = &mut c.action
+                    && name.eq_ignore_ascii_case(&from)
+                {
+                    *name = to.clone();
+                }
+            }
+        }
         Ok(())
     })?;
     Ok(json!({"name": to}))

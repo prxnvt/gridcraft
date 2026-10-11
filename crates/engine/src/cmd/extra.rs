@@ -474,12 +474,9 @@ fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
     }
     // Controls stack above everything else.
     for c in &sh.controls {
-        let name = match c.kind {
-            ControlKind::Button => "Button",
-            ControlKind::Slider => "Slider",
-            ControlKind::Spin => "Spin Button",
-        };
-        v.push(json!({"kind": "control", "id": c.id, "name": format!("{name} {}", c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
+        v.push(
+            json!({"kind": "control", "id": c.id, "name": c.display_name(), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}),
+        );
     }
     Ok(Json::Array(v))
 }

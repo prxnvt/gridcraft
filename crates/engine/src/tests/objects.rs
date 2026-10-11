@@ -34,7 +34,7 @@ pub(super) fn add_equation(s: &mut Session, i: usize, cell: &str, latex: &str) -
 /// A form control on sheet `i`; the commands that make one come later.
 pub(super) fn add_control(s: &mut Session, i: usize, cell: &str, kind: ControlKind, link: Option<&str>) -> u32 {
     let id = s.doc().unwrap().wb.next_object_id();
-    let control = FormControl { id, kind, anchor: anchor(cell), text: String::new(), link: link.map(str::to_string) };
+    let control = FormControl { id, kind, anchor: anchor(cell), link: link.map(str::to_string), ..Default::default() };
     sheet_mut(s, i).controls.push(control);
     id
 }

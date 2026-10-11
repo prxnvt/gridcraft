@@ -57,14 +57,20 @@ fn fixture() -> (Harness, Objects) {
     });
     let button = wb.next_object_id();
     let sh = wb.sheet_mut(0).unwrap();
-    sh.controls.push(FormControl { id: button, kind: ControlKind::Button, anchor: anchor("L11", 90.0, 28.0), text: "Run".into(), link: None });
+    sh.controls.push(FormControl {
+        id: button,
+        kind: ControlKind::Button,
+        anchor: anchor("L11", 90.0, 28.0),
+        text: "Run".into(),
+        ..Default::default()
+    });
     let slider = button + 1;
     sh.controls.push(FormControl {
         id: slider,
         kind: ControlKind::Slider,
         anchor: anchor("D5", 120.0, 20.0),
-        text: String::new(),
         link: Some("$B$1".into()),
+        ..Default::default()
     });
     let objs = Objects {
         chart: ObjRef::new(ObjKind::Chart, chart),
