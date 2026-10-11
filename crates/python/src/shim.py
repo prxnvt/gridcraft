@@ -13,6 +13,7 @@ import json
 import math
 import os
 import queue
+import signal
 import sys
 import threading
 import time
@@ -33,6 +34,9 @@ EPOCH = _dt.datetime(1899, 12, 30)
 _frames = os.fdopen(os.dup(1), "w", encoding="utf-8", newline="\n")
 os.dup2(2, 1)
 _inbox = queue.Queue()
+# The time limit interrupts the main thread through SIGINT's handler; a parent started with SIGINT
+# ignored (a background job) passes that on, and Python then leaves the handler out.
+signal.signal(signal.SIGINT, signal.default_int_handler)
 
 
 def _read_input():

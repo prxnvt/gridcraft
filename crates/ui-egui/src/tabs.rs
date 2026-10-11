@@ -201,6 +201,8 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     let text = if progress.is_empty() { format!("{label}…") } else { format!("{label}: {progress}") };
                     ui.label(egui::RichText::new(text).font(theme::ui_font(12.5)).color(t.text_dim));
                 }
+                // Which Python runs cells, on workbooks that have them.
+                crate::python_ui::status(app, ui);
                 // Python cells running in the background, with a Stop button (Esc does the same).
                 if app.session.python_busy() {
                     ui.add_space(12.0);

@@ -313,12 +313,11 @@ fn the_bar_shows_five_lines_of_code_then_scrolls() {
 }
 
 #[test]
-fn f2_points_at_cells_and_inserts_xl_calls() {
+fn clicking_the_sheet_inserts_xl_calls_and_never_commits_and_f2_toggles_it() {
     let mut h = harness();
     key_with(&mut h, Key::P, PY_SHORTCUT);
     text(&mut h, "df = ");
-    // Without F2, clicking a cell commits (as it does for a formula) — so turn pointing on first.
-    key(&mut h, Key::F2);
+    // Like a formula's point mode: pointing is on from the start of Python mode.
     assert!(h.state().editor.as_ref().is_some_and(|e| e.py_point));
     let (b2, c6) = (cell_center(&h, "B2"), cell_center(&h, "C6"));
     drag(&mut h, b2, c6);
@@ -327,9 +326,19 @@ fn f2_points_at_cells_and_inserts_xl_calls() {
     let d1 = cell_center(&h, "D1");
     click_at(&mut h, d1);
     assert_eq!(editor_text(&h), "df = xl(\"D1\")", "a click replaces the call just inserted");
-    // F2 again: pointing off; xl() references are still outlined in their colours.
+    // F2 turns pointing off: a click on the sheet then does nothing, and never commits the code.
     key(&mut h, Key::F2);
     assert!(h.state().editor.as_ref().is_some_and(|e| !e.py_point));
+    let e5 = cell_center(&h, "E5");
+    click_at(&mut h, e5);
+    assert!(python_mode(&h), "still editing");
+    assert_eq!(editor_text(&h), "df = xl(\"D1\")");
+    assert_eq!(code(&h, "A1"), None, "nothing was committed");
+    // F2 again: pointing is back.
+    key(&mut h, Key::F2);
+    text(&mut h, " + ");
+    click_at(&mut h, e5);
+    assert_eq!(editor_text(&h), "df = xl(\"D1\") + xl(\"E5\")");
 }
 
 /// This test binary started again as a worker process, so Stop has a real process to kill.

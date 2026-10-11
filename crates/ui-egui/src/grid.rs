@@ -1363,6 +1363,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             return;
         }
+        // Python mode with pointing turned off (F2): a click on the sheet never commits the code.
+        if let Some(ed) = app.editor.as_mut().filter(|e| e.python) {
+            ed.request_focus = true;
+            return;
+        }
         if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
             return;
         }

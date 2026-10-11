@@ -1733,6 +1733,9 @@ fn python_group(app: &mut SheetApp, ui: &mut Ui) {
         if item(ui, "Initialization…") {
             app.open_dialog("pythonInitialization", json!({}));
         }
+        if item(ui, "Python Options…") {
+            app.open_dialog("pythonOptions", json!({}));
+        }
         if item(ui, "Python in GridCraft") {
             app.message = Some(("Python in GridCraft".into(), PYTHON_HELP.into()));
         }
@@ -1776,6 +1779,9 @@ fn python_menu(app: &mut SheetApp, ui: &mut Ui) {
     if item(ui, "Initialization…") {
         app.open_dialog("pythonInitialization", json!({}));
     }
+    if item(ui, "Python Options…") {
+        app.open_dialog("pythonOptions", json!({}));
+    }
     ui.separator();
     menu_items(
         app,
@@ -1797,10 +1803,12 @@ fn python_menu(app: &mut SheetApp, ui: &mut Ui) {
 
 const PYTHON_HELP: &str = "A Python cell holds Python code instead of a formula. Type =PY and press Tab, press Ctrl+Alt+Shift+P, or choose Insert Python. \
 In Python mode, Enter starts a new line and Ctrl+Enter (Cmd+Enter on a Mac) puts the code in the cell. \
-xl(\"A1:B5\") reads cells (press F2, then click or drag on the sheet to insert one); headers=True gives a list of dicts. \
-The last expression is the cell's result: a list or a list of lists spills into the cells around it. \
+xl(\"A1:B5\") reads cells (click or drag on the sheet to insert one; F2 turns that off and on); headers=True gives a header row. \
+The last expression is the cell's result: a list, a list of lists or a pandas DataFrame spills into the cells around it. \
 Python cells share one namespace and run in order, row by row and sheet by sheet. \
-Python runs in a sandbox with no file or network access, and each cell may run for 5 seconds. Esc stops cells that are running.";
+When Python 3.11 or newer is installed, cells run on it, with its packages (pandas, numpy) and full access to your files and network; \
+otherwise they run on the built-in Python, a sandboxed subset with no packages. Python Options shows which one and lets you choose. \
+Each cell may run for 5 seconds (a setting in Python Options). Esc stops cells that are running.";
 
 fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);

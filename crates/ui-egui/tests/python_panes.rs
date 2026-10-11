@@ -1,4 +1,5 @@
-//! The Python Diagnostics pane, the Initialization dialog and the Enable Python bar.
+//! The Python Diagnostics pane, the Initialization and Python Options dialogs, the Enable Python
+//! bar and the status bar note of which Python runs cells.
 
 use egui_kittest::kittest::Queryable;
 use gridcraft_engine::core::{CellError, CellRef, Value};
@@ -155,4 +156,115 @@ fn the_enable_bar_can_be_dismissed() {
     h.run_steps(2);
     assert!(h.query_by_label("Enable Python").is_none());
     assert_eq!(h.state().session.active().unwrap().trust, Trust::FromFile, "dismissing doesn't enable");
+}
+
+fn cpython() -> gridcraft_python::interp::Detection {
+    gridcraft_python::interp::Detection {
+        found: Some(gridcraft_python::interp::Interpreter {
+            program: "/opt/homebrew/bin/python3".into(),
+            args: vec![],
+            version: "3.14.0".into(),
+            pandas: Some("2.2.3".into()),
+            numpy: Some("2.1.0".into()),
+            externally_managed: true,
+            source: "PATH".into(),
+        }),
+        rejected: vec![gridcraft_python::interp::Rejected {
+            path: "/usr/bin/python3".into(),
+            reason: "it is Python 3.9.6; Python cells need 3.11 or newer".into(),
+        }],
+    }
+}
+
+fn builtin() -> gridcraft_python::interp::Detection {
+    gridcraft_python::interp::Detection { found: None, rejected: vec![] }
+}
+
+#[test]
+fn the_diagnostics_header_says_which_python_runs_cells() {
+    let mut h = harness();
+    set(&mut h, "A1", "1");
+    h.state_mut().session.set_python_detection(builtin());
+    h.state_mut().grid.pane = Some(gridcraft_ui_egui::python_ui::PANE.into());
+    h.run_steps(3);
+    assert!(h.query_by_label("Running on the built-in Python (Monty): install Python 3.11+ for packages").is_some());
+    h.state_mut().session.set_python_detection(cpython());
+    h.run_steps(3);
+    assert!(h.query_by_label("Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3").is_some());
+    // The header's Options button opens Python Options.
+    h.get_by_label("Options…").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pythonOptions"));
+}
+
+#[test]
+fn the_enable_bar_text_depends_on_the_python_that_runs_cells() {
+    let mut h = harness();
+    set(&mut h, "A1", "1");
+    h.state_mut().session.active_mut().unwrap().trust = Trust::FromFile;
+    h.state_mut().session.set_python_detection(builtin());
+    h.run_steps(3);
+    assert!(h.query_by_label("Python runs in a sandbox with no file or network access.").is_some());
+    h.state_mut().session.set_python_detection(cpython());
+    h.run_steps(3);
+    assert!(
+        h.query_by_label(
+            "Python cells run with your Python at /opt/homebrew/bin/python3, with full access to your files and network. Enable only for workbooks you trust."
+        )
+        .is_some()
+    );
+    assert!(h.query_by_label("Python runs in a sandbox with no file or network access.").is_none());
+    assert!(h.query_by_label("Enable Python").is_some());
+}
+
+#[test]
+fn the_status_bar_says_which_python_runs_cells() {
+    let mut h = harness();
+    h.run_steps(2);
+    assert!(h.query_by_label("Py: built-in").is_none(), "a workbook without Python shows nothing");
+    set(&mut h, "A1", "1");
+    assert!(h.query_by_label("Py: built-in").is_some(), "an explicit launcher is the built-in Python");
+    h.state_mut().session.set_python_detection(cpython());
+    h.run_steps(3);
+    h.get_by_label("Py: CPython").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pythonOptions"), "clicking it opens Python Options");
+}
+
+#[test]
+fn python_options_shows_the_backend_and_sets_the_interpreter_and_time_limit() {
+    let mut h = harness();
+    h.state_mut().session.set_python_detection(cpython());
+    h.state_mut().run("ui.ribbonTab", json!({"tab": "Formulas"})).unwrap();
+    h.run_steps(3);
+    h.state_mut().open_dialog("pythonOptions", json!({}));
+    h.run_steps(3);
+    for label in
+        ["Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3", "3.14.0", "/opt/homebrew/bin/python3", "2.2.3", "2.1.0", "Not used (1)"]
+    {
+        assert!(h.query_by_label(label).is_some(), "{label}");
+    }
+    assert!(h.query_by_label_contains("managed by your system").is_some(), "the PEP 668 note");
+    // The rejected candidates, with their reasons.
+    h.get_by_label("Not used (1)").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("/usr/bin/python3: it is Python 3.9.6; Python cells need 3.11 or newer").is_some());
+    // OK sets the time limit and the interpreter (which starts a new search).
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("timeoutSeconds".into(), json!(2.5));
+        d.values.insert("interpreter".into(), json!("/nowhere/python3"));
+    }
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.prefs.python_timeout_seconds, 2.5);
+    assert_eq!(h.state().session.prefs.python_interpreter, "/nowhere/python3");
+    // The built-in Python's wording, and Detect Again.
+    h.state_mut().session.set_python_detection(builtin());
+    h.state_mut().open_dialog("pythonOptions", json!({}));
+    h.run_steps(3);
+    assert!(h.query_by_label("Running on the built-in Python (Monty): install Python 3.11+ for packages").is_some());
+    assert!(h.query_by_label_contains("sandbox with no file or network access").is_some());
+    assert!(h.query_by_label("Detect Again").is_some());
 }

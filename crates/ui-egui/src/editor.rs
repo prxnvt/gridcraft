@@ -34,8 +34,8 @@ pub struct EditState {
     /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
     /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
     pub python: bool,
-    /// Python mode's point mode (F2 toggles it): clicking or dragging on the grid inserts
-    /// `xl("A1:B5")`.
+    /// Python mode's point mode, on when Python mode starts (F2 toggles it): clicking or dragging
+    /// on the grid inserts `xl("A1:B5")`. A click on the grid never commits code.
     pub py_point: bool,
     /// The edit left Python mode on a Python cell: committing it empty turns the cell back into a
     /// normal cell (`python.clear`, which undo reverses).
@@ -69,7 +69,7 @@ impl EditState {
 
     /// An edit of a Python cell's code, in the formula bar.
     pub fn python(sheet: usize, cell: CellRef, code: String) -> EditState {
-        EditState { python: true, ..EditState::new(sheet, cell, code, false, true) }
+        EditState { python: true, py_point: true, ..EditState::new(sheet, cell, code, false, true) }
     }
 
     /// Whether the text is a bare `=PY` (or `=PY(`), which enters Python mode on Tab or Enter.
@@ -87,7 +87,7 @@ impl EditState {
             self.text.clear();
         }
         self.python = true;
-        self.py_point = false;
+        self.py_point = true;
         self.py_left = false;
         self.from_formula_bar = true;
         self.enter_mode = false;
@@ -406,7 +406,9 @@ mod tests {
         assert!(e.is_py_trigger());
         e.enter_python();
         assert!(e.python && e.from_formula_bar && e.text.is_empty());
-        assert!(!e.can_point(), "Python mode points only after F2");
+        assert!(e.can_point(), "Python mode points from the start");
+        e.py_point = false;
+        assert!(!e.can_point(), "until F2 turns it off");
         e.text = "df = ".into();
         e.caret = 5;
         e.py_point = true;

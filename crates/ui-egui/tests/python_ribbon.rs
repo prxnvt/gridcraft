@@ -56,12 +56,17 @@ fn insert_python_starts_a_python_cell() {
     h.state_mut().cancel_edit();
     click(&mut h, "Insert Python options");
     click(&mut h, "Python Cell");
-    assert!(h.state().editor.as_ref().is_some_and(|e| e.python && !e.py_point));
+    assert!(h.state().editor.as_ref().is_some_and(|e| e.python && e.py_point), "pointing is on from the start, as in formulas");
     h.state_mut().cancel_edit();
     click(&mut h, "Insert Python options");
     click(&mut h, "Insert xl() Reference");
     assert!(h.state().editor.as_ref().is_some_and(|e| e.python && e.py_point), "Insert xl() Reference turns pointing on");
     h.state_mut().cancel_edit();
+    click(&mut h, "Insert Python options");
+    click(&mut h, "Python Options…");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pythonOptions"));
+    h.state_mut().dialog = None;
+    h.run_steps(2);
     click(&mut h, "Insert Python options");
     click(&mut h, "Python in GridCraft");
     assert!(h.state().message.as_ref().is_some_and(|(t, m)| t == "Python in GridCraft" && m.contains("xl(")));

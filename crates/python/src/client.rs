@@ -887,6 +887,24 @@ mod cpython_tests {
         assert_eq!(value(&w.run_blocking("2 * 21", &mut cells)), Value::Number(42.0), "a fresh worker starts");
     }
 
+    /// A worker started with SIGINT ignored (as children of a background job are) still stops a
+    /// loop with its own timer, rather than waiting for the parent's kill.
+    #[test]
+    #[cfg(unix)]
+    fn the_shim_stops_a_loop_even_when_sigint_is_ignored() {
+        let Some((_, i)) = cpython(Limits::default()) else { return };
+        let Launcher::Process { program, args, .. } = i.launcher() else { panic!("not a process") };
+        let mut wrapped = vec!["-c".to_string(), "trap '' INT; exec \"$0\" \"$@\"".to_string(), program.display().to_string()];
+        wrapped.extend(args);
+        let launcher = Launcher::Process { program: "/bin/sh".into(), args: wrapped, env: vec![] };
+        let mut w = PyWorker::new(launcher, Limits { timeout_ms: 500, ..Limits::default() }, String::new());
+        assert_eq!(value(&w.run_blocking("n = 1\nn", &mut cells)), Value::Number(1.0));
+        let o = w.run_blocking("while True: pass", &mut cells);
+        assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
+        assert!(w.alive(), "the shim stopped it; the parent didn't have to kill the worker");
+        assert_eq!(value(&w.run_blocking("n", &mut cells)), Value::Number(1.0));
+    }
+
     #[test]
     fn a_kill_stops_the_processes_a_cell_started() {
         let Some((mut w, _)) = cpython(Limits::default()) else { return };
