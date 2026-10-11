@@ -1294,9 +1294,17 @@ impl Macro {
         if self.inputs.len() > 64 {
             return Err("A macro can declare at most 64 inputs.".into());
         }
-        for i in &self.inputs {
-            if i.name.trim().is_empty() || i.name.chars().count() > MAX_MACRO_NAME {
-                return Err("Every input needs a name of at most 255 characters.".into());
+        for (k, i) in self.inputs.iter().enumerate() {
+            let n = i.name.as_str();
+            let ident = n.chars().next().is_some_and(char::is_alphabetic) && n.chars().all(|c| c.is_alphanumeric() || c == '_');
+            if !ident || n.chars().count() > MAX_MACRO_NAME {
+                return Err(format!("“{n}” can't name an input: use letters, digits and _, starting with a letter."));
+            }
+            if ["Output", "Row", "Column", "Name"].iter().any(|r| r.eq_ignore_ascii_case(n)) {
+                return Err(format!("“{n}” is a token of its own and can't name an input."));
+            }
+            if self.inputs.iter().take(k).any(|o| o.name.eq_ignore_ascii_case(n)) {
+                return Err(format!("Two inputs are called “{n}”."));
             }
         }
         Ok(())

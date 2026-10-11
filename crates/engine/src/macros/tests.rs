@@ -76,6 +76,9 @@ fn macros_over_the_limits_are_refused() {
         json!({"name": "A", "steps": [{"type": "nope"}]}),
         json!({"name": "A", "steps": [{"type": "if", "cell": "A1", "op": "between"}]}),
         json!({"name": "A", "inputs": [{"name": ""}]}),
+        json!({"name": "A", "inputs": [{"name": "Has space"}]}),
+        json!({"name": "A", "inputs": [{"name": "row"}]}),
+        json!({"name": "A", "inputs": [{"name": "In"}, {"name": "IN"}]}),
         json!({"name": "A", "output": {"onConflict": "explode"}}),
         json!([]),
     ] {
