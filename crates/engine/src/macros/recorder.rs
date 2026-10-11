@@ -24,14 +24,18 @@ use crate::record::RecordedStep;
 const NEAR_ROWS: u32 = 50;
 const NEAR_COLS: u32 = 26;
 
-/// Where recording started, kept beside the buffer.
-#[derive(Clone, Debug)]
+/// Where recording started, kept beside the buffer, with what the Record Macro dialog said the
+/// macro should be (its name, shortcut and description), applied when recording stops.
+#[derive(Clone, Debug, Default)]
 pub struct RecordingStart {
     pub doc: u64,
     pub sheet: usize,
     pub sheet_name: String,
     pub selection: Selection,
     pub relative: bool,
+    pub name: Option<String>,
+    pub shortcut: Option<String>,
+    pub description: Option<String>,
 }
 
 /// A recording turned into a macro, with what was left out.

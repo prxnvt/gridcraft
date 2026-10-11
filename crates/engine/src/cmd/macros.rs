@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Record Macro",
             ["Automate", "Macros"],
             None,
-            "{stop?: bool, relative?: bool (default true; when starting), name?, description? (when stopping)} toggles recording; the selection when it starts is the example input → {recording, relative?, input?} or {recording: false, saved, steps, dropped, skipped, inputs}",
+            "{stop?: bool, relative?: bool (default true), name?, shortcut?: \"Ctrl+Shift+K\" | \"K\", description?} toggles recording; when starting, name (new and valid) and shortcut (not taken) are checked and kept for the save, and without a name the macro gets the next MacroN; when stopping, a name or description given then wins; the selection when it starts is the example input → {recording, name?, relative?, input?} or {recording: false, saved, steps, dropped, skipped, inputs}",
             has_doc,
             record
         ),
@@ -206,23 +206,54 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
     if bool_param(p, "stop").unwrap_or(false) || s.is_recording() {
         return stop_recording(s, p, false);
     }
-    start_recording(s, bool_param(p, "relative").unwrap_or(true))
+    start_recording(s, p, bool_param(p, "relative").unwrap_or(true))
 }
 
-fn start_recording(s: &mut Session, relative: bool) -> Result<Json> {
+/// Starts recording. `name`, `shortcut` and `description` (from the Record Macro dialog) are
+/// checked now, so a bad name or a taken shortcut is refused before anything is recorded.
+fn start_recording(s: &mut Session, p: &Json, relative: bool) -> Result<Json> {
     let d = s.doc()?;
     let sheet = d.wb.active_sheet;
+    let name = match str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => Some(crate::macros::check_new_name(&d.wb, n).map_err(|e| bad("macro.record", e))?),
+        None => None,
+    };
+    let shortcut = match str_param(p, "shortcut").map(str::trim).filter(|k| !k.is_empty()) {
+        Some(k) => {
+            let letter = crate::macros::parse_shortcut(k)
+                .ok_or_else(|| bad("macro.record", "`shortcut` must be one letter A to Z (used as Ctrl+Shift+letter)"))?;
+            if let Some(why) = crate::macros::shortcut_conflict(&d.wb, name.as_deref().unwrap_or(""), letter) {
+                return Err(bad("macro.record", why));
+            }
+            Some(crate::macros::shortcut_text(letter))
+        }
+        None => None,
+    };
+    let description = match str_param(p, "description") {
+        Some(t) if t.chars().count() > gridcraft_model::MAX_MACRO_TEXT => {
+            return Err(bad("macro.record", format!("`description` can be at most {} characters long", gridcraft_model::MAX_MACRO_TEXT)));
+        }
+        Some(t) => Some(t.to_string()),
+        None => None,
+    };
     let start = RecordingStart {
         doc: d.uid,
         sheet,
         sheet_name: d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(),
         selection: d.selection.clone(),
         relative,
+        name: name.clone(),
+        shortcut,
+        description,
     };
     let input = start.selection.current().a1();
     s.start_recording();
     s.macro_recording = Some(start);
-    Ok(if relative { json!({"recording": true, "relative": true, "input": input}) } else { json!({"recording": true}) })
+    let mut out = if relative { json!({"recording": true, "relative": true, "input": input}) } else { json!({"recording": true}) };
+    if let Some(n) = name {
+        out["name"] = json!(n);
+    }
+    Ok(out)
 }
 
 /// Stops recording and saves what was recorded as a macro. `legacy`: the old script recorder
@@ -237,17 +268,27 @@ fn stop_recording(s: &mut Session, p: &Json, legacy: bool) -> Result<Json> {
         sheet_name: d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(),
         selection: d.selection.clone(),
         relative: !legacy,
+        ..Default::default()
     });
     let wb = d.wb.clone();
+    // A name given when stopping wins over the one given when starting; a starting name taken
+    // meanwhile gets a suffix.
     let name = match str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) => n.to_string(),
+        None if start.name.is_some() => crate::macros::unique_name(&wb, start.name.as_deref().unwrap_or_default()),
         None if legacy => (1..).map(|n| format!("Script {n}")).find(|n| crate::macros::find(&wb, n).is_none()).unwrap_or_else(|| "Script".into()),
         None => crate::macros::next_name(&wb),
     };
     let mut converted = crate::macros::recorder::convert(&name, &start, &rec.steps, &wb);
     converted.mac.steps.truncate(gridcraft_model::MAX_MACRO_STEPS);
-    if let Some(desc) = str_param(p, "description") {
+    if let Some(desc) = str_param(p, "description").or(start.description.as_deref()) {
         converted.mac.description = desc.chars().take(gridcraft_model::MAX_MACRO_TEXT).collect();
+    }
+    // The shortcut, unless another macro took it while recording.
+    if let Some(k) = &start.shortcut
+        && crate::macros::parse_shortcut(k).is_some_and(|c| crate::macros::shortcut_conflict(&wb, &name, c).is_none())
+    {
+        converted.mac.shortcut = Some(k.clone());
     }
     if legacy {
         converted.mac.output.on_conflict = gridcraft_model::OnConflict::Overwrite;
@@ -262,7 +303,7 @@ fn record_actions(s: &mut Session, p: &Json) -> Result<Json> {
     if bool_param(p, "stop").unwrap_or(false) || s.is_recording() {
         return stop_recording(s, p, true);
     }
-    start_recording(s, false)
+    start_recording(s, &json!({}), false)
 }
 
 fn new_script(s: &mut Session, p: &Json) -> Result<Json> {

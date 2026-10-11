@@ -181,6 +181,9 @@ fn step_into_from_the_macros_dialog_pauses_before_the_first_step() {
 fn a_recorded_macro_opens_in_the_editor() {
     let mut h = harness();
     click(&mut h, "Record Macro");
+    // The Record Macro dialog comes first.
+    click(&mut h, "   OK   ");
+    assert!(h.state().session.is_recording());
     h.state_mut().run("cell.set", json!({"cell": "B2", "input": "5"})).unwrap();
     h.state_mut().run("home.bold", json!({})).unwrap();
     h.run_steps(2);

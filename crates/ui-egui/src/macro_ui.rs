@@ -4,7 +4,6 @@
 //! ⌘⇧letter on a Mac). Everything goes through the `macro.*` commands.
 
 use egui::{Sense, Ui, vec2};
-use gridcraft_engine::model::Workbook;
 use serde_json::{Value as Json, json};
 
 use crate::dialogs::Dialog;
@@ -25,13 +24,11 @@ pub struct MacroUi {
     pub editor: Option<crate::macro_editor::Editor>,
     /// A debugger result from a prompt's button, for the editor to take in.
     pub debug_result: Option<Json>,
-    /// The name the recording is saved under when it stops (Record from Assign Action).
-    pub record_name: Option<String>,
 }
 
 impl Default for MacroUi {
     fn default() -> Self {
-        MacroUi { relative: true, recent: vec![], editor: None, debug_result: None, record_name: None }
+        MacroUi { relative: true, recent: vec![], editor: None, debug_result: None }
     }
 }
 
@@ -60,11 +57,7 @@ pub fn recorded_steps(app: &SheetApp) -> Option<usize> {
 /// References says), or stops and saves what was recorded as a macro.
 pub fn toggle_recording(app: &mut SheetApp) {
     if app.session.is_recording() {
-        let mut stop = json!({"stop": true});
-        if let Some(name) = app.macros.record_name.take() {
-            stop["name"] = json!(name);
-        }
-        match app.run("macro.record", stop) {
+        match app.run("macro.record", json!({"stop": true})) {
             Ok(v) => match v["saved"].as_str() {
                 Some(name) => {
                     let steps = v["steps"].as_u64().unwrap_or(0);
@@ -76,17 +69,7 @@ pub fn toggle_recording(app: &mut SheetApp) {
             Err(e) => app.message = Some(("Record Macro".into(), crate::clean_error(&e))),
         }
     } else {
-        app.run_or_alert("macro.record", json!({"relative": app.macros.relative}));
-    }
-}
-
-/// Starts recording a macro that is saved as `name` when recording stops.
-pub fn record_named(app: &mut SheetApp, name: &str) {
-    if app.session.is_recording() {
-        return;
-    }
-    if app.run("macro.record", json!({"relative": app.macros.relative})).is_ok() {
-        app.macros.record_name = Some(name.to_string());
+        app.open_dialog("recordMacro", json!({}));
     }
 }
 
@@ -200,36 +183,8 @@ pub fn status(app: &mut SheetApp, ui: &mut Ui) {
 
 // ---------------------------------------------------------------- shortcuts
 
-/// Ctrl+Shift (⌘⇧) letters GridCraft already uses, which a macro can't take.
-pub const RESERVED: &[(char, &str)] = &[('Z', "Redo"), ('S', "Save As"), ('F', "Filter"), ('T', "AutoSum")];
-
-/// The letter of a macro shortcut: `"Ctrl+Shift+M"`, `"⌘⇧M"`, `"m"` → `'M'`. `None` when it
-/// isn't one letter A to Z.
-pub fn parse_shortcut(s: &str) -> Option<char> {
-    let last = s.trim().rsplit(['+', '⇧', '⌘']).next()?.trim();
-    let mut chars = last.chars();
-    match (chars.next(), chars.next()) {
-        (Some(c), None) if c.is_ascii_alphabetic() => Some(c.to_ascii_uppercase()),
-        _ => None,
-    }
-}
-
-/// How a shortcut is stored and shown: `Ctrl+Shift+M`.
-pub fn shortcut_text(letter: char) -> String {
-    format!("Ctrl+Shift+{}", letter.to_ascii_uppercase())
-}
-
-/// Why macro `name` can't use Ctrl+Shift+`letter`: GridCraft uses it, or another macro has it.
-pub fn shortcut_conflict(wb: &Workbook, name: &str, letter: char) -> Option<String> {
-    let letter = letter.to_ascii_uppercase();
-    if let Some((_, what)) = RESERVED.iter().find(|(c, _)| *c == letter) {
-        return Some(format!("{} is {what}. Choose another letter.", shortcut_text(letter)));
-    }
-    wb.macros
-        .iter()
-        .find(|m| !m.name.eq_ignore_ascii_case(name) && m.shortcut.as_deref().and_then(parse_shortcut) == Some(letter))
-        .map(|m| format!("{} already runs macro “{}”. Choose another letter.", shortcut_text(letter), m.name))
-}
+/// Shortcut rules live in the engine, so the dialogs and `macro.record` agree.
+pub use gridcraft_engine::macros::{RESERVED_SHORTCUTS as RESERVED, parse_shortcut, shortcut_conflict, shortcut_text};
 
 /// The macro whose shortcut is Ctrl+Shift+`key` in the active workbook. GridCraft's own shortcuts
 /// win over a macro's (a file can carry any shortcut).
@@ -422,9 +377,100 @@ pub fn save_options(app: &mut SheetApp, name: &str, letter: Option<char>, descri
     }
 }
 
+// ---------------------------------------------------------------- Record Macro dialog
+
+/// Record Macro: the macro's name, shortcut and description before recording starts.
+/// `{name?, assign?: control.assign params}`: Record from Assign Action passes the button to
+/// point at the macro once its final name is known.
+pub fn open_record(app: &SheetApp, params: &Json) -> Dialog {
+    let wb = app.session.active().map(|d| d.wb.clone());
+    let name = params["name"]
+        .as_str()
+        .map(str::to_string)
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| wb.as_deref().map(gridcraft_engine::macros::next_name))
+        .unwrap_or_else(|| "Macro1".into());
+    let mut v = json!({"name": name, "shortcut": "", "description": ""});
+    if params["assign"].is_object() {
+        v["assign"] = params["assign"].clone();
+    }
+    Dialog::custom("recordMacro", "Record Macro", v)
+}
+
+/// What is wrong with the dialog's name or shortcut, if anything.
+pub fn record_problem(app: &SheetApp, name: &str, key: &str) -> Option<String> {
+    let doc = app.session.active()?;
+    if let Err(e) = gridcraft_engine::macros::check_new_name(&doc.wb, name) {
+        return Some(e);
+    }
+    if key.trim().is_empty() {
+        return None;
+    }
+    match parse_shortcut(key) {
+        None => Some("Use a letter from A to Z for the shortcut.".into()),
+        Some(c) => shortcut_conflict(&doc.wb, name, c),
+    }
+}
+
+pub fn record_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut bool) {
+    let get = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let mut name = get(d, "name");
+    let mut key = get(d, "shortcut");
+    let mut desc = get(d, "description");
+    ui.label("Macro name:");
+    ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).id_salt("record_name"));
+    ui.add_space(4.0);
+    ui.label("Shortcut key:");
+    ui.horizontal(|ui| {
+        ui.label(if ui.ctx().os() == egui::os::OperatingSystem::Mac { "⌘ ⇧ +" } else { "Ctrl+Shift+" });
+        ui.add(egui::TextEdit::singleline(&mut key).char_limit(1).desired_width(24.0).id_salt("record_shortcut"));
+    });
+    key = key.to_ascii_uppercase();
+    ui.add_space(4.0);
+    ui.label("Description:");
+    ui.add(egui::TextEdit::multiline(&mut desc).desired_rows(3).desired_width(f32::INFINITY).id_salt("record_description"));
+    let mut relative = app.macros.relative;
+    if ui.checkbox(&mut relative, "Use Relative References").changed() {
+        app.macros.relative = relative;
+    }
+    let problem = record_problem(app, &name, &key);
+    if let Some(p) = &problem {
+        ui.label(egui::RichText::new(p).color(Tokens::get(ui.ctx()).danger));
+    }
+    ui.add_space(6.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if ui.button(" Cancel ").clicked() {
+            *open = false;
+        }
+        if ui.add_enabled(problem.is_none(), egui::Button::new("   OK   ")).clicked() {
+            let mut p = json!({"name": name.trim(), "description": desc, "relative": app.macros.relative});
+            if !key.trim().is_empty() {
+                p["shortcut"] = json!(key.trim());
+            }
+            match app.run("macro.record", p) {
+                Ok(_) => {
+                    *open = false;
+                    // Record from Assign Action: the button runs the macro under its final name.
+                    if let Some(mut assign) = d.values.get("assign").cloned().filter(Json::is_object) {
+                        assign["macro"] = json!(name.trim());
+                        if let Err(e) = app.run("control.assign", assign) {
+                            app.message = Some(("Assign Action".into(), crate::clean_error(&e)));
+                        }
+                    }
+                }
+                Err(e) => app.message = Some(("Record Macro".into(), crate::clean_error(&e))),
+            }
+        }
+    });
+    d.values.insert("name".into(), json!(name));
+    d.values.insert("shortcut".into(), json!(key));
+    d.values.insert("description".into(), json!(desc));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gridcraft_engine::model::Workbook;
 
     #[test]
     fn shortcuts_parse_to_one_letter() {

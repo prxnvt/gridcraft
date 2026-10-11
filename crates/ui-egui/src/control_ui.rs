@@ -247,9 +247,12 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
             let record = ui
                 .add_enabled(fresh && !app.session.is_recording(), egui::Button::new("Record…"))
                 .on_hover_text("Record this macro from what you do");
-            if record.clicked() && assign(app, d) {
+            if record.clicked()
+                && let Ok(params) = assign_params(d)
+            {
+                // The Record Macro dialog names the macro; the button follows the final name.
                 *open = false;
-                crate::macro_ui::record_named(app, name.trim());
+                app.dialog_next = Some(crate::macro_ui::open_record(app, &json!({"name": name.trim(), "assign": params})));
             }
         });
         ui.add_space(4.0);

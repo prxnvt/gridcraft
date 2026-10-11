@@ -41,6 +41,11 @@ fn record_from_the_ribbon_and_stop_from_the_status_bar() {
     let mut h = harness("Automate");
     h.get_by_label("Record Macro").click();
     h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("recordMacro"), "Record Macro asks for a name first");
+    assert!(!h.state().session.is_recording());
+    h.run_steps(3);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
     assert!(h.state().session.is_recording());
     // While recording the toggle can't change and the button says Stop Recording.
     assert!(h.query_by_label("Stop Recording").is_some());
@@ -65,6 +70,8 @@ fn use_relative_references_toggles_how_the_next_recording_starts() {
     h.run_steps(2);
     assert!(!h.state().macros.relative);
     h.get_by_label("Record Macro").click();
+    h.run_steps(5);
+    h.get_by_label("   OK   ").click();
     h.run_steps(2);
     assert!(h.state().session.macro_recording.as_ref().is_some_and(|r| !r.relative));
 }
@@ -125,4 +132,42 @@ fn a_macro_whose_output_lands_on_data_asks_and_can_shift_it_down() {
     assert_eq!(value(&h, "B1"), Value::Text("new".into()));
     assert_eq!(value(&h, "B2"), Value::Text("old".into()));
     assert_eq!(h.state().macros.recent, ["Put"]);
+}
+
+#[test]
+fn the_record_macro_dialog_names_the_macro_and_checks_name_and_shortcut() {
+    let mut h = harness("Automate");
+    save(&mut h, json!({"name": "Taken", "shortcut": "Ctrl+Shift+K", "steps": []}));
+    h.get_by_label("Record Macro").click();
+    h.run_steps(2);
+    let set = |h: &mut Harness, k: &str, v: &str| {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(k.into(), json!(v));
+        h.run_steps(2);
+    };
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["name"], json!("Macro1"), "the next free name is suggested");
+    set(&mut h, "name", "taken");
+    assert!(h.query_by_label_contains("already exists").is_some());
+    set(&mut h, "name", "Two\nlines");
+    assert!(h.query_by_label_contains("line breaks").is_some());
+    set(&mut h, "name", "Tidy Up");
+    set(&mut h, "shortcut", "K");
+    assert!(h.query_by_label_contains("already runs macro “Taken”").is_some());
+    set(&mut h, "shortcut", "S");
+    assert!(h.query_by_label_contains("Save As").is_some());
+    // OK stays off while something is wrong.
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(!h.state().session.is_recording());
+    set(&mut h, "shortcut", "J");
+    set(&mut h, "description", "Tidies the block");
+    assert!(h.query_by_label_contains("Choose another").is_none());
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(h.state().session.is_recording());
+    h.state_mut().run("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    h.get_by_label("Stop").click();
+    h.run_steps(2);
+    let m = h.state().session.active().unwrap().wb.macros.iter().find(|m| m.name == "Tidy Up").cloned().expect("saved under its name");
+    assert_eq!(m.shortcut.as_deref(), Some("Ctrl+Shift+J"));
+    assert_eq!(m.description, "Tidies the block");
 }

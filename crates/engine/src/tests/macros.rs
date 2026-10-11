@@ -772,3 +772,35 @@ fn only_the_workbooks_a_debugged_run_touched_wait() {
     debug(&mut s, json!({"action": "stop"}));
     set(&mut s, "A1", "free");
 }
+
+#[test]
+fn record_takes_a_checked_name_shortcut_and_description_when_it_starts() {
+    let mut s = super::s();
+    s.execute("macro.save", json!({"name": "Taken", "shortcut": "Ctrl+Shift+K", "steps": []})).unwrap();
+    for (p, needle) in [
+        (json!({"name": "taken"}), "already exists"),
+        (json!({"name": "a\nb"}), "line breaks"),
+        (json!({"name": "x".repeat(300)}), "at most"),
+        (json!({"name": "New", "shortcut": "k"}), "already runs macro"),
+        (json!({"name": "New", "shortcut": "Ctrl+Shift+Z"}), "Redo"),
+        (json!({"name": "New", "shortcut": "F5"}), "one letter"),
+        (json!({"name": "New", "description": "d".repeat(100_000)}), "at most"),
+    ] {
+        let e = s.execute("macro.record", p.clone()).unwrap_err().to_string();
+        assert!(e.contains(needle), "{p}: {e}");
+        assert!(!s.is_recording(), "{p}");
+    }
+    let r = s.execute("macro.record", json!({"name": " Tidy ", "shortcut": "j", "description": "Tidies"})).unwrap();
+    assert_eq!(r["name"], json!("Tidy"));
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    let r = s.execute("macro.record", json!({"stop": true})).unwrap();
+    assert_eq!(r["saved"], json!("Tidy"));
+    let m = s.execute("macro.get", json!({"name": "Tidy"})).unwrap();
+    assert_eq!((m["shortcut"].clone(), m["description"].clone()), (json!("Ctrl+Shift+J"), json!("Tidies")));
+    // Empty params keep recording with an automatic name, and never ask.
+    s.execute("macro.record", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    let r = s.execute("macro.record", json!({})).unwrap();
+    assert!(r["saved"].as_str().is_some_and(|n| n.starts_with("Macro")), "{r}");
+    assert!(s.take_ui_requests().is_empty(), "no dialog");
+}

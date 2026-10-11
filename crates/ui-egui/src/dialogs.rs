@@ -574,6 +574,7 @@ impl Dialog {
             "macros" => crate::macro_ui::open_dialog(app, &params),
             "macroEditor" => return crate::macro_editor::open(app, &params),
             "assignAction" => return crate::control_ui::open_assign(app, &params),
+            "recordMacro" => crate::macro_ui::open_record(app, &params),
             "formatControl" => return crate::control_ui::open_format(app, &params),
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
@@ -848,6 +849,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "macros" => crate::macro_ui::macros_dialog(app, ui, &mut d, &mut open),
                 "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
+                "recordMacro" => crate::macro_ui::record_dialog(app, ui, &mut d, &mut open),
                 "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");

@@ -404,7 +404,12 @@ fn assign_action_new_and_record_make_the_macro() {
     h.run_steps(2);
     h.get_by_label("Record…").click();
     h.run_steps(3);
-    assert!(h.state().session.is_recording());
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("recordMacro"));
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["name"], json!("Fresh"));
+    h.run_steps(4);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(h.state().session.is_recording(), "{:?} {:?}", h.state().message, h.state().dialog.as_ref().map(|d| d.values.clone()));
     h.state_mut().run("cell.set", json!({"cell": "J1", "input": "x"})).unwrap();
     gridcraft_ui_egui::macro_ui::toggle_recording(h.state_mut());
     h.run_steps(2);
