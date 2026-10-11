@@ -45,7 +45,9 @@ fn click(h: &mut Harness, label: &str) {
 }
 
 fn runs(h: &mut Harness) -> usize {
-    h.state_mut().run("python.diagnostics", json!({})).unwrap()["runs"].as_array().map_or(0, Vec::len)
+    h.state_mut().run("python.diagnostics", json!({})).unwrap()["runs"]
+        .as_array()
+        .map_or(0, |r| r.iter().map(|e| e["count"].as_u64().unwrap_or(1) as usize).sum())
 }
 
 #[test]

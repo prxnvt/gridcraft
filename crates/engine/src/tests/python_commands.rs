@@ -27,9 +27,9 @@ fn set_runs_the_code_and_clear_undoes_python() {
     assert_eq!(v(&s, "B1"), Value::Number(21.0));
     assert_eq!(s.execute("cell.get", json!({"cell": "B1"})).unwrap()["input"], "xl('A1') + 1");
     // Setting the same code again doesn't run it.
-    let runs = s.doc().unwrap().py_log.len();
+    let runs = s.doc().unwrap().py_log.iter().map(|e| e.count as usize).sum::<usize>();
     py(&mut s, "B1", "xl('A1') + 1");
-    assert_eq!(s.doc().unwrap().py_log.len(), runs);
+    assert_eq!(s.doc().unwrap().py_log.iter().map(|e| e.count as usize).sum::<usize>(), runs);
     s.execute("python.clear", json!({"cell": "B1"})).unwrap();
     assert_eq!(v(&s, "B1"), Value::Empty);
     assert!(s.execute("cell.get", json!({"cell": "B1"})).unwrap()["python"].is_null());
@@ -189,7 +189,7 @@ fn options_and_diagnostics_report_the_python_that_runs_cells() {
     s.set_python_detection(Detection { found: Some(found), rejected });
     let b = &s.execute("python.options", json!({})).unwrap()["backend"];
     assert_eq!(b["kind"], "cpython");
-    assert_eq!(b["summary"], "Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3");
+    assert_eq!(b["summary"], "Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3, no numpy");
     assert_eq!((b["version"].as_str(), b["externallyManaged"].as_bool()), (Some("3.14.0"), Some(true)));
     // The path is a preference; bad values are refused.
     let o = s.execute("python.options", json!({"interpreter": "  /nowhere/python  "})).unwrap();

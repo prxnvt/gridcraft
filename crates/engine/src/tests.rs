@@ -1640,6 +1640,7 @@ mod macros;
 mod objects;
 mod python_cells;
 mod python_commands;
+mod python_diagnostics;
 mod python_files;
 mod python_install;
 mod python_output;

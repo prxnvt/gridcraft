@@ -61,10 +61,10 @@ fn edits_rerun_the_cells_that_read_them_and_formulas_follow() {
     set(&mut s, "A1", "5");
     assert_eq!(v(&s, "B1"), Value::Number(10.0));
     assert_eq!(v(&s, "C1"), Value::Number(11.0));
-    let runs = s.doc().unwrap().py_log.len();
+    let runs = s.doc().unwrap().py_log.iter().map(|e| e.count as usize).sum::<usize>();
     // An edit nothing reads runs nothing.
     set(&mut s, "Z9", "1");
-    assert_eq!(s.doc().unwrap().py_log.len(), runs);
+    assert_eq!(s.doc().unwrap().py_log.iter().map(|e| e.count as usize).sum::<usize>(), runs);
     set(&mut s, "A1", "7");
     assert_eq!(v(&s, "B1"), Value::Number(14.0));
     // The results aren't undo steps of their own: one undo takes back the edit, and the cell
@@ -106,13 +106,13 @@ fn arrays_spill_and_spill_again_when_unblocked() {
     s.python_reset().unwrap();
     assert_eq!((v(&s, "A1"), v(&s, "A2"), v(&s, "A3")), (Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)));
     assert_eq!(v(&s, "C1"), Value::Number(6.0));
-    let runs = s.doc().unwrap().py_log.len();
+    let runs = s.doc().unwrap().py_log.iter().map(|e| e.count as usize).sum::<usize>();
     set(&mut s, "A2", "x");
     assert_eq!(v(&s, "A1"), err(CellError::Spill));
     s.execute("edit.clearContents", json!({"range": "A2"})).unwrap();
     assert_eq!(v(&s, "A2"), Value::Number(2.0), "clearing the blocker lets the kept result spill again");
     assert_eq!(v(&s, "C1"), Value::Number(6.0));
-    assert_eq!(s.doc().unwrap().py_log.len(), runs, "without running the code again");
+    assert_eq!(s.doc().unwrap().py_log.iter().map(|e| e.count as usize).sum::<usize>(), runs, "without running the code again");
     // A structural edit recalculates everything; the spill moves with its cell.
     s.execute("selection.set", json!({"cell": "A1"})).unwrap();
     s.execute("home.insertColumns", json!({})).unwrap();
@@ -263,8 +263,9 @@ fn a_killed_worker_is_replaced_and_earlier_cells_run_again() {
     assert_eq!(v(&s, "A1"), Value::Number(7.0));
     assert_eq!(v(&s, "A2"), err(CellError::Timeout));
     assert_eq!(v(&s, "A3"), Value::Number(8.0), "A1 ran again in the new worker before A3");
-    let cells: Vec<String> = s.doc().unwrap().py_log.iter().map(|e| format!("{}:{}", e.cell, e.status)).collect();
-    assert_eq!(cells, ["A1:ok", "A2:timeout", "A1:ok", "A3:ok"]);
+    // A1's two runs (before A2, then again in the new worker) share a row with a count.
+    let cells: Vec<String> = s.doc().unwrap().py_log.iter().map(|e| format!("{}:{}x{}", e.cell, e.status, e.count)).collect();
+    assert_eq!(cells, ["A2:timeoutx1", "A1:okx2", "A3:okx1"]);
 }
 
 #[test]
@@ -387,7 +388,7 @@ fn a_cell_that_stops_the_worker_is_not_rerun_until_it_changes() {
     plant(&mut s, "A3", "base + 1");
     s.python_reset().unwrap();
     assert_eq!(v(&s, "A2"), err(CellError::Timeout));
-    let starts = |s: &Session| s.doc().unwrap().py_log.len();
+    let starts = |s: &Session| s.doc().unwrap().py_log.iter().map(|e| e.count as usize).sum::<usize>();
     // An edit before it reruns A1 and the cells after it, but not A2: no kill, no restart.
     let before = starts(&s);
     s.execute("cell.set", json!({"cell": "C2", "input": "2"})).unwrap();

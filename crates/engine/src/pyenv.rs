@@ -139,6 +139,25 @@ impl Session {
         self.python.install.uv = Some(on);
     }
 
+    /// The active workbook's declared packages, each found (with its version) or missing in the
+    /// Python that runs cells: `[{requirement, name, found, version?}]` (all missing on the
+    /// built-in Python, which has no packages).
+    pub fn python_declared_status(&mut self) -> Vec<Json> {
+        let Ok(d) = self.doc() else { return Vec::new() };
+        let list = declared(&d.wb);
+        if list.is_empty() {
+            return Vec::new();
+        }
+        let found = self.python_detection().and_then(|d| d.found.clone());
+        list.iter()
+            .map(|req| {
+                let name = env::requirement_name(req);
+                let version = found.as_ref().and_then(|i| i.package(name)).map(str::to_string);
+                json!({"requirement": req, "name": name, "found": version.is_some(), "version": version})
+            })
+            .collect()
+    }
+
     /// Whether a package install is running.
     pub fn python_installing(&self) -> bool {
         self.python.install.job.is_some()
@@ -240,6 +259,8 @@ impl Session {
                     error: (!outcome.ok).then(|| outcome.message.clone()),
                     line: None,
                     missing: None,
+                    count: 1,
+                    time_ms: 0.0,
                 },
             );
         }

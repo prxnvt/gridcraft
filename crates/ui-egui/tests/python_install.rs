@@ -69,6 +69,8 @@ fn missing_sklearn(h: &mut Harness) {
         error: Some("ModuleNotFoundError: No module named 'sklearn'".into()),
         line: Some(1),
         missing: Some("scikit-learn".into()),
+        count: 1,
+        time_ms: 0.0,
     });
     h.run_steps(2);
 }

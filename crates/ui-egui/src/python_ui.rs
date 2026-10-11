@@ -26,6 +26,35 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
     let (mut this_sheet, mut errors_only): (bool, bool) = ui.ctx().data(|m| m.get_temp(key)).unwrap_or((false, false));
     let summary = backend_summary(app, ui.ctx());
     ui.add(egui::Label::new(RichText::new(summary).color(t.text).font(theme::ui_font(12.0))).wrap());
+    // The workbook's packages, each found (with its version) or missing.
+    let packages = app.session.python_declared_status();
+    let mut install_missing: Vec<String> = Vec::new();
+    if !packages.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new("Workbook packages:").color(t.text_dim).font(theme::ui_font(12.0)));
+            for p in &packages {
+                let name = p["name"].as_str().unwrap_or_default();
+                let (text, color) = match p["version"].as_str() {
+                    Some(v) => (format!("{name} {v}"), t.text),
+                    None => {
+                        install_missing.push(p["requirement"].as_str().unwrap_or(name).to_string());
+                        (format!("{name} (missing)"), t.danger)
+                    }
+                };
+                ui.label(RichText::new(text).color(color).font(theme::ui_font(12.0)));
+            }
+        });
+        if !install_missing.is_empty()
+            && !app.session.python_installing()
+            && ui
+                .button(format!("Install {}…", install_missing.join(", ")))
+                .on_hover_text("Install the missing packages, after you approve")
+                .clicked()
+        {
+            app.open_dialog("pythonInstall", json!({"packages": install_missing}));
+        }
+    }
     ui.add_space(4.0);
     let (mut clear, mut options) = (false, false);
     ui.horizontal(|ui| {
@@ -56,6 +85,9 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
     }
     if runs.is_empty() {
         ui.label(RichText::new("No Python runs yet.").italics().color(t.text_dim));
+    } else {
+        // The rows say how long ago they ran.
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(5));
     }
     let mut goto: Option<(String, String)> = None;
     let mut offer: Option<Json> = None;
@@ -85,8 +117,13 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
                     other => (other, t.text_dim),
                 };
                 ui.label(RichText::new(status).color(color).font(theme::ui_bold(12.0)));
+                if r.count > 1 {
+                    ui.label(RichText::new(format!("\u{d7}{}", r.count)).color(t.text_dim).font(theme::ui_bold(12.0)))
+                        .on_hover_text(format!("{} runs in a row ended this way; the time and output are the latest", r.count));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("{:.1} ms", r.ms)).color(t.text_dim).font(theme::ui_font(12.0)));
+                    let age = ago(gridcraft_engine::clock::now_ms() - r.time_ms);
+                    ui.label(RichText::new(format!("{:.1} ms, {age}", r.ms)).color(t.text_dim).font(theme::ui_font(12.0)));
                 });
             });
             if let Some(e) = &r.error {
@@ -721,5 +758,18 @@ pub fn table_view(ui: &mut Ui, rows: &[Vec<String>], headers: bool) {
     if more_rows || more_cols {
         let text = format!("Showing {} of {} rows; Copy and Save have them all.", body.len().min(MAX_ROWS), body.len());
         ui.label(RichText::new(text).color(t.text_dim).font(theme::ui_font(11.5)));
+    }
+}
+
+/// How long ago something happened, from its age in milliseconds: "just now", "12 s ago",
+/// "3 min ago", "2 h ago", "4 d ago".
+pub fn ago(ms: f64) -> String {
+    let secs = if ms.is_finite() { (ms / 1000.0).max(0.0) as u64 } else { 0 };
+    match secs {
+        0..=4 => "just now".into(),
+        5..=59 => format!("{secs} s ago"),
+        60..=3_599 => format!("{} min ago", secs / 60),
+        3_600..=86_399 => format!("{} h ago", secs / 3_600),
+        _ => format!("{} d ago", secs / 86_400),
     }
 }

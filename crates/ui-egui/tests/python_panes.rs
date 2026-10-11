@@ -191,7 +191,7 @@ fn the_diagnostics_header_says_which_python_runs_cells() {
     assert!(h.query_by_label("Running on the built-in Python (Monty): install Python 3.11+ for packages").is_some());
     h.state_mut().session.set_python_detection(cpython());
     h.run_steps(3);
-    assert!(h.query_by_label("Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3").is_some());
+    assert!(h.query_by_label("Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3, numpy 2.1.0").is_some());
     // The header's Options button opens Python Options.
     h.get_by_label("Options…").click();
     h.run_steps(3);
@@ -240,9 +240,14 @@ fn python_options_shows_the_backend_and_sets_the_interpreter_and_time_limit() {
     h.run_steps(3);
     h.state_mut().open_dialog("pythonOptions", json!({}));
     h.run_steps(3);
-    for label in
-        ["Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3", "3.14.0", "/opt/homebrew/bin/python3", "2.2.3", "2.1.0", "Not used (1)"]
-    {
+    for label in [
+        "Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3, numpy 2.1.0",
+        "3.14.0",
+        "/opt/homebrew/bin/python3",
+        "2.2.3",
+        "2.1.0",
+        "Not used (1)",
+    ] {
         assert!(h.query_by_label(label).is_some(), "{label}");
     }
     assert!(h.query_by_label_contains("managed by your system").is_some(), "the PEP 668 note");
@@ -268,4 +273,32 @@ fn python_options_shows_the_backend_and_sets_the_interpreter_and_time_limit() {
     assert!(h.query_by_label("Running on the built-in Python (Monty): install Python 3.11+ for packages").is_some());
     assert!(h.query_by_label_contains("sandbox with no file or network access").is_some());
     assert!(h.query_by_label("Detect Again").is_some());
+}
+
+#[test]
+fn diagnostics_rows_collapse_repeats_and_the_header_lists_packages() {
+    let mut h = harness();
+    set(&mut h, "A1", "1/0");
+    for _ in 0..2 {
+        h.state_mut().run("python.reset", json!({})).unwrap();
+        wait_python(&mut h);
+    }
+    h.state_mut().run("python.packages", json!({"packages": ["pandas", "polars"]})).unwrap();
+    let mut found = cpython();
+    if let Some(i) = found.found.as_mut() {
+        i.installed = vec![("pandas".into(), "2.2.3".into())];
+    }
+    h.state_mut().session.set_python_detection(found);
+    h.state_mut().grid.pane = Some(gridcraft_ui_egui::python_ui::PANE.into());
+    h.run_steps(3);
+    assert_eq!(h.state().session.active().unwrap().py_log.len(), 1, "one row for the three runs");
+    assert!(h.query_by_label("\u{d7}3").is_some(), "with its count");
+    assert!(h.query_by_label("Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3, numpy 2.1.0").is_some());
+    assert!(h.query_by_label("pandas 2.2.3").is_some());
+    assert!(h.query_by_label("polars (missing)").is_some());
+    assert!(h.query_by_label("Install polars…").is_some(), "missing packages can be installed");
+    assert_eq!(gridcraft_ui_egui::python_ui::ago(1_500.0), "just now");
+    assert_eq!(gridcraft_ui_egui::python_ui::ago(42_000.0), "42 s ago");
+    assert_eq!(gridcraft_ui_egui::python_ui::ago(3.0 * 60_000.0), "3 min ago");
+    assert_eq!(gridcraft_ui_egui::python_ui::ago(f64::NAN), "just now");
 }

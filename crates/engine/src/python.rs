@@ -56,6 +56,10 @@ pub struct PyRunLog {
     pub line: Option<u32>,
     /// The pip package of a module the run couldn't import (GridCraft offers to install it).
     pub missing: Option<String>,
+    /// How many runs in a row of this cell ended the same way (this entry is the latest).
+    pub count: u32,
+    /// When the latest of them ended ([`crate::clock::now_ms`]).
+    pub time_ms: f64,
 }
 
 /// The Python workers and the work queued for them.
@@ -360,6 +364,17 @@ fn failure_status(kind: FailureKind) -> &'static str {
 pub(crate) fn push_log(d: &mut DocState, mut entry: PyRunLog) {
     d.py_log_seq = d.py_log_seq.saturating_add(1);
     entry.seq = d.py_log_seq;
+    entry.time_ms = crate::clock::now_ms();
+    entry.count = entry.count.max(1);
+    // Runs of a cell that end as its last run did (same status, message and line) collapse
+    // into that row, which moves to the end with a count and the latest duration and output.
+    if !entry.cell.is_empty()
+        && let Some(at) = d.py_log.iter().rposition(|r| r.sheet == entry.sheet && r.cell == entry.cell)
+        && d.py_log.get(at).is_some_and(|r| r.status == entry.status && r.error == entry.error && r.line == entry.line)
+        && let Some(prev) = d.py_log.remove(at)
+    {
+        entry.count = prev.count.max(1).saturating_add(1);
+    }
     d.py_log.push_back(entry);
     while d.py_log.len() > LOG_LIMIT {
         d.py_log.pop_front();
@@ -378,6 +393,8 @@ fn log_entry(wb: &Workbook, (si, c): Key, status: &'static str) -> PyRunLog {
         error: None,
         line: None,
         missing: None,
+        count: 1,
+        time_ms: 0.0,
     }
 }
 
@@ -652,9 +669,13 @@ fn backend_json(d: &Detection) -> Json {
                 Some(v) => format!("pandas {v}"),
                 None => "no pandas".to_string(),
             };
+            let numpy = match &i.numpy {
+                Some(v) => format!("numpy {v}"),
+                None => "no numpy".to_string(),
+            };
             json!({
                 "kind": "cpython",
-                "summary": format!("Running on CPython {} ({path}), {pandas}", i.short_version()),
+                "summary": format!("Running on CPython {} ({path}), {pandas}, {numpy}", i.short_version()),
                 "path": path,
                 "version": i.version,
                 "pandas": i.pandas,

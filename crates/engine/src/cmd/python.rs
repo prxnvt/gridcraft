@@ -57,7 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Diagnostics",
             ["Formulas", "Python"],
             None,
-            "{sheet?, errorsOnly?: bool} → {backend: {kind, summary, path?, version?, pandas?, numpy?, rejected}, runs: [{seq, sheet, cell, status, ms, stdout, stderr, error?, line?}]}: which Python runs cells, and the last 500 runs, oldest first",
+            "{sheet?, errorsOnly?: bool} → {backend: {kind, summary, path?, version?, pandas?, numpy?, rejected}, packages: [{requirement, name, found, version?}], runs: [{seq, sheet, cell, status, ms, count, timeMs, stdout, stderr, error?, line?, missing?}]}: which Python runs cells, the workbook's packages found or missing in it, and the last 500 rows of runs, oldest first (runs of a cell that end as its last one did share a row, with a count)",
             has_doc,
             diagnostics
         ),
@@ -273,7 +273,8 @@ fn diagnostics(s: &mut Session, p: &Json) -> Result<Json> {
     let runs: Vec<crate::python::PyRunLog> =
         d.py_log.iter().filter(|r| sheet_name.as_ref().is_none_or(|n| r.sheet == *n)).filter(|r| !errors_only || r.status != "ok").cloned().collect();
     let backend = s.python_backend();
-    Ok(json!({"backend": backend, "runs": runs}))
+    let packages = s.python_declared_status();
+    Ok(json!({"backend": backend, "packages": packages, "runs": runs}))
 }
 
 fn clear_diagnostics(s: &mut Session, _p: &Json) -> Result<Json> {
