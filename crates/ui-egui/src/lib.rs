@@ -212,7 +212,39 @@ pub struct SheetApp {
     pub quit_all_request: bool,
     /// With `quit_all_request`: automation quits every window without asking (`app.quit`).
     pub quit_all_discard: bool,
+    /// A save waiting for Python cells to finish, so the file gets their results.
+    pub(crate) pending_save: Option<PendingSave>,
+    /// How the last save that had to wait ended (for the control channel's reply).
+    pub(crate) save_reply: Option<Result<Json, String>>,
+    /// Unique to this window's app: salts the ids of widgets that keep state in egui's memory
+    /// (editors, windows), which every window shares (see [`SheetApp::widget_id`]).
+    instance: u64,
 }
+
+/// A save that waits for the Python cells still running (each frame checks), so the file gets
+/// their results rather than `#BUSY!`. It waits as long as a cell may run (the time limit, the
+/// time imports may add and a second for the worker to start), again after each cell that
+/// finishes; then it saves whatever the cells hold.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingSave {
+    /// The saves asked for while waiting, in order.
+    what: Vec<SaveKind>,
+    deadline: f64,
+    /// Cells left when last checked: fewer is progress, which restarts the wait.
+    left: usize,
+}
+
+#[derive(Clone, Debug)]
+enum SaveKind {
+    /// `file.save` with these params on the workbook `uid`, closing it afterwards if `close`
+    /// (the Save of a workbook's Save Changes? prompt).
+    One { uid: u64, params: Json, close: bool },
+    /// Save every changed workbook, then close the window (the Save of the window's prompt).
+    AllThenClose,
+}
+
+/// Value of `instance` for the next `SheetApp`.
+static NEXT_INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// A pending "replace it?" question from a command (see [`confirm_text`]).
 #[derive(Clone, Debug, PartialEq)]
@@ -289,7 +321,17 @@ impl SheetApp {
             new_window_request: false,
             quit_all_request: false,
             quit_all_discard: false,
+            pending_save: None,
+            save_reply: None,
+            instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
+    }
+
+    /// The id of one of this window's widgets that keeps state in egui's memory (a text editor's
+    /// cursor and undo, a window's size). egui shares that memory between the windows of one
+    /// process, so the same widget in two workbook windows needs two ids.
+    pub fn widget_id(&self, name: impl std::hash::Hash + std::fmt::Debug) -> egui::Id {
+        egui::Id::new(name).with(("gridcraft.window", self.instance))
     }
 
     /// One-time context setup: fonts and visuals (default Han order; never reads the host locale).
@@ -362,9 +404,121 @@ impl SheetApp {
         self.open_dialog("quit", json!({}));
     }
 
-    /// The Save / Don't Save / Cancel prompt is showing.
+    /// The Save / Don't Save / Cancel prompt is showing, or its Save is waiting for Python cells
+    /// to finish before it saves and closes the window.
     pub fn asking_before_closing(&self) -> bool {
         self.dialog.as_ref().is_some_and(|d| d.name == "quit")
+            || self.pending_save.as_ref().is_some_and(|p| p.what.iter().any(|w| matches!(w, SaveKind::AllThenClose)))
+    }
+
+    /// A save is waiting for Python cells to finish (see [`PendingSave`]).
+    pub fn save_pending(&self) -> bool {
+        self.pending_save.is_some()
+    }
+
+    /// How long a save waits for the Python cells to make progress, in ms: as long as one cell
+    /// may run.
+    fn python_wait_ms(&self) -> f64 {
+        let p = &self.session.prefs;
+        let secs = p.python_timeout_seconds + p.python_import_seconds + 1.0;
+        if secs.is_finite() { secs.clamp(1.0, 3_600.0) * 1000.0 } else { 60_000.0 }
+    }
+
+    /// Makes a save wait if Python cells are still running (true), so the file gets their results.
+    fn defer_save(&mut self, what: SaveKind) -> bool {
+        let left = self.session.python_pending_cells();
+        if left == 0 {
+            return false;
+        }
+        let deadline = now_ms() + self.python_wait_ms();
+        let pending = self.pending_save.get_or_insert_with(|| PendingSave { what: Vec::new(), deadline, left });
+        pending.what.push(what);
+        self.toast = Some(("Saving when the Python cells finish\u{2026}".into(), now_ms()));
+        true
+    }
+
+    /// Saves every workbook with unsaved changes, then closes the window (the Save of the
+    /// window's unsaved-changes prompt). With Python cells still running, it first waits for them.
+    pub fn save_all_and_close(&mut self, ctx: &egui::Context) {
+        if self.defer_save(SaveKind::AllThenClose) {
+            return;
+        }
+        if self.save_all() {
+            self.quit_confirmed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// Saves the active workbook, then closes it if that worked (the Save of a workbook's Save
+    /// Changes? prompt). With Python cells still running, it first waits for them.
+    pub fn save_and_close_workbook(&mut self) {
+        let Some(uid) = self.session.active().map(|d| d.uid) else { return };
+        if self.defer_save(SaveKind::One { uid, params: json!({}), close: true }) {
+            return;
+        }
+        self.run_or_alert("file.save", json!({}));
+        if self.session.active().is_some_and(|x| !x.is_dirty()) {
+            self.run_or_alert("file.close", json!({"force": true}));
+        }
+    }
+
+    /// Runs the waiting saves once the Python cells have finished, or once they have made no
+    /// progress for as long as a cell may run (then the file gets what the cells hold). Every frame.
+    fn poll_pending_save(&mut self, ctx: &egui::Context) {
+        let Some(mut pending) = self.pending_save.take() else { return };
+        let left = self.session.python_pending_cells();
+        let now = now_ms();
+        if left > 0 && left < pending.left {
+            pending.left = left;
+            pending.deadline = now + self.python_wait_ms();
+        }
+        if left > 0 && now < pending.deadline {
+            self.pending_save = Some(pending);
+            ctx.request_repaint_after(std::time::Duration::from_millis(15));
+            return;
+        }
+        if left > 0 {
+            log::warn!("saving while {left} Python cell(s) are still running: they made no progress in time");
+        }
+        for what in pending.what {
+            let reply = match what {
+                SaveKind::One { uid, params, close } => self.save_workbook(uid, params, close),
+                SaveKind::AllThenClose => {
+                    let saved = self.save_all();
+                    if saved {
+                        self.quit_confirmed = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if saved { Ok(Json::Null) } else { Err("not every workbook was saved".into()) }
+                }
+            };
+            self.save_reply = Some(reply);
+        }
+    }
+
+    /// Saves the workbook `uid` (closing it afterwards if `close` and the save worked), keeping
+    /// the active workbook otherwise.
+    fn save_workbook(&mut self, uid: u64, params: Json, close: bool) -> Result<Json, String> {
+        let index = |app: &SheetApp, uid: u64| app.session.documents().iter().position(|d| d.uid == uid);
+        let Some(i) = index(self, uid) else { return Err("the workbook was closed before it was saved".into()) };
+        let keep = self.session.active().map(|d| d.uid);
+        self.session.set_active(i);
+        let r = self.session.run("file.save", params);
+        self.after_engine();
+        if let Err(e) = &r {
+            self.message = Some(("GridCraft".into(), clean_error(e)));
+        }
+        let saved = index(self, uid).and_then(|i| self.session.documents().get(i)).is_some_and(|d| !d.is_dirty());
+        if close
+            && saved
+            && let Some(i) = index(self, uid)
+        {
+            self.session.set_active(i);
+            self.run_or_alert("file.close", json!({"force": true}));
+        } else if let Some(k) = keep.and_then(|k| index(self, k)) {
+            self.session.set_active(k);
+        }
+        r
     }
 
     /// Saves every workbook with unsaved changes (asking for a file name where there is none).
@@ -425,6 +579,13 @@ impl SheetApp {
             )
         {
             self.commit_text_box_edit()?;
+        }
+        // A save waits for the Python cells still running, so the file gets their results.
+        if id == "file.save"
+            && let Some(uid) = self.session.active().map(|d| d.uid)
+            && self.defer_save(SaveKind::One { uid, params: params.clone(), close: false })
+        {
+            return Ok(json!({"waitingForPython": true}));
         }
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
@@ -935,6 +1096,8 @@ impl SheetApp {
             self.session.step_python();
             ctx.request_repaint_after(std::time::Duration::from_millis(15));
         }
+        // A save that waited for them.
+        self.poll_pending_save(ctx);
         // A package install that ended: say how, once.
         python_ui::install_toast(self);
         // Formulas entered since the last frame, from any source, feed Recently Used.
@@ -1060,6 +1223,8 @@ impl SheetApp {
         if self.grid.autosave
             && self.editor.is_none()
             && self.text_box_editor.is_none()
+            && self.pending_save.is_none()
+            && self.session.python_pending_cells() == 0
             && now - self.grid.last_autosave > 2000.0
             && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
         {
@@ -1172,4 +1337,48 @@ pub fn now_ms() -> f64 {
 
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_python::client::Launcher;
+
+    /// Python cells that never make progress (nothing steps them here): a save waits for them
+    /// only as long as a cell may run, then saves what they hold, and the window keeps working.
+    #[test]
+    fn a_save_waiting_for_python_that_never_finishes_saves_anyway() {
+        let path = std::env::temp_dir().join(format!("gridcraft-save-timeout-{}.xlsx", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut s = Session::new();
+        s.new_workbook();
+        s.set_python_launcher(Launcher::InProcess);
+        let mut app = SheetApp::new(s, Services::default());
+        app.run("python.set", json!({"cell": "A1", "code": "6 * 7"})).unwrap();
+        assert!(app.session.python_pending_cells() > 0);
+        let r = app.run("file.save", json!({"path": path.to_str().unwrap()})).unwrap();
+        assert_eq!(r["waitingForPython"], true);
+        assert!(app.save_pending());
+        assert!(!path.exists(), "not saved yet");
+        let ctx = egui::Context::default();
+        app.poll_pending_save(&ctx);
+        assert!(app.save_pending(), "still within the time a cell may run");
+        if let Some(p) = app.pending_save.as_mut() {
+            p.deadline = 0.0;
+        }
+        app.poll_pending_save(&ctx);
+        assert!(!app.save_pending());
+        assert!(path.exists(), "saved with what the cell holds");
+        assert!(matches!(app.save_reply, Some(Ok(_))));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn each_window_has_its_own_widget_ids() {
+        let a = SheetApp::new(Session::new(), Services::default());
+        let b = SheetApp::new(Session::new(), Services::default());
+        assert_ne!(a.widget_id("x"), b.widget_id("x"));
+        assert_eq!(a.widget_id("x"), a.widget_id("x"));
+        assert_ne!(a.widget_id("x"), a.widget_id("y"));
+    }
 }

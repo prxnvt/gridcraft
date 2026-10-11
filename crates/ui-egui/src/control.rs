@@ -84,6 +84,7 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})),
         // Python cells running or waiting in the background (they show #BUSY!).
         "pythonBusy": app.session.python_busy(),
+        "savePending": app.save_pending(),
         // The Python editor window: {open, sheet, cell, editing, dirty, python}.
         "pythonEditor": crate::python_window::state(app),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
@@ -190,6 +191,18 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     commands.into_iter().filter(|c| has(c, "id") || has(c, "label") || in_menu(c)).collect()
 }
 
+/// A save waits for the Python cells still running (see `SheetApp::run`): its reply waits too,
+/// and says how the save went.
+fn save_outcome(app: &SheetApp, r: Result<Json, String>) -> Outcome {
+    if r.is_ok() && app.save_pending() {
+        return Outcome::Wait { result: json!({ PENDING_SAVE: true }), deadline: f64::INFINITY };
+    }
+    wrap(r)
+}
+
+/// Marks a reply held for a save waiting for Python.
+const PENDING_SAVE: &str = "gridcraft.pendingSave";
+
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
@@ -199,6 +212,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let r = app.run(id, if params.is_null() { json!({}) } else { params });
             let wait = p.get("wait").and_then(Json::as_bool).unwrap_or(false);
+            if id == "file.save" {
+                return save_outcome(app, r);
+            }
             match r {
                 Ok(result) if wait && app.session.python_busy() => {
                     // Default: the Python time limit and the time imports may add, plus a second
@@ -410,7 +426,10 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 None => ok(json!({"title": app.session.active().map(|d| d.display_title())})),
             }
         }
-        "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
+        "app.save" => {
+            let r = app.run("file.save", json!({"path": s("path")}));
+            return save_outcome(app, r);
+        }
         "app.quit" => {
             // Automation quits without asking: every window when the host has several.
             app.quit_confirmed = true;
@@ -465,6 +484,20 @@ fn answer_waits(app: &mut SheetApp, ctx: &egui::Context) {
     let now = crate::now_ms();
     let waits = std::mem::take(&mut app.shots.waits);
     for (mut result, reply, deadline) in waits {
+        if result.get(PENDING_SAVE).is_some() {
+            // The save runs when the cells finish (or stop making progress), never later.
+            if app.save_pending() {
+                app.shots.waits.push((result, reply, deadline));
+                continue;
+            }
+            let answer = match app.save_reply.take() {
+                Some(Err(e)) => json!({"ok": false, "error": e}),
+                Some(Ok(v)) => json!({"ok": true, "result": v}),
+                None => json!({"ok": true, "result": Json::Null}),
+            };
+            let _ = reply.send(answer);
+            continue;
+        }
         if busy && now < deadline {
             app.shots.waits.push((result, reply, deadline));
             continue;

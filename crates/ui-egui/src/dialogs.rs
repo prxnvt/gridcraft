@@ -1010,10 +1010,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             if ui.button("Save").clicked() {
                                 // An uncommitted Python edit is committed first, so it is saved
                                 // too (a refused commit keeps the window open with its message).
+                                // Python cells still running (the one just committed too)
+                                // finish first, so the file gets their results.
                                 let committed = !app.pending_python_edit() || app.commit_edit(0, 0, false, false);
-                                if committed && app.save_all() {
-                                    app.quit_confirmed = true;
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                if committed {
+                                    app.save_all_and_close(ctx);
                                 }
                                 open = false;
                             }
@@ -1031,10 +1032,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             open = false;
                         }
                         if ui.button("Save").clicked() {
-                            app.run_or_alert("file.save", json!({}));
-                            if app.session.active().is_some_and(|x| !x.is_dirty()) {
-                                app.run_or_alert("file.close", json!({"force": true}));
-                            }
+                            app.save_and_close_workbook();
                             open = false;
                         }
                     });

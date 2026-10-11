@@ -529,3 +529,23 @@ fn python_run_goes_through_the_background_job() {
     assert!(!s.python_cell_pending(0, CellRef::new(0, 0)));
     assert_eq!(v(&s, "A1"), Value::Number(42.0));
 }
+
+/// Saving waits for the cells counted here (a package install alone isn't counted).
+#[test]
+fn pending_cells_count_the_queued_and_running_cells() {
+    let mut s = py_session();
+    s.set_python_background(true);
+    assert_eq!(s.python_pending_cells(), 0);
+    plant(&mut s, "B1", "xl('A1') * 2");
+    plant(&mut s, "B2", "xl('A1') * 3");
+    set(&mut s, "A1", "5");
+    assert_eq!(s.python_pending_cells(), 2);
+    for _ in 0..2000 {
+        if !s.step_python() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(s.python_pending_cells(), 0);
+    assert_eq!(v(&s, "B2"), Value::Number(15.0));
+}

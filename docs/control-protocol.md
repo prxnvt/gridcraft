@@ -71,6 +71,14 @@ the same background run, so `wait: true` works with it too. `editor.python` is t
 formula bar edits a Python cell's code; Ctrl+Enter (Cmd+Enter on macOS) commits it, as does the
 formula bar's Run button (Stop while the cell runs or waits, Re-run once it has a result).
 
+Saving waits for Python cells that are still running, so the file gets their results rather
+than `#BUSY!`: `app.save`, `file.save` and `file.saveAs` (and Save in the menus, Cmd+S and the
+Save of an unsaved-changes prompt) save once the cells finish. The wait is bounded: when no cell
+has finished for as long as one may run (the Python time limit, plus the time allowed for
+imports, plus one second), the file is saved with whatever the cells hold. The window keeps
+working meanwhile; `ui.inspect` reports `savePending: true`, and the reply to `app.save` or
+`engine.execute` with `file.save` is held until the save has happened and says how it went.
+
 `python.install {packages, approve: true}` installs Python packages in the background too (into
 the person's own virtual environment when it runs cells, else GridCraft's own environment, made
 first if needed; never into a system Python). Without `approve: true` it answers with the
