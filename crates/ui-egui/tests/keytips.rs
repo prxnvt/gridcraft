@@ -364,8 +364,8 @@ fn formulas_tab_buttons_all_have_keytips() {
     h.run_steps(2);
     let registered = h.state().keytips.reachable().to_vec();
     for seq in [
-        "MF", "MU", "MI", "ML", "MT", "ME", "MO", "MG", "MQ", "MN", "MM", "MS", "MC", "MP", "MD", "MA", "MH", "MK", "MV", "MW", "MX", "MB", "MJ",
-        "MY", "MZ", "M1",
+        "MF", "MU", "MR", "MI", "ML", "MT", "ME", "MO", "MG", "MQ", "MN", "MM", "MS", "MC", "MP", "MD", "MA", "MH", "MK", "MV", "MW", "MX", "MB",
+        "MJ", "MY", "MZ", "M1",
     ] {
         assert!(registered.iter().any(|s| s == seq), "{seq} is not registered: {registered:?}");
     }

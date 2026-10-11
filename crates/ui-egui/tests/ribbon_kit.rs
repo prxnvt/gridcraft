@@ -26,11 +26,10 @@ fn app_at(width: f32, tab: &str) -> Harness {
     h
 }
 
-/// The width budget. The Formulas tab joins the 1280 px list when M14.10 replaces the seven big
-/// Function Library buttons with three columns of small ones; until then it fits at 1366 px.
+/// The width budget: these tabs fit a 1280 px window.
 #[test]
 fn formulas_insert_and_automate_fit_the_width_budget() {
-    for (tab, width) in [("Insert", 1280.0), ("Automate", 1280.0), ("Formulas", 1366.0)] {
+    for (tab, width) in [("Insert", 1280.0), ("Automate", 1280.0), ("Formulas", 1280.0)] {
         let h = app_at(width, tab);
         let o = RibbonOverflow::get(&h.ctx);
         assert!(o.visible > 0.0);

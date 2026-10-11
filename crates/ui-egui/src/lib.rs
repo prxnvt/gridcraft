@@ -20,6 +20,7 @@ pub mod equation;
 pub mod form_controls;
 pub mod formula_bar;
 mod formula_locale;
+pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
@@ -62,6 +63,10 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    /// Formulas › Recently Used and Insert Function's Most Recently Used category, newest first
+    /// (at most [`function_library::RECENT_MAX`]).
+    #[serde(deserialize_with = "function_library::lenient_recent")]
+    pub recent_functions: Vec<String>,
     /// Interface language. English by default (so tests and headless renders never depend on the
     /// host's locale); the desktop app starts from [`i18n::Language::system`] when `ui.json` has
     /// no usable language (see [`i18n::saved_language`]). An unknown saved value reads as English
@@ -81,6 +86,7 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            recent_functions: function_library::default_recent(),
             language: i18n::Language::En,
         }
     }
@@ -185,6 +191,8 @@ pub struct SheetApp {
     pub dialog_next: Option<dialogs::Dialog>,
     /// Automate › Macros: relative recording, recent macros.
     pub macros: macro_ui::MacroUi,
+    /// How much of the session's journal Recently Used has read (see [`function_library::harvest`]).
+    pub(crate) journal_seen: usize,
 }
 
 /// A pending "replace it?" question from a command (see [`confirm_text`]).
@@ -220,6 +228,7 @@ impl SheetApp {
         // Python cells run in the background, stepped every frame, so a slow cell never blocks
         // the window.
         session.set_python_background(true);
+        let journal_seen = session.journal.len();
         SheetApp {
             session,
             ui: UiState::default(),
@@ -252,6 +261,7 @@ impl SheetApp {
             confirm: None,
             dialog_next: None,
             macros: macro_ui::MacroUi::default(),
+            journal_seen,
         }
     }
 
@@ -786,6 +796,8 @@ impl SheetApp {
             self.session.step_python();
             ctx.request_repaint_after(std::time::Duration::from_millis(15));
         }
+        // Formulas entered since the last frame, from any source, feed Recently Used.
+        function_library::harvest(self);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
