@@ -373,6 +373,7 @@ fn formula_cell(text: &str) -> gridcraft_model::Cell {
         value: gridcraft_core::Value::text("cached"),
         formula: Some(std::sync::Arc::new(gridcraft_model::Formula::new(text))),
         style: Default::default(),
+        py: None,
     }
 }
 

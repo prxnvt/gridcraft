@@ -307,7 +307,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(csi)?;
         let style = sh.style_id(chg);
-        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style });
+        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style, py: None });
         cx.touch(csi, chg);
         Ok(())
     })?;
@@ -610,7 +610,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
         sh.data_tables.retain(|t| t.range != r);
         for c in body.iter() {
             let style = sh.style_id(c);
-            sh.set_cell(c, Cell { value: Value::Empty, formula: None, style });
+            sh.set_cell(c, Cell { value: Value::Empty, formula: None, style, py: None });
         }
         sh.data_tables.push(table);
         for c in edges {
@@ -804,7 +804,7 @@ fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                     let src = CellRef::new(*row, c);
                     let to = dest.offset(i as i64, (c - list.start.col) as i64)?;
                     let style = sh.style_id(src);
-                    Some((to, Cell { value: sh.value(src), formula: None, style }))
+                    Some((to, Cell { value: sh.value(src), formula: None, style, py: None }))
                 })
             })
             .collect();
@@ -1032,7 +1032,7 @@ fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
             if v.is_empty() && style == StyleId::DEFAULT {
                 sh.remove_cell(c);
             } else {
-                sh.set_cell(c, Cell { value: v, formula: None, style });
+                sh.set_cell(c, Cell { value: v, formula: None, style, py: None });
             }
             cx.touch(dsi, c);
         }

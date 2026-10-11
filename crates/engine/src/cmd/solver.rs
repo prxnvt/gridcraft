@@ -603,7 +603,8 @@ fn model_save(s: &mut Session, p: &Json) -> Result<Json> {
         for (i, f) in rows.iter().enumerate() {
             let c = CellRef::new(to.row.saturating_add(i as u32), to.col);
             let style = cx.sheet_mut(si)?.style_id(c);
-            let cell = Cell { value: gridcraft_core::Value::Empty, formula: Some(std::sync::Arc::new(gridcraft_model::Formula::new(f))), style };
+            let cell =
+                Cell { value: gridcraft_core::Value::Empty, formula: Some(std::sync::Arc::new(gridcraft_model::Formula::new(f))), style, py: None };
             cx.sheet_mut(si)?.set_cell(c, cell);
             cx.touch(si, c);
         }
@@ -1101,7 +1102,7 @@ impl SolverJob {
             for (c, v) in vars.iter().zip(x) {
                 let sh = cx.sheet_mut(si)?;
                 let style = sh.style_id(*c);
-                sh.set_cell(*c, Cell { value: Value::Number(*v), formula: None, style });
+                sh.set_cell(*c, Cell { value: Value::Number(*v), formula: None, style, py: None });
                 cx.touch(si, *c);
             }
             Ok(())

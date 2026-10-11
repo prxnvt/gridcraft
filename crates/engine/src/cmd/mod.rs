@@ -330,13 +330,18 @@ fn check_protection(old: &Workbook, new: &Workbook) -> Result<()> {
     Ok(())
 }
 
-/// Two cells hold the same value or formula (formats aside).
+/// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result
+/// is not something the person edits).
 fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::Cell>) -> bool {
-    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| c.formula.is_none() && c.value.is_empty());
+    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| !c.has_content());
     match (a, b) {
         (Some(a), Some(b)) => match (&a.formula, &b.formula) {
             (Some(x), Some(y)) => x.text == y.text && x.array == y.array,
-            (None, None) => a.value == b.value,
+            (None, None) => match (&a.py, &b.py) {
+                (Some(x), Some(y)) => x.code == y.code && x.object == y.object,
+                (None, None) => a.value == b.value,
+                _ => false,
+            },
             _ => false,
         },
         _ => empty(a) && empty(b),

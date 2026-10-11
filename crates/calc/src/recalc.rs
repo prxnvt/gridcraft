@@ -973,7 +973,7 @@ impl Trial {
         for (si, c, v) in sets {
             if let Some(sh) = wb.sheet_mut(*si) {
                 let style = sh.style_id(*c);
-                sh.set_cell(*c, gridcraft_model::Cell { value: v.clone(), formula: None, style });
+                sh.set_cell(*c, gridcraft_model::Cell { value: v.clone(), formula: None, style, py: None });
                 keys.push((*si, *c));
             }
         }
@@ -1040,7 +1040,7 @@ impl Calc {
                     for (c, v) in results {
                         if sh.value(c) != v || sh.cell(c).is_some_and(|x| x.formula.is_some()) {
                             let style = sh.style_id(c);
-                            sh.set_cell(c, gridcraft_model::Cell { value: v, formula: None, style });
+                            sh.set_cell(c, gridcraft_model::Cell { value: v, formula: None, style, py: None });
                             written.push((si, c));
                         }
                     }
