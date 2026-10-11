@@ -13,8 +13,13 @@
 #![forbid(unsafe_code)]
 
 pub mod protocol;
+pub mod run;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod client;
+
+#[cfg(target_arch = "wasm32")]
+#[path = "client_web.rs"]
 pub mod client;
 
 #[cfg(all(feature = "python", not(target_arch = "wasm32")))]

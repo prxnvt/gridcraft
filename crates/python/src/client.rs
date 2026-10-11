@@ -12,72 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use crate::protocol::{Done, FromWorker, Limits, Output, PyError, ToWorker, XlReply, parse_from_worker, to_worker_line};
-
-/// How to start a worker.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Launcher {
-    /// Run `program` with `args` and extra environment variables (the app binary with
-    /// [`crate::WORKER_FLAG`]).
-    Process { program: PathBuf, args: Vec<String>, env: Vec<(String, String)> },
-    /// A worker thread in this process (tests): no memory watchdog, and a run that never ends
-    /// leaves its thread behind when killed.
-    InProcess,
-    /// Python can't run here; runs fail with this reason.
-    Unavailable(String),
-}
-
-impl Launcher {
-    /// This program started again as the worker.
-    pub fn current_exe() -> Launcher {
-        match std::env::current_exe() {
-            Ok(program) => Launcher::Process { program, args: vec![crate::WORKER_FLAG.to_string()], env: vec![] },
-            Err(e) => Launcher::Unavailable(format!("GridCraft couldn't find its own program to start Python: {e}")),
-        }
-    }
-}
-
-/// Why a run produced no value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FailureKind {
-    /// The code raised an exception (or didn't compile).
-    Error,
-    /// It ran longer than the time limit.
-    Timeout,
-    /// The worker used more memory than allowed and was stopped.
-    Memory,
-    /// The worker stopped unexpectedly.
-    Crashed,
-    /// Python can't run in this build or on this machine.
-    Unavailable,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Failure {
-    pub kind: FailureKind,
-    /// The line in the cell's code, for errors.
-    pub line: Option<u32>,
-    pub message: String,
-}
-
-/// What a run produced.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RunOutcome {
-    pub id: u64,
-    pub result: Result<Output, Failure>,
-    pub stdout: String,
-    pub stderr: String,
-    pub elapsed_ms: f64,
-}
-
-/// Something that happened while polling.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Event {
-    /// A run finished.
-    Done(RunOutcome),
-    /// The initialization code raised an error (the worker still runs cells).
-    InitError(PyError),
-}
+use crate::protocol::{Done, FromWorker, Limits, Output, ToWorker, XlReply, parse_from_worker, to_worker_line};
+pub use crate::run::*;
 
 /// A line read from the worker.
 pub enum Recv {
@@ -104,13 +40,6 @@ const RSS_EVERY: Duration = Duration::from_millis(50);
 /// Time over the limit a run gets before the parent kills it: the worker's own time limit stops
 /// ordinary code first, with a tidier message.
 const KILL_GRACE: Duration = Duration::from_millis(1_000);
-
-pub const TIMEOUT_MESSAGE: &str = "Python took longer than the time limit";
-pub const CRASH_MESSAGE: &str = "Python stopped unexpectedly";
-
-pub fn memory_message(limits: &Limits) -> String {
-    format!("Python used more than {} MB", limits.memory_bytes / (1024 * 1024))
-}
 
 #[allow(clippy::disallowed_methods)] // the client only exists off wasm, where the clock works
 fn now() -> Instant {

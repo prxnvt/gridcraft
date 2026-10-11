@@ -61,6 +61,7 @@ fn main() -> ExitCode {
     if gridcraft_python::is_worker_invocation(&args) {
         return ExitCode::from(u8::try_from(gridcraft_python::worker_main()).unwrap_or(1));
     }
+    gridcraft_python::client::set_default_launcher(gridcraft_python::client::Launcher::current_exe());
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
         Some("--version" | "-V" | "version") => {

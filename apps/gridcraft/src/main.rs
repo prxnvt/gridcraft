@@ -177,6 +177,8 @@ fn main() -> eframe::Result<()> {
     if gridcraft_python::is_worker_invocation(&args) {
         std::process::exit(gridcraft_python::worker_main());
     }
+    // Python cells run in this binary started again as the worker.
+    gridcraft_python::client::set_default_launcher(gridcraft_python::client::Launcher::current_exe());
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to

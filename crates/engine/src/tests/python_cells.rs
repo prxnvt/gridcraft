@@ -97,7 +97,7 @@ fn xl_references_follow_inserts_moves_and_renames() {
     s.execute("edit.paste", json!({"at": "H1"})).unwrap();
     assert!(code(&s, 0, "C6").unwrap().starts_with("a = xl(\"H1:H4\")"), "{:?}", code(&s, 0, "C6"));
     // Deleting the referenced cells leaves #REF!, which fails when the code runs.
-    s.execute("home.deleteColumns", json!({"columns": "H:H"})).unwrap();
+    s.execute("home.deleteColumns", json!({"cols": "H:H"})).unwrap();
     assert!(code(&s, 0, "C6").unwrap().starts_with("a = xl(\"#REF!\")"), "{:?}", code(&s, 0, "C6"));
 }
 
