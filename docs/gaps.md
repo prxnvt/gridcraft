@@ -146,6 +146,22 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - Font weights beyond regular/bold (#168), system font list (#4), Calibri metrics (#29), macOS
   chrome (#169, #170), Linux title bar (#54), icon consistency across apps (#173). **Estimate:** 7–12 h.
 
+### 25. Open bug: scikit-learn looks like it fails in a Python cell after installing it (S)
+- **Symptom:** after approving the install of scikit-learn from a cell that imports it, the cell
+  still failed, so the install looked broken. The package was in fact installed (1.9.1, macOS,
+  CPython 3.14, uv).
+- **Evidence:** a cold first import of four sklearn submodules took about 22 s in a fresh
+  environment and under 1 s afterwards; `--compile-bytecode` made no real difference. The time
+  goes on the first load of each scipy and numpy native library (about 0.5 to 1 s each), which
+  looks like macOS checking each new binary (not confirmed). Before M14.49 that first import
+  hit the 5 s cell limit and the cell was then refused until changed.
+- **Mitigated, not fixed:** M14.49 adds an install warm-up step, a 60 s import allowance and one
+  retry; with them a first `import sklearn` succeeded in testing. Still open: confirm the cause,
+  replay the original workbook against a fresh environment with the M14.46 logging, check
+  environments installed before M14.49 (no warm-up), and decide whether the retry should apply
+  only to stops that happen mid-import.
+- **Estimate:** 2–4 h.
+
 ## Revision history
 
 | Date | Change | Summary |
