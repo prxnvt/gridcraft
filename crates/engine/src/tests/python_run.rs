@@ -372,3 +372,43 @@ fn cells_run_on_the_users_python_when_the_search_finds_one() {
     let log = s.execute("python.diagnostics", json!({})).unwrap();
     assert!(log["runs"].as_array().unwrap().iter().all(|r| r["status"] == "ok"), "{log}");
 }
+
+/// The crash-loop guard: a cell that stopped the worker doesn't run again (and can't stop it
+/// again) until its code or the cells it reads change, or Reset Runtime.
+#[test]
+fn a_cell_that_stops_the_worker_is_not_rerun_until_it_changes() {
+    let mut s = py_session();
+    s.set_python_launcher(process_launcher());
+    s.prefs.python_timeout_seconds = 0.5;
+    s.execute("cell.set", json!({"cell": "C1", "input": "9"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C2", "input": "1"})).unwrap();
+    plant(&mut s, "A1", "base = xl('C2')\nbase");
+    plant(&mut s, "A2", "xl('C1') + 10 ** 10 ** 9");
+    plant(&mut s, "A3", "base + 1");
+    s.python_reset().unwrap();
+    assert_eq!(v(&s, "A2"), err(CellError::Timeout));
+    let starts = |s: &Session| s.doc().unwrap().py_log.len();
+    // An edit before it reruns A1 and the cells after it, but not A2: no kill, no restart.
+    let before = starts(&s);
+    s.execute("cell.set", json!({"cell": "C2", "input": "2"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(2.0));
+    assert_eq!(v(&s, "A2"), err(CellError::Python));
+    assert_eq!(v(&s, "A3"), Value::Number(3.0));
+    let log = s.execute("python.diagnostics", json!({})).unwrap();
+    let runs = log["runs"].as_array().unwrap();
+    let a2 = runs.iter().rev().find(|r| r["cell"] == "A2").unwrap();
+    assert_eq!(a2["status"], "refused");
+    assert_eq!(a2["error"], gridcraft_python::client::REFUSED_MESSAGE);
+    assert_eq!(starts(&s) - before, 3, "A1, A2 (refused) and A3; nothing ran twice");
+    // Changing what it reads runs it again.
+    s.execute("cell.set", json!({"cell": "C1", "input": "8"})).unwrap();
+    assert_eq!(v(&s, "A2"), err(CellError::Timeout));
+    // So does Reset Runtime.
+    s.execute("cell.set", json!({"cell": "C2", "input": "3"})).unwrap();
+    assert_eq!(v(&s, "A2"), err(CellError::Python), "refused again");
+    s.python_reset().unwrap();
+    assert_eq!(v(&s, "A2"), err(CellError::Timeout));
+    // Changing its code too.
+    s.execute("python.set", json!({"cell": "A2", "code": "xl('C1') * 2"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(16.0));
+}

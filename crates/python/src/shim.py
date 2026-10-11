@@ -340,9 +340,45 @@ def _line(e):
     return line
 
 
+# Import names whose pip package is called something else.
+PIP_NAMES = {
+    "sklearn": "scikit-learn", "cv2": "opencv-python", "PIL": "pillow", "yaml": "pyyaml",
+    "bs4": "beautifulsoup4", "dateutil": "python-dateutil", "skimage": "scikit-image",
+}
+
+
+def _externally_managed():
+    import sysconfig
+
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return False
+    stdlib = sysconfig.get_path("stdlib") or ""
+    return os.path.isfile(os.path.join(stdlib, "EXTERNALLY-MANAGED"))
+
+
+def _install_hint(module):
+    # GridCraft never runs pip: it says what to run.
+    package = PIP_NAMES.get(module, module)
+    exe = sys.executable or "python3"
+    try:
+        managed = _externally_managed()
+    except Exception:
+        managed = False
+    if managed:
+        venv_python = "<folder>\\Scripts\\python.exe" if os.name == "nt" else "<folder>/bin/python"
+        return (
+            ". This Python is managed by your system, so pip can't install into it: make a virtual "
+            'environment with "%s" -m venv <folder>, install %s into it with "%s" -m pip install %s, '
+            "then choose %s in Python Options." % (exe, package, venv_python, package, venv_python)
+        )
+    return '. Install it with: "%s" -m pip install %s' % (exe, package)
+
+
 def _message(e):
     if isinstance(e, SyntaxError):
         return "%s: %s" % (type(e).__name__, e.msg)
+    if isinstance(e, ModuleNotFoundError) and e.name:
+        return "ModuleNotFoundError: No module named '%s'%s" % (e.name, _install_hint(e.name.split(".")[0]))
     text = str(e)
     return "%s: %s" % (type(e).__name__, text) if text else type(e).__name__
 

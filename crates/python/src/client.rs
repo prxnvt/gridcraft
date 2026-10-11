@@ -223,7 +223,9 @@ impl PyWorker {
                     if self.retry_start() {
                         continue;
                     }
-                    self.fail_all(FailureKind::Crashed, CRASH_MESSAGE.into(), &mut events);
+                    let tail = self.conn.as_mut().map(|c| c.transport.stderr_tail()).unwrap_or_default();
+                    let msg = if stack_overflowed(&tail) { RECURSION_MESSAGE } else { CRASH_MESSAGE };
+                    self.fail_all(FailureKind::Crashed, msg.into(), &mut events);
                     break;
                 }
             }
@@ -259,7 +261,7 @@ impl PyWorker {
                 {
                     next.started = Some(now());
                 }
-                events.push(Event::Done(outcome(done)));
+                events.push(Event::Done(outcome(done, &self.limits)));
             }
         }
     }
@@ -270,7 +272,8 @@ impl PyWorker {
             if self.retry_start() {
                 return;
             }
-            self.fail_all(FailureKind::Timeout, TIMEOUT_MESSAGE.into(), events);
+            let msg = timeout_message(&self.limits);
+            self.fail_all(FailureKind::Timeout, msg, events);
             return;
         }
         let Some(conn) = self.conn.as_mut() else { return };
@@ -327,9 +330,12 @@ impl Drop for PyWorker {
     }
 }
 
-fn outcome(done: Done) -> RunOutcome {
+fn outcome(done: Done, limits: &Limits) -> RunOutcome {
     let result = match (done.output, done.error) {
-        (_, Some(e)) if e.timeout => Err(Failure { kind: FailureKind::Timeout, line: e.line, message: e.message }),
+        (_, Some(e)) if e.timeout => Err(Failure { kind: FailureKind::Timeout, line: e.line, message: timeout_message(limits) }),
+        (_, Some(e)) if e.message.starts_with("RecursionError") => {
+            Err(Failure { kind: FailureKind::Error, line: e.line, message: RECURSION_MESSAGE.into() })
+        }
         (_, Some(e)) => Err(Failure { kind: FailureKind::Error, line: e.line, message: e.message }),
         (Some(o), None) => Ok(o),
         (None, None) => Ok(Output::default()),
@@ -679,13 +685,14 @@ mod tests {
         // An endless loop is stopped by the time limit.
         let o = w.run_blocking("while True: pass", &mut cells);
         assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
+        assert_eq!(failure(&o).message, "Stopped after 1 s (an endless loop?)");
         assert!(o.elapsed_ms < 5_000.0, "{o:?}");
         assert_eq!(value(&w.run_blocking("n", &mut cells)), Value::Number(10.0), "the worker survived its own time limit");
 
         // A huge integer power never checks the time limit: the parent kills the worker.
         let o = w.run_blocking("10 ** 10 ** 9", &mut cells);
         assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
-        assert_eq!(failure(&o).message, TIMEOUT_MESSAGE);
+        assert_eq!(failure(&o).message, "Stopped after 1 s (an endless loop?)");
         assert!(!w.alive());
         assert_eq!(value(&w.run_blocking("2 * 21", &mut cells)), Value::Number(42.0), "a fresh worker starts");
 
@@ -698,13 +705,14 @@ mod tests {
             assert!(matches!(f.kind, FailureKind::Memory | FailureKind::Crashed | FailureKind::Error), "{o:?}");
         }
         if f.kind == FailureKind::Memory {
-            assert_eq!(f.message, "Python used more than 512 MB");
+            assert_eq!(f.message, "Used more than 512 MB");
         }
         assert_eq!(value(&w.run_blocking("'still here'", &mut cells)), Value::text("still here"));
 
         // Deep recursion is a Python error, not a crash.
         let o = w.run_blocking("def f(n): return f(n + 1)\nf(0)", &mut cells);
         assert_eq!(failure(&o).kind, FailureKind::Error, "{o:?}");
+        assert_eq!(failure(&o).message, "Too much recursion");
         assert!(w.starts() >= 3, "restarted after each kill: {}", w.starts());
     }
 
@@ -730,6 +738,19 @@ mod tests {
             assert_eq!(w.starts(), 2);
         }
         let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A worker whose stack runs out dies; its last words on stderr turn into "Too much recursion".
+    #[test]
+    #[cfg(unix)]
+    fn a_stack_overflow_reads_as_too_much_recursion() {
+        let script = "printf '\\036gcpy {\"type\":\"ready\",\"initError\":null}\\n'; read a; read b; echo \"thread 'python-worker' has overflowed its stack\" >&2; sleep 0.2; exit 134";
+        let launcher = Launcher::Process { program: "/bin/sh".into(), args: vec!["-c".into(), script.into()], env: vec![] };
+        let mut w = PyWorker::new(launcher, Limits::default(), String::new());
+        let o = w.run_blocking("f()", &mut cells);
+        assert_eq!((failure(&o).kind, failure(&o).message.as_str()), (FailureKind::Crashed, RECURSION_MESSAGE), "{o:?}");
+        assert!(stack_overflowed("Fatal Python error: _Py_CheckRecursiveCall: Cannot recover from stack overflow."));
+        assert!(!stack_overflowed("Traceback (most recent call last):"));
     }
 
     #[test]
@@ -828,6 +849,19 @@ mod cpython_tests {
         assert!(failure(&w.run_blocking("xl('nowhere')", &mut cells)).message.starts_with("ValueError"));
         let o = w.run_blocking("[[0] * 2000 for _ in range(1000)]", &mut cells);
         assert!(failure(&o).message.contains("more than 1000000 cells"), "{o:?}");
+        // A missing package names the command that installs it (GridCraft never runs pip).
+        let o = w.run_blocking("import gridcraft_no_such_module.sub", &mut cells);
+        let m = &failure(&o).message;
+        assert!(m.starts_with("ModuleNotFoundError: No module named 'gridcraft_no_such_module'"), "{m}");
+        let exe = i.program.display().to_string();
+        if i.externally_managed {
+            assert!(m.contains(&format!("\"{exe}\" -m venv <folder>")) && m.contains("-m pip install gridcraft_no_such_module"), "{m}");
+        } else {
+            assert!(m.ends_with(&format!("Install it with: \"{exe}\" -m pip install gridcraft_no_such_module")), "{m}");
+        }
+        assert!(failure(&w.run_blocking("import sklearn_gc_missing", &mut cells)).message.contains("pip install sklearn_gc_missing"));
+        // Runaway recursion.
+        assert_eq!(failure(&w.run_blocking("def f(n): return f(n + 1)\nf(0)", &mut cells)).message, "Too much recursion");
         // SystemExit is a cell error, not the end of the worker.
         assert_eq!(failure(&w.run_blocking("raise SystemExit(3)", &mut cells)).kind, FailureKind::Error);
         assert_eq!(value(&w.run_blocking("base", &mut cells)), Value::Number(100.0));

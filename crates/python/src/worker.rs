@@ -167,6 +167,9 @@ impl<W: Write> Worker<W> {
     }
 
     fn run(&mut self, id: u64, code: &str) -> Done {
+        if let Some(error) = refusal(code) {
+            return Done { id, error: Some(error), ..Done::default() };
+        }
         let started = now();
         let repl = match self.repl.take() {
             Some(r) => r,
@@ -247,6 +250,22 @@ impl<W: Write> Worker<W> {
                 _ => continue,
             }
         }
+    }
+}
+
+/// Why the built-in Python won't run `code` at all: it imports a module Monty doesn't have, or
+/// uses something Monty's compiler reports as unsupported. Nothing of such a cell runs.
+fn refusal(code: &str) -> Option<PyError> {
+    if let Some((module, line)) = crate::imports::missing_module(code) {
+        return Some(PyError { line: Some(line), message: crate::imports::needs_cpython(&module), timeout: false });
+    }
+    // Compiled on its own: other errors (syntax, names) come from the run itself, as usual.
+    match monty::MontyRun::new(code.to_string(), "cell.py", vec!["xl".into()], CompileOptions::default()) {
+        Err(e) if e.exc_type() == ExcType::NotImplementedError => {
+            let line = e.traceback().last().map(|f| f.start.line);
+            Some(PyError { line, message: crate::imports::unsupported(e.message().unwrap_or("unsupported code")), timeout: false })
+        }
+        _ => None,
     }
 }
 
@@ -455,5 +474,48 @@ mod tests {
         assert_eq!(xl_object(&a, true).py_repr(), "[{'k': 1, 'v': '#DIV/0!'}]");
         assert_eq!(xl_object(&Value::Number(2.5), false).py_repr(), "2.5");
         assert_eq!(xl_object(&Value::Empty, false).py_repr(), "None");
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    fn run(code: &str) -> Done {
+        let (_tx, rx) = mpsc::channel::<String>();
+        let mut w = Worker { repl: None, limits: Limits::default(), init_code: String::new(), out: Vec::new(), input: rx };
+        w.run(1, code)
+    }
+
+    #[test]
+    fn code_the_built_in_python_cant_run_is_refused_whole() {
+        for (code, module, line) in [
+            ("print('ran')\nimport pandas as pd\npd.DataFrame()", "pandas", 2),
+            ("import statistics", "statistics", 1),
+            ("from numpy import array", "numpy", 1),
+        ] {
+            let d = run(code);
+            let e = d.error.unwrap_or_else(|| panic!("{code}"));
+            assert_eq!(
+                e.message,
+                format!(
+                    "This cell needs CPython: `{module}` isn't available in the built-in Python. Install Python 3.11 or newer and set it in Python Options."
+                )
+            );
+            assert_eq!(e.line, Some(line));
+            assert_eq!(d.stdout, "", "nothing of the cell ran");
+        }
+        let d = run("print('ran')\nmatch 1:\n    case 1: pass");
+        assert_eq!(
+            d.error.map(|e| e.message),
+            Some("This cell needs CPython: the built-in Python doesn't support pattern matching (match statements). Install Python 3.11 or newer and set it in Python Options.".into())
+        );
+        assert_eq!(d.stdout, "");
+        let d = run("from math import *");
+        assert!(d.error.is_some_and(|e| e.message.contains("doesn't support wildcard imports")));
+        // What the built-in Python has still runs, and ordinary errors are unchanged.
+        assert!(run("import math, json\nfrom collections import Counter\nmath.sqrt(4)").error.is_none());
+        assert!(run("undefined_name").error.is_some_and(|e| e.message.starts_with("NameError")));
+        assert!(run("def f(:").error.is_some_and(|e| e.message.starts_with("SyntaxError")));
     }
 }

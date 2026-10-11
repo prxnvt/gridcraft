@@ -68,6 +68,7 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
                     "stopped" => ("Stopped", t.danger),
                     "blocked" => ("Turned off", t.text_dim),
                     "cycle" => ("Cycle", t.danger),
+                    "refused" => ("Not run", t.danger),
                     other => (other, t.text_dim),
                 };
                 ui.label(RichText::new(status).color(color).font(theme::ui_bold(12.0)));

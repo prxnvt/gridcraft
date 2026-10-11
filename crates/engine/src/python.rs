@@ -46,7 +46,8 @@ pub struct PyRunLog {
     pub sheet: String,
     /// The cell (`A1`), or empty for the initialization code.
     pub cell: String,
-    /// `ok`, `error`, `timeout`, `memory`, `stopped` (the worker stopped), `blocked` or `cycle`.
+    /// `ok`, `error`, `timeout`, `memory`, `stopped` (the worker stopped), `blocked`, `cycle` or
+    /// `refused` (the cell stopped the worker last time and hasn't changed since).
     pub status: &'static str,
     pub ms: f64,
     pub stdout: String,
@@ -81,6 +82,9 @@ struct DocPy {
     job: Option<Job>,
     /// Python cell positions per sheet, with the sheet version they were found in.
     positions: HashMap<String, (Arc<Sheet>, BTreeSet<CellRef>)>,
+    /// Cells that stopped the worker when they last ran, with a fingerprint of their code and
+    /// inputs then. They don't run again (and can't stop it again) until that changes, or Reset.
+    refused: HashMap<Key, u64>,
 }
 
 /// A refresh in progress.
@@ -270,6 +274,23 @@ fn first_affected(cells: &[PyCell], ch: &EditChanges) -> Option<usize> {
         }
     }
     first
+}
+
+/// A fingerprint of a Python cell's code and of what its `xl()` calls read now. A call whose
+/// reference is only known when it runs counts the workbook's revision, so any edit changes it.
+fn fingerprint(d: &DocState, key: Key) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let code = py_code(&d.wb, key)?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut h);
+    let max = Limits::default().output_cells;
+    for call in gridcraft_model::python::xl_calls(&code) {
+        match call.reference {
+            Some(r) => serde_json::to_vec(&resolve_xl(&d.wb, key.0, key.1, &r, max)).unwrap_or_default().hash(&mut h),
+            None => d.revision.hash(&mut h),
+        }
+    }
+    Some(h.finish())
 }
 
 /// What `xl(reference)` reads, seen from `at` on sheet `si`.
@@ -636,6 +657,8 @@ impl Session {
         }
         dp.job = None;
         dp.dirty = false;
+        // Reset Runtime asks for every cell to run, including ones that stopped Python before.
+        dp.refused.clear();
         self.schedule_python(uid, Some(0), &HashSet::new(), true);
         self.finish_unless_background(uid);
     }
@@ -823,6 +846,20 @@ impl Session {
                     return;
                 };
                 let Some(code) = py_code(&d.wb, key) else { continue };
+                // A cell that stopped the worker last time, unchanged since, doesn't run again.
+                if let Some(fp) = dp.refused.get(&key).copied() {
+                    if fingerprint(d, key) == Some(fp) {
+                        write_error(d, key, CellError::Python);
+                        let mut e = log_entry(&d.wb, key, "refused");
+                        e.error = Some(gridcraft_python::client::REFUSED_MESSAGE.into());
+                        push_log(d, e);
+                        if let Some(job) = dp.job.as_mut() {
+                            job.ran.push(key);
+                        }
+                        continue;
+                    }
+                    dp.refused.remove(&key);
+                }
                 let init = init_code(&d.wb);
                 let worker = dp.worker(&launcher, &limits, init);
                 match worker.submit(&code) {
@@ -892,6 +929,11 @@ fn finish_run(d: &mut DocState, dp: &mut DocPy, key: Key, replay: bool, o: &RunO
     let changed = write_outcome(d, key, o);
     let worker_lost = matches!(&o.result, Err(Failure { kind: FailureKind::Timeout | FailureKind::Memory | FailureKind::Crashed, .. }))
         && dp.worker.as_ref().is_some_and(|w| !w.alive());
+    // The crash-loop guard: this cell stopped the worker, so it doesn't run again until its code
+    // or inputs change.
+    if worker_lost && let Some(fp) = fingerprint(d, key) {
+        dp.refused.insert(key, fp);
+    }
     let Some(job) = dp.job.as_mut() else { return };
     if replay {
         return;

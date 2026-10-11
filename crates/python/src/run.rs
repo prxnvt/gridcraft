@@ -89,9 +89,26 @@ pub enum Event {
     InitError(PyError),
 }
 
-pub const TIMEOUT_MESSAGE: &str = "Python took longer than the time limit";
 pub const CRASH_MESSAGE: &str = "Python stopped unexpectedly";
+/// A run that recursed until Python's limit, or until the worker's stack ran out.
+pub const RECURSION_MESSAGE: &str = "Too much recursion";
+/// A cell that stopped the worker the last time it ran, and hasn't changed since.
+pub const REFUSED_MESSAGE: &str =
+    "Not run: this cell stopped Python the last time it ran. Change its code or the cells it reads, or use Reset Runtime, to run it again.";
 
+/// A run stopped at the time limit.
+pub fn timeout_message(limits: &Limits) -> String {
+    let secs = limits.timeout_ms as f64 / 1000.0;
+    let secs = if secs.fract() == 0.0 { format!("{secs:.0}") } else { format!("{secs}") };
+    format!("Stopped after {secs} s (an endless loop?)")
+}
+
+/// A worker stopped over its memory cap.
 pub fn memory_message(limits: &Limits) -> String {
-    format!("Python used more than {} MB", limits.memory_bytes / (1024 * 1024))
+    format!("Used more than {} MB", limits.memory_bytes / (1024 * 1024))
+}
+
+/// Whether a worker's last words say its stack ran out (Rust's handler, CPython's fatal error).
+pub fn stack_overflowed(stderr: &str) -> bool {
+    stderr.contains("has overflowed its stack") || stderr.contains("Cannot recover from stack overflow") || stderr.contains("Stack overflow")
 }
