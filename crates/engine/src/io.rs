@@ -40,6 +40,7 @@ impl FileKind {
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let (mut wb, mut warnings) = read_bytes(name, bytes)?;
     warnings.extend(enforce_limits(&mut wb, &LOAD_LIMITS));
+    warnings.extend(crate::macros::load(&mut wb));
     Ok((wb, warnings))
 }
 
@@ -281,7 +282,11 @@ fn rename_first_sheet(wb: &mut Workbook, path: &str) {
 pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
     let sheet = wb.active_sheet;
     match FileKind::from_path(path).unwrap_or(FileKind::Xlsx) {
-        FileKind::Xlsx => gridcraft_xlsx::write_xlsx(wb).map_err(|e| EngineError::Other(e.to_string())),
+        FileKind::Xlsx => {
+            // Macros travel in hidden names.
+            let named = crate::macros::with_names(wb)?;
+            gridcraft_xlsx::write_xlsx(named.as_ref().unwrap_or(wb)).map_err(|e| EngineError::Other(e.to_string()))
+        }
         FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Csv => Ok(wb.sheet(sheet).map(|sh| gridcraft_xlsx::write_csv(sh, wb, b',')).unwrap_or_default()),

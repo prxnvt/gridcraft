@@ -563,7 +563,6 @@ fn set_view(s: &mut Session, mode: &str) -> Result<Json> {
 
 /// Keys of the workbook data kept in hidden names (see `stash`).
 const VIEWS_KEY: &str = "custom_views";
-const SCRIPTS_KEY: &str = "scripts";
 const WATCH_KEY: &str = "watch";
 
 /// A JSON object or list stored in the workbook (`{}` when there is none).
@@ -766,23 +765,23 @@ fn queries(s: &mut Session, _: &Json) -> Result<Json> {
 fn record(s: &mut Session, p: &Json) -> Result<Json> {
     if bool_param(p, "stop").unwrap_or(false) || s.is_recording() {
         let Some(rec) = s.stop_recording() else { return Ok(json!({"recording": false})) };
-        let scripts = stash_get(&s.doc()?.wb, SCRIPTS_KEY);
+        let wb = s.doc()?.wb.clone();
         let mut cmds: Vec<Json> = Vec::new();
         for st in &rec.steps {
             if st.id == "automate.runScript" {
                 // A script run while recording is recorded as its steps, so the new script stands
                 // on its own (scripts never run other scripts).
-                let inner = st.params["name"].as_str().and_then(|n| scripts.get(n)).and_then(Json::as_array);
-                let inner = inner.into_iter().flatten().filter(|x| !x["command"].as_str().unwrap_or("").starts_with("automate."));
-                cmds.extend(inner.map(|x| json!({"command": x["command"], "params": x["params"]})));
+                let inner = st.params["name"].as_str().and_then(|n| crate::macros::find(&wb, n)).and_then(|i| wb.macros.get(i));
+                let inner = inner.map(|m| crate::macros::command_steps(&m.steps)).unwrap_or_default();
+                cmds.extend(inner.into_iter().map(|(_, id, params)| json!({"command": id, "params": params})));
             } else if !st.id.starts_with("automate.") {
                 cmds.push(json!({"command": st.id, "params": st.params}));
             }
         }
-        cmds.truncate(crate::record::RECORD_LIMIT);
+        cmds.truncate(gridcraft_model::MAX_MACRO_STEPS);
         let name = match str_param(p, "name") {
             Some(n) => n.to_string(),
-            None => (1..).map(|n| format!("Script {n}")).find(|n| scripts.get(n).is_none()).unwrap_or_else(|| "Script".into()),
+            None => (1..).map(|n| format!("Script {n}")).find(|n| crate::macros::find(&wb, n).is_none()).unwrap_or_else(|| "Script".into()),
         };
         s.execute("automate.newScript", json!({"name": name, "commands": cmds}))?;
         return Ok(json!({"recording": false, "saved": name, "steps": cmds.len(), "dropped": rec.dropped}));
@@ -797,34 +796,45 @@ fn new_script(s: &mut Session, p: &Json) -> Result<Json> {
     if !cmds.is_array() {
         return Err(bad("automate.newScript", "`commands` must be an array"));
     }
+    let m = crate::macros::legacy_script(&name, &cmds).map_err(|e| bad("automate.newScript", e))?;
     edit(s, |cx| {
-        let mut all = stash_get(&cx.wb, SCRIPTS_KEY);
-        all[name.as_str()] = cmds.clone();
-        super::stash::set_json(&mut cx.wb, SCRIPTS_KEY, &all)?;
+        if let Some(old) = crate::macros::find(&cx.wb, &name).and_then(|i| cx.wb.macros.get_mut(i)) {
+            *old = m;
+        } else if cx.wb.macros.len() >= gridcraft_model::MAX_MACROS {
+            return Err(EngineError::Other(format!("A workbook can hold at most {} macros.", gridcraft_model::MAX_MACROS)));
+        } else {
+            cx.wb.macros.push(m);
+        }
         Ok(json!({"name": name}))
     })
 }
 
 fn all_scripts(s: &mut Session, _: &Json) -> Result<Json> {
-    let all = stash_get(&s.doc()?.wb, SCRIPTS_KEY);
-    Ok(Json::Array(
-        all.as_object().map(|o| o.iter().map(|(k, v)| json!({"name": k, "steps": v.as_array().map_or(0, Vec::len)})).collect()).unwrap_or_default(),
-    ))
+    let wb = &s.doc()?.wb;
+    Ok(Json::Array(wb.macros.iter().map(|m| json!({"name": m.name, "steps": m.step_count()})).collect()))
 }
 
 fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("automate.runScript", "missing `name`"))?;
-    let all = stash_get(&s.doc()?.wb, SCRIPTS_KEY);
-    let steps = all.get(name).and_then(Json::as_array).cloned().ok_or_else(|| bad("automate.runScript", "no such script"))?;
+    let wb = s.doc()?.wb.clone();
+    let m = crate::macros::find(&wb, name).and_then(|i| wb.macros.get(i)).ok_or_else(|| bad("automate.runScript", "no such script"))?;
+    let steps: Vec<(String, Json)> = m
+        .steps
+        .iter()
+        .filter(|st| st.enabled)
+        .filter_map(|st| match &st.kind {
+            gridcraft_model::StepKind::Command { id, params } => Some((id.clone(), params.clone())),
+            _ => None,
+        })
+        .collect();
     // One undo step for the whole run; a failing step rolls back the steps before it.
     s.grouped(&format!("Run Script: {name}"), |s| {
         let mut n = 0;
-        for (i, st) in steps.iter().take(100_000).enumerate() {
-            let id = st["command"].as_str().unwrap_or("");
+        for (i, (id, params)) in steps.iter().take(100_000).enumerate() {
             if id.starts_with("automate.") {
                 continue;
             }
-            s.execute(id, st["params"].clone()).map_err(|e| EngineError::Other(format!("step {} ({id}): {e}", i + 1)))?;
+            s.execute(id, params.clone()).map_err(|e| EngineError::Other(format!("step {} ({id}): {e}", i + 1)))?;
             n += 1;
         }
         Ok(json!({"ran": n}))
@@ -834,11 +844,9 @@ fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
 fn delete_script(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("automate.deleteScript", "missing `name`"))?.to_string();
     edit(s, |cx| {
-        let mut all = stash_get(&cx.wb, SCRIPTS_KEY);
-        if let Some(o) = all.as_object_mut() {
-            o.remove(&name);
+        if let Some(i) = crate::macros::find(&cx.wb, &name) {
+            cx.wb.macros.remove(i);
         }
-        super::stash::set_json(&mut cx.wb, SCRIPTS_KEY, &all)?;
         Ok(Json::Null)
     })
 }

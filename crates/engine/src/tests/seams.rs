@@ -466,11 +466,15 @@ fn workbooks_saved_with_the_old_names_still_work() {
     assert_eq!(v(&s, "A1").display(), "from an old file");
     assert_eq!(s.execute("formulas.watchWindow", json!({})).unwrap()[0]["cell"], "Sheet1!A1");
     assert_eq!(s.execute("data.scenarioManager", json!({})).unwrap()["scenarios"][0]["name"], "Old");
-    // The next write moves the item to the new names.
-    s.execute("automate.newScript", json!({"name": "New", "commands": []})).unwrap();
+    // Scripts became macros when the file opened; the next write of another item moves it to
+    // the new names.
     let names: Vec<String> = s.doc().unwrap().wb.names.iter().map(|n| n.name.clone()).collect();
-    assert!(names.contains(&"_gc_scripts_0".to_string()) && !names.contains(&"_sc_scripts".to_string()), "{names:?}");
+    assert!(!names.iter().any(|n| n.ends_with("scripts") || n.contains("scripts_")), "{names:?}");
+    s.execute("automate.newScript", json!({"name": "New", "commands": []})).unwrap();
     assert_eq!(s.execute("automate.allScripts", json!({})).unwrap().as_array().unwrap().len(), 2);
+    s.execute("formulas.watchWindow", json!({"add": "Sheet1!B2"})).unwrap();
+    let names: Vec<String> = s.doc().unwrap().wb.names.iter().map(|n| n.name.clone()).collect();
+    assert!(names.contains(&"_gc_watch_0".to_string()) && !names.contains(&"_sc_watch".to_string()), "{names:?}");
 }
 
 #[test]
@@ -479,9 +483,10 @@ fn a_large_script_round_trips_through_xlsx() {
     let steps: Vec<serde_json::Value> =
         (1..=400).map(|r| json!({"command": "cell.set", "params": {"cell": format!("A{r}"), "input": format!("row \"{r}\"")}})).collect();
     s.execute("automate.newScript", json!({"name": "Big", "commands": steps})).unwrap();
-    let names = s.doc().unwrap().wb.names.iter().filter(|n| n.name.starts_with("_gc_scripts_")).count();
-    assert!(names >= 3, "more than 8,192 characters needs several names, got {names}");
     let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    let (raw, _) = gridcraft_xlsx::read_xlsx(&crate::io::base64_decode(&b64).unwrap()).unwrap();
+    let names = raw.names.iter().filter(|n| n.name.starts_with("_gc_macro_0_")).count();
+    assert!(names >= 3, "more than 8,192 characters needs several names, got {names}");
     s.execute("file.open", json!({"name": "big.xlsx", "base64": b64})).unwrap();
     assert_eq!(s.execute("automate.allScripts", json!({})).unwrap(), json!([{"name": "Big", "steps": 400}]));
     s.execute("automate.runScript", json!({"name": "Big"})).unwrap();

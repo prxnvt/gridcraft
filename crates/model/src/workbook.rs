@@ -71,6 +71,9 @@ pub struct Workbook {
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
     pub cell_styles: Vec<(String, crate::style::Style)>,
+    /// Macros (Automate › Macros), in the order the Macros list shows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macros: Vec<crate::features::Macro>,
 }
 
 impl Default for Workbook {
@@ -94,6 +97,7 @@ impl Workbook {
             protected_structure: false,
             custom_lists: vec![],
             cell_styles: vec![],
+            macros: vec![],
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {

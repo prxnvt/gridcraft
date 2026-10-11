@@ -14,6 +14,7 @@ pub mod display;
 pub mod fill;
 pub mod io;
 pub mod job;
+pub mod macros;
 pub mod pivot;
 pub mod pivot_formula;
 pub mod record;
