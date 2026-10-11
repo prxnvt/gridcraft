@@ -19,7 +19,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 
 | Method | Params | What it does |
 |---|---|---|
-| `engine.execute` | `{command, params}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`) |
+| `engine.execute` | `{command, params, wait?, waitSeconds?}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`); with `wait: true` the reply waits until Python cells finish (see below) |
 | `engine.commands` | `{search?}` | Every command: id, label, ribbon path, shortcut, params doc, enabled; `search` keeps those whose id, label or ribbon path contains it (case-insensitive) |
 | `engine.journal` | | Commands run so far (replayable) |
 | `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |
@@ -50,7 +50,11 @@ instead of clearing cells, and Escape clears the selection.
 
 Python cells run in the background in the app, so `python.set` answers at once and the cells it
 starts show `#BUSY!` until they finish. `ui.inspect` reports `pythonBusy: true` while any are
-running or waiting; poll it (or `cell.get`) for the results. `python.stop` (or `ui.key {key:
+running or waiting; poll it (or `cell.get`) for the results, or pass `wait: true` to
+`engine.execute`: the reply then waits, without holding up the window, until Python is idle or
+`waitSeconds` pass (default: the Python time limit plus one second). A result with a `cell` and
+its `value` (such as `python.set`'s) then carries the cell's final value, and the reply has
+`pythonBusy: false` (true when the wait ran out). `python.stop` (or `ui.key {key:
 "Escape"}` with no editor open) stops them. `editor.python` is true while the formula bar edits a
 Python cell's code; Ctrl+Enter (Cmd+Enter on macOS) commits it.
 

@@ -1,7 +1,8 @@
 //! Programmatic control of the running app (agents, tests, MCP).
 //!
 //! Methods (JSON lines over the host's transport, see `docs/control-protocol.md`):
-//! - `engine.execute {command, params}` — run any engine or UI command
+//! - `engine.execute {command, params, wait?, waitSeconds?}` — run any engine or UI command;
+//!   with `wait`, the reply waits (without blocking the frame) until Python cells finish
 //! - `engine.commands {search?}` — every command with enablement and params docs
 //! - `document.inspect`, `sheet.read {range?}`, `cell.get {cell?}` — read state
 //! - `ui.inspect` — UI state (ribbon tab, editor, dialog, grid geometry, perf)
@@ -40,7 +41,14 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Json),
-    Screenshot { path: Option<String> },
+    Screenshot {
+        path: Option<String>,
+    },
+    /// A command's reply held until Python is idle or the deadline (ms) passes.
+    Wait {
+        result: Json,
+        deadline: f64,
+    },
 }
 
 #[derive(Default)]
@@ -48,6 +56,8 @@ pub struct Shots {
     token: u64,
     queued: Vec<(u64, f64, u32)>,
     pending: Vec<(u64, Option<String>, Sender<ControlResponse>, f64)>,
+    /// Replies waiting for Python (`engine.execute` with `wait`).
+    waits: Vec<(Json, Sender<ControlResponse>, f64)>,
 }
 
 fn ok(v: Json) -> Outcome {
@@ -185,7 +195,17 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            wrap(app.run(id, if params.is_null() { json!({}) } else { params }))
+            let r = app.run(id, if params.is_null() { json!({}) } else { params });
+            let wait = p.get("wait").and_then(Json::as_bool).unwrap_or(false);
+            match r {
+                Ok(result) if wait && app.session.python_busy() => {
+                    // Default: the Python time limit, plus a second for the worker to start.
+                    let secs = p.get("waitSeconds").and_then(Json::as_f64).unwrap_or(app.session.prefs.python_timeout_seconds + 1.0);
+                    let secs = if secs.is_finite() { secs.clamp(0.0, 3_600.0) } else { 0.0 };
+                    return Outcome::Wait { result, deadline: crate::now_ms() + secs * 1000.0 };
+                }
+                r => wrap(r),
+            }
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
@@ -386,6 +406,7 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
             Outcome::Done(v) => {
                 let _ = req.reply.send(v);
             }
+            Outcome::Wait { result, deadline } => app.shots.waits.push((result, req.reply, deadline)),
             Outcome::Screenshot { path } => {
                 app.shots.token += 1;
                 let token = app.shots.token;
@@ -395,8 +416,39 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
         }
     }
     app.control_rx = Some(rx);
+    answer_waits(app, ctx);
     if !app.synthetic.is_empty() {
         ctx.request_repaint();
+    }
+}
+
+/// Answers the replies waiting for Python once it is idle (or their deadline passed), with the
+/// values the cells hold now. A result that names a `cell` and its `value` gets the cell's value
+/// as it is now, rather than `#BUSY!`.
+fn answer_waits(app: &mut SheetApp, ctx: &egui::Context) {
+    if app.shots.waits.is_empty() {
+        return;
+    }
+    let busy = app.session.python_busy();
+    let now = crate::now_ms();
+    let waits = std::mem::take(&mut app.shots.waits);
+    for (mut result, reply, deadline) in waits {
+        if busy && now < deadline {
+            app.shots.waits.push((result, reply, deadline));
+            continue;
+        }
+        let cell = result.get("cell").and_then(Json::as_str).map(str::to_string);
+        if let (Some(cell), Some(obj)) = (cell, result.as_object_mut())
+            && obj.contains_key("value")
+            && let Ok(now) = app.session.run("cell.get", json!({"cell": cell}))
+            && let Some(v) = now.get("value")
+        {
+            obj.insert("value".into(), v.clone());
+        }
+        let _ = reply.send(json!({"ok": true, "result": result, "pythonBusy": busy}));
+    }
+    if !app.shots.waits.is_empty() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
 }
 

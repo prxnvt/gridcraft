@@ -281,6 +281,10 @@ fn options(s: &mut Session, p: &Json) -> Result<Json> {
     }
     if detect {
         s.python_detect();
+        // Cells run again on whatever Python the search finds.
+        if s.doc().is_ok() {
+            s.python_reset()?;
+        }
     }
     let backend = s.python_backend();
     Ok(json!({"timeoutSeconds": s.prefs.python_timeout_seconds, "interpreter": s.prefs.python_interpreter, "backend": backend}))

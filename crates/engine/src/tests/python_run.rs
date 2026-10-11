@@ -346,3 +346,29 @@ fn background_edits_during_the_first_run_of_a_worker_process() {
     assert_eq!(v(&s, "A3"), Value::Number(3.0), "{log:?}");
     assert_eq!(v(&s, "A5"), Value::Number(5.0), "{log:?}");
 }
+
+/// Cells on this machine's own Python (3.11 or newer), found by the search, when there is one.
+#[test]
+fn cells_run_on_the_users_python_when_the_search_finds_one() {
+    let detection = gridcraft_python::interp::detect("");
+    if detection.found.is_none() {
+        eprintln!("skipped: no Python 3.11 or newer here ({:?})", detection.rejected);
+        return;
+    }
+    let mut s = Session::new();
+    s.new_workbook();
+    s.set_python_detection(detection);
+    assert_eq!(s.python_backend()["kind"], "cpython");
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["k", "v"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("python.initialization", json!({"code": "import sys\nscale = 10"})).unwrap();
+    s.execute("python.set", json!({"cell": "D1", "code": "rows = xl('A1:B3')\nsys.version_info[0]"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::Number(3.0));
+    s.execute("python.set", json!({"cell": "D2", "code": "[r[1] * scale for r in rows[1:]]"})).unwrap();
+    assert_eq!(v(&s, "D2"), Value::Number(10.0));
+    assert_eq!(v(&s, "D3"), Value::Number(20.0), "the list spills");
+    // An edit reruns the cells that read it, on the same Python.
+    s.execute("cell.set", json!({"cell": "B3", "input": "5"})).unwrap();
+    assert_eq!(v(&s, "D3"), Value::Number(50.0));
+    let log = s.execute("python.diagnostics", json!({})).unwrap();
+    assert!(log["runs"].as_array().unwrap().iter().all(|r| r["status"] == "ok"), "{log}");
+}

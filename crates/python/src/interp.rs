@@ -58,7 +58,21 @@ pub struct Interpreter {
     pub source: String,
 }
 
+/// The worker for the user's Python: a small program speaking the same protocol as the built-in
+/// worker. It is data the user's interpreter runs (a documented exception to GridCraft's
+/// Rust-only rule), passed with `-c`.
+pub const SHIM: &str = include_str!("shim.py");
+
 impl Interpreter {
+    /// How to start a worker on this interpreter: `-P` keeps the current folder off `sys.path`,
+    /// `-X utf8` makes text UTF-8 everywhere and `-u` unbuffers the output. Not `-I` or `-s`: they
+    /// hide the user's site-packages, where `pip install --user` puts pandas.
+    pub fn launcher(&self) -> crate::run::Launcher {
+        let mut args = self.args.clone();
+        args.extend(["-P", "-X", "utf8", "-u", "-c", SHIM].map(String::from));
+        crate::run::Launcher::Process { program: self.program.clone(), args, env: vec![] }
+    }
+
     /// `3.14` from `3.14.0`.
     pub fn short_version(&self) -> String {
         self.version.split('.').take(2).collect::<Vec<_>>().join(".")

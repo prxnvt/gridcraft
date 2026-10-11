@@ -438,8 +438,15 @@ impl Session {
     /// Starts looking for the user's Python again (the options changed, Reset Runtime, Detect
     /// Again). Cells wait for the result.
     pub fn python_detect(&mut self) {
-        if self.python_searches() {
-            self.python.detector = Some(Detector::start(self.prefs.python_interpreter.clone()));
+        if !self.python_searches() {
+            return;
+        }
+        self.python.detector = Some(Detector::start(self.prefs.python_interpreter.clone()));
+        // The interpreter may change: workers start again on whatever the search finds, from a
+        // fresh namespace.
+        for dp in self.python.docs.values_mut() {
+            dp.worker = None;
+            dp.dirty = true;
         }
     }
 
@@ -453,15 +460,37 @@ impl Session {
     /// The search's result: `None` while it runs (headless sessions wait for it), or when this
     /// session doesn't search.
     pub fn python_detection(&mut self) -> Option<&Detection> {
+        let wait = !self.python.background;
+        self.detection(wait)
+    }
+
+    fn detection(&mut self, wait: bool) -> Option<&Detection> {
         if !self.python_searches() {
             return None;
         }
         if self.python.detector.is_none() {
             self.python.detector = Some(Detector::start(self.prefs.python_interpreter.clone()));
         }
-        let wait = !self.python.background;
         let det = self.python.detector.as_mut()?;
         if wait { det.wait(DETECT_WAIT) } else { det.poll() }
+    }
+
+    /// How cells start Python: the launcher set for this session; else the user's Python when
+    /// the search found one, or the built-in worker. `None` while the search still runs and
+    /// `wait` is false.
+    fn python_launcher(&mut self, wait: bool) -> Option<Launcher> {
+        if let Some(l) = &self.python.launcher {
+            return Some(l.clone());
+        }
+        if !self.python_searches() {
+            return Some(gridcraft_python::client::default_launcher());
+        }
+        match self.detection(wait) {
+            Some(d) => Some(d.found.as_ref().map(|i| i.launcher()).unwrap_or_else(gridcraft_python::client::default_launcher)),
+            // A search that never finished: the built-in Python.
+            None if wait => Some(gridcraft_python::client::default_launcher()),
+            None => None,
+        }
     }
 
     /// Which Python runs cells, for Diagnostics, Python Options and agents:
@@ -777,7 +806,8 @@ impl Session {
     /// Runs the workbook's queued cells: to the end when `blocking`, else as far as it can without
     /// waiting.
     fn drive_python(&mut self, uid: u64, blocking: bool) {
-        let launcher = self.python.launcher.clone().unwrap_or_else(gridcraft_python::client::default_launcher);
+        // In the background, cells wait (as #BUSY!) while the search for Python finishes.
+        let Some(launcher) = self.python_launcher(blocking) else { return };
         let limits = limits(&self.prefs);
         loop {
             let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid) else {

@@ -6,11 +6,14 @@
 //! channel, and [`PyWorker::poll`] takes what has arrived.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use process_wrap::std::{ChildWrapper, CommandWrap};
 
 use crate::protocol::{Done, FromWorker, Limits, Output, ToWorker, XlReply, parse_from_worker, to_worker_line};
 pub use crate::run::*;
@@ -31,8 +34,12 @@ pub trait Transport: Send {
     fn recv(&mut self, wait: Duration) -> Recv;
     /// The worker's resident memory in bytes, when it can be measured.
     fn rss(&mut self) -> Option<u64>;
-    /// Stops the worker now.
+    /// Stops the worker now, with any process it started.
     fn kill(&mut self);
+    /// The end of what the worker wrote to its standard error (why it stopped, when it crashed).
+    fn stderr_tail(&mut self) -> String {
+        String::new()
+    }
 }
 
 /// How often the memory watchdog looks.
@@ -48,6 +55,8 @@ fn now() -> Instant {
 
 struct Inflight {
     id: u64,
+    /// Kept to send again when the worker is restarted before it was ready.
+    code: String,
     /// When the run became the worker's current one.
     started: Option<Instant>,
 }
@@ -57,6 +66,8 @@ struct Conn {
     /// The worker answered Init (or the last Reset).
     ready: bool,
     last_rss: Instant,
+    /// This worker replaces one that stopped before it was ready (see [`PyWorker::retry_start`]).
+    retried: bool,
 }
 
 /// A worker process and the runs sent to it, oldest first.
@@ -78,6 +89,11 @@ impl PyWorker {
 
     pub fn limits(&self) -> &Limits {
         &self.limits
+    }
+
+    /// How this worker starts.
+    pub fn launcher(&self) -> &Launcher {
+        &self.launcher
     }
 
     /// New limits or initialization code take effect when the worker next starts or resets.
@@ -126,7 +142,7 @@ impl PyWorker {
         if self.conn.is_none() {
             let transport = start(&self.launcher)?;
             self.starts += 1;
-            let mut c = Conn { transport, ready: false, last_rss: now() };
+            let mut c = Conn { transport, ready: false, last_rss: now(), retried: false };
             let init = to_worker_line(&ToWorker::Init { limits: self.limits.clone(), init_code: self.init_code.clone() });
             if c.transport.send(&init).is_err() {
                 c.transport.kill();
@@ -148,8 +164,34 @@ impl PyWorker {
             return Err(Failure { kind: FailureKind::Crashed, line: None, message: CRASH_MESSAGE.into() });
         }
         let started = if self.inflight.is_empty() { Some(now()) } else { None };
-        self.inflight.push_back(Inflight { id, started });
+        self.inflight.push_back(Inflight { id, code: code.to_string(), started });
         Ok(id)
+    }
+
+    /// The worker stopped, or didn't answer, before it was ready: start it once more and send the
+    /// waiting runs again. A program that was just built can be slow to start the first time.
+    /// Returns false when this worker was already a retry (or can't start), so the runs fail.
+    fn retry_start(&mut self) -> bool {
+        let Some(old) = self.conn.as_mut() else { return false };
+        if old.ready || old.retried {
+            return false;
+        }
+        old.transport.kill();
+        self.conn = None;
+        let Ok(transport) = start(&self.launcher) else { return false };
+        self.starts += 1;
+        let mut c = Conn { transport, ready: false, last_rss: now(), retried: true };
+        let mut lines = vec![to_worker_line(&ToWorker::Init { limits: self.limits.clone(), init_code: self.init_code.clone() })];
+        lines.extend(self.inflight.iter().map(|r| to_worker_line(&ToWorker::Run { id: r.id, code: r.code.clone() })));
+        if lines.iter().any(|l| c.transport.send(l).is_err()) {
+            c.transport.kill();
+            return false;
+        }
+        for (i, r) in self.inflight.iter_mut().enumerate() {
+            r.started = (i == 0).then(now);
+        }
+        self.conn = Some(c);
+        true
     }
 
     /// The deadline of the current run: its time limit plus a grace period, plus another time
@@ -178,6 +220,9 @@ impl PyWorker {
                 }
                 Recv::Empty => break,
                 Recv::Closed => {
+                    if self.retry_start() {
+                        continue;
+                    }
                     self.fail_all(FailureKind::Crashed, CRASH_MESSAGE.into(), &mut events);
                     break;
                 }
@@ -222,6 +267,9 @@ impl PyWorker {
     /// The deadline and memory checks.
     fn watch(&mut self, events: &mut Vec<Event>) {
         if self.deadline().is_some_and(|d| now() >= d) {
+            if self.retry_start() {
+                return;
+            }
             self.fail_all(FailureKind::Timeout, TIMEOUT_MESSAGE.into(), events);
             return;
         }
@@ -339,27 +387,66 @@ fn recv_line(rx: &Receiver<String>, wait: Duration) -> Recv {
     }
 }
 
-/// A worker process on pipes.
+/// Bytes of the worker's standard error kept (the end of it).
+const STDERR_TAIL: usize = 8 * 1024;
+
+/// Drains `input` on a thread, keeping its last [`STDERR_TAIL`] bytes, so a chatty worker never
+/// fills the pipe and stalls.
+fn tail_reader<R: Read + Send + 'static>(input: R) -> Arc<Mutex<VecDeque<u8>>> {
+    let tail = Arc::new(Mutex::new(VecDeque::new()));
+    let keep = tail.clone();
+    let spawned = std::thread::Builder::new().name("python-worker-stderr".into()).spawn(move || {
+        let mut input = input;
+        let mut buf = [0u8; 4096];
+        loop {
+            match input.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Ok(mut t) = keep.lock() {
+                        t.extend(buf.get(..n).unwrap_or_default());
+                        let extra = t.len().saturating_sub(STDERR_TAIL);
+                        t.drain(..extra);
+                    }
+                }
+            }
+        }
+    });
+    drop(spawned);
+    tail
+}
+
+/// A worker process on pipes, in a process group of its own (a job object on Windows), so a kill
+/// also stops whatever the user's code started.
 struct ProcessTransport {
-    child: Child,
+    child: Box<dyn ChildWrapper>,
     stdin: Option<std::process::ChildStdin>,
     lines: Receiver<String>,
+    stderr: Arc<Mutex<VecDeque<u8>>>,
     system: sysinfo::System,
 }
 
 impl ProcessTransport {
     fn spawn(program: &PathBuf, args: &[String], env: &[(String, String)]) -> std::io::Result<ProcessTransport> {
-        let mut child = Command::new(program)
-            .args(args)
-            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take().ok_or_else(|| std::io::Error::other("the worker has no output pipe"))?;
+        let mut cmd = CommandWrap::with_new(program, |c| {
+            c.args(args).envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str()))).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        });
+        #[cfg(unix)]
+        cmd.wrap(process_wrap::std::ProcessGroup::leader());
+        #[cfg(windows)]
+        {
+            // No console window for a console program such as python.exe.
+            cmd.wrap(process_wrap::std::CreationFlags(windows::Win32::System::Threading::CREATE_NO_WINDOW));
+            cmd.wrap(process_wrap::std::JobObject);
+        }
+        let mut child = cmd.spawn()?;
+        let stdin = child.stdin().take();
+        let stdout = child.stdout().take().ok_or_else(|| std::io::Error::other("the worker has no output pipe"))?;
+        let stderr = match child.stderr().take() {
+            Some(e) => tail_reader(e),
+            None => Arc::new(Mutex::new(VecDeque::new())),
+        };
         let lines = line_reader(BufReader::new(stdout));
-        Ok(ProcessTransport { child, stdin, lines, system: sysinfo::System::new() })
+        Ok(ProcessTransport { child, stdin, lines, stderr, system: sysinfo::System::new() })
     }
 }
 
@@ -379,8 +466,11 @@ impl Transport for ProcessTransport {
     }
     fn kill(&mut self) {
         self.stdin = None;
+        // Kills the whole group (or job), then reaps the worker.
         let _ = self.child.kill();
-        let _ = self.child.wait();
+    }
+    fn stderr_tail(&mut self) -> String {
+        self.stderr.lock().map(|t| String::from_utf8_lossy(&t.iter().copied().collect::<Vec<u8>>()).into_owned()).unwrap_or_default()
     }
 }
 
@@ -561,6 +651,12 @@ mod tests {
     /// this test with the worker's environment variable set.
     #[test]
     fn worker_process_entry() {
+        // The first start fails before it is ready, as a slow first launch would.
+        if let Some(marker) = std::env::var_os("GRIDCRAFT_PYTHON_WORKER_FAIL_ONCE")
+            && std::fs::OpenOptions::new().write(true).create_new(true).open(&marker).is_ok()
+        {
+            std::process::exit(3);
+        }
         if std::env::var_os("GRIDCRAFT_PYTHON_WORKER_TEST").is_some() {
             crate::worker::serve(std::io::BufReader::new(std::io::stdin()), std::io::stdout(), crate::worker::OnClose::ExitProcess);
             std::process::exit(0);
@@ -613,6 +709,30 @@ mod tests {
     }
 
     #[test]
+    fn a_worker_that_stops_before_it_is_ready_starts_once_more() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-py-retry-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let mut w = process_worker(Limits::default());
+        if let Launcher::Process { env, .. } = &mut w.launcher {
+            env.push(("GRIDCRAFT_PYTHON_WORKER_FAIL_ONCE".into(), dir.display().to_string()));
+        }
+        assert_eq!(value(&w.run_blocking("6 * 7", &mut cells)), Value::Number(42.0));
+        assert_eq!(w.starts(), 2, "the failed first start was retried");
+        // A worker that keeps failing before it is ready is reported after one retry.
+        let mut w = PyWorker::new(
+            Launcher::Process { program: "/bin/sh".into(), args: vec!["-c".into(), "exit 1".into()], env: vec![] },
+            Limits::default(),
+            String::new(),
+        );
+        if cfg!(unix) {
+            let o = w.run_blocking("1", &mut cells);
+            assert_eq!(failure(&o).message, CRASH_MESSAGE);
+            assert_eq!(w.starts(), 2);
+        }
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    #[test]
     fn a_worker_that_dies_is_replaced() {
         let mut w = process_worker(Limits::default());
         assert_eq!(value(&w.run_blocking("1", &mut cells)), Value::Number(1.0));
@@ -625,5 +745,168 @@ mod tests {
         assert_eq!(failure(&o).message, CRASH_MESSAGE);
         assert_eq!(value(&w.run_blocking("3", &mut cells)), Value::Number(3.0));
         assert_eq!(w.starts(), 2);
+    }
+}
+
+/// The worker for the user's Python (`shim.py`), run by this machine's python3 when it is 3.11 or
+/// newer. Skipped, with a message, when there is none (CI may have none).
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod cpython_tests {
+    use super::*;
+    use gridcraft_core::{Array, CellError, Value};
+
+    fn cpython(limits: Limits) -> Option<(PyWorker, crate::interp::Interpreter)> {
+        let d = crate::interp::detect("");
+        match d.found {
+            Some(i) => Some((PyWorker::new(i.launcher(), limits, "base = 100".into()), i)),
+            None => {
+                eprintln!("skipped: no Python 3.11 or newer here ({:?})", d.rejected);
+                None
+            }
+        }
+    }
+
+    fn cells(reference: &str, headers: bool) -> XlReply {
+        match reference {
+            "A1" => XlReply::Value(Value::Number(10.0)),
+            "T" => XlReply::Value(
+                Array::new(3, 2, vec!["name".into(), "score".into(), "a".into(), 1.0.into(), "b".into(), Value::Error(CellError::Div0)])
+                    .map(Value::from)
+                    .unwrap_or_default(),
+            ),
+            r => XlReply::Error(format!("`{r}` is not a reference (headers={headers})")),
+        }
+    }
+
+    fn value(o: &RunOutcome) -> Value {
+        o.result.as_ref().map(|o| o.value.clone()).unwrap_or_else(|f| panic!("{f:?}"))
+    }
+
+    fn failure(o: &RunOutcome) -> &Failure {
+        o.result.as_ref().err().unwrap_or_else(|| panic!("expected a failure: {o:?}"))
+    }
+
+    fn col(v: Vec<Value>) -> Value {
+        Array::new(v.len(), 1, v).map(Value::from).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_shim_speaks_the_protocol() {
+        let Some((mut w, i)) = cpython(Limits::default()) else { return };
+        let o = w.run_blocking("x = xl('A1')\nprint('x is', x)\nimport sys\nprint('oops', file=sys.stderr)\nx + base", &mut cells);
+        assert_eq!(value(&o), Value::Number(110.0), "{o:?}");
+        assert_eq!((o.stdout.as_str(), o.stderr.as_str()), ("x is 10\n", "oops\n"));
+        // Values both ways.
+        let o = w.run_blocking(
+            "import datetime\n[1, 2.5, 'a', True, None, float('nan'), datetime.date(2024, 1, 1), datetime.datetime(1900, 1, 1, 12)]",
+            &mut cells,
+        );
+        assert_eq!(
+            value(&o),
+            col(vec![1.0.into(), 2.5.into(), "a".into(), true.into(), Value::Empty, Value::Error(CellError::Num), 45292.0.into(), 2.5.into()])
+        );
+        assert_eq!(
+            value(&w.run_blocking("{'k': 1}", &mut cells)),
+            Array::new(1, 2, vec!["k".into(), 1.0.into()]).map(Value::from).unwrap_or_default()
+        );
+        assert_eq!(value(&w.run_blocking("10**400", &mut cells)), Value::Error(CellError::Num));
+        let o = w.run_blocking("{1, 2}", &mut cells);
+        let out = o.result.clone().unwrap_or_default();
+        assert_eq!((out.type_name.as_str(), out.preview.as_str(), out.convertible), ("set", "{1, 2}", false));
+        if i.pandas.is_none() {
+            // Without pandas a range is a list of rows, as in the built-in Python.
+            let o = w.run_blocking("t = xl('T', headers=True)\n[r['score'] for r in t]", &mut cells);
+            assert_eq!(value(&o), col(vec![1.0.into(), "#DIV/0!".into()]));
+            assert_eq!(value(&w.run_blocking("len(xl('T'))", &mut cells)), Value::Number(3.0));
+        }
+        // Errors carry their line; xl() errors are ValueErrors.
+        let o = w.run_blocking("a = 1\nb = 2\n1 / 0", &mut cells);
+        assert_eq!((failure(&o).line, failure(&o).kind), (Some(3), FailureKind::Error));
+        assert!(failure(&o).message.starts_with("ZeroDivisionError"), "{o:?}");
+        assert!(failure(&w.run_blocking("def f(:\n  pass", &mut cells)).message.starts_with("SyntaxError"));
+        assert!(failure(&w.run_blocking("xl('nowhere')", &mut cells)).message.starts_with("ValueError"));
+        let o = w.run_blocking("[[0] * 2000 for _ in range(1000)]", &mut cells);
+        assert!(failure(&o).message.contains("more than 1000000 cells"), "{o:?}");
+        // SystemExit is a cell error, not the end of the worker.
+        assert_eq!(failure(&w.run_blocking("raise SystemExit(3)", &mut cells)).kind, FailureKind::Error);
+        assert_eq!(value(&w.run_blocking("base", &mut cells)), Value::Number(100.0));
+        // Reset forgets names and runs the initialization code again.
+        w.reset();
+        assert!(failure(&w.run_blocking("x", &mut cells)).message.starts_with("NameError"));
+        assert_eq!(value(&w.run_blocking("base", &mut cells)), Value::Number(100.0));
+        assert_eq!(w.starts(), 1);
+    }
+
+    #[test]
+    fn the_shim_is_stopped_by_its_time_limit_and_by_the_parent() {
+        let Some((mut w, _)) = cpython(Limits { timeout_ms: 1_000, ..Limits::default() }) else { return };
+        assert_eq!(value(&w.run_blocking("n = 5\nn", &mut cells)), Value::Number(5.0));
+        // An endless loop is interrupted by the shim's own timer: the worker keeps its namespace.
+        let o = w.run_blocking("while True: pass", &mut cells);
+        assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
+        assert_eq!(value(&w.run_blocking("n", &mut cells)), Value::Number(5.0));
+        // A long C call can't be interrupted: the parent kills the worker.
+        let o = w.run_blocking("10 ** 10 ** 9", &mut cells);
+        assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
+        assert!(!w.alive());
+        assert_eq!(value(&w.run_blocking("2 * 21", &mut cells)), Value::Number(42.0), "a fresh worker starts");
+    }
+
+    #[test]
+    fn a_kill_stops_the_processes_a_cell_started() {
+        let Some((mut w, _)) = cpython(Limits::default()) else { return };
+        let o =
+            w.run_blocking("import subprocess, sys\np = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\np.pid", &mut cells);
+        let Value::Number(pid) = value(&o) else { panic!("{o:?}") };
+        let pid = sysinfo::Pid::from_u32(pid as u32);
+        let mut sys = sysinfo::System::new();
+        let alive = |sys: &mut sysinfo::System| {
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+            sys.process(pid).is_some_and(|p| !matches!(p.status(), sysinfo::ProcessStatus::Zombie))
+        };
+        assert!(alive(&mut sys), "the child runs");
+        w.kill();
+        let mut gone = false;
+        for _ in 0..200 {
+            if !alive(&mut sys) {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(gone, "the child was killed with the worker's group");
+    }
+
+    #[test]
+    fn pandas_frames_go_both_ways() {
+        let Some((mut w, i)) = cpython(Limits::default()) else { return };
+        if i.pandas.is_none() {
+            eprintln!("skipped: no pandas in {}", i.program.display());
+            return;
+        }
+        let o = w.run_blocking("df = xl('T', headers=True)\ntype(df).__name__", &mut cells);
+        assert_eq!(value(&o), Value::text("DataFrame"));
+        let o = w.run_blocking("df", &mut cells);
+        assert_eq!(
+            value(&o),
+            Array::new(3, 2, vec!["name".into(), "score".into(), "a".into(), 1.0.into(), "b".into(), "#DIV/0!".into()])
+                .map(Value::from)
+                .unwrap_or_default()
+        );
+        // A named index shows as the first column; a Series spills as a column; numpy scalars
+        // and arrays convert; Timestamps become serials.
+        let o = w.run_blocking("import pandas as pd\npd.DataFrame({'v': [1, 2]}, index=pd.Index(['x', 'y'], name='k'))", &mut cells);
+        assert_eq!(
+            value(&o),
+            Array::new(3, 2, vec!["k".into(), "v".into(), "x".into(), 1.0.into(), "y".into(), 2.0.into()]).map(Value::from).unwrap_or_default()
+        );
+        assert_eq!(value(&w.run_blocking("pd.Series([1.5, 2.5])", &mut cells)), col(vec![1.5.into(), 2.5.into()]));
+        assert_eq!(value(&w.run_blocking("import numpy as np\nnp.int64(7)", &mut cells)), Value::Number(7.0));
+        assert_eq!(
+            value(&w.run_blocking("np.array([[1, 2], [3, 4]])", &mut cells)),
+            Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).map(Value::from).unwrap_or_default()
+        );
+        assert_eq!(value(&w.run_blocking("pd.Timestamp('2024-01-01')", &mut cells)), Value::Number(45292.0));
     }
 }

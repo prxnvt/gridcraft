@@ -419,3 +419,41 @@ fn stale_python_cells_and_object_cards() {
     assert!(!stale(&h));
     assert_eq!(value(&h, "A1"), Value::Number(5.0));
 }
+
+/// `engine.execute` with `wait` answers once Python is idle, with the final value instead of
+/// #BUSY!, without holding up frames; a wait that runs out answers with what the cell holds.
+#[test]
+fn control_execute_can_wait_for_python() {
+    use gridcraft_ui_egui::ControlRequest;
+    let mut h = harness_with(process_launcher());
+    let (tx, rx) = std::sync::mpsc::channel();
+    h.state_mut().control_rx = Some(rx);
+    let ask = |h: &mut Harness, params: serde_json::Value| {
+        let (req, reply) = ControlRequest::new("engine.execute", params);
+        tx.send(req).unwrap();
+        for _ in 0..1500 {
+            h.run_steps(1);
+            if let Ok(v) = reply.try_recv() {
+                return v;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("no reply");
+    };
+    h.state_mut().run("cell.set", json!({"cell": "A1", "input": "20"})).unwrap();
+    let r = ask(&mut h, json!({"command": "python.set", "params": {"cell": "B1", "code": "n = sum(range(200000))\nxl('A1') + 1"}, "wait": true}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["result"]["value"], 21.0, "{r}");
+    assert_eq!(r["pythonBusy"], false);
+    // Without wait the reply comes at once.
+    let r = ask(&mut h, json!({"command": "python.set", "params": {"cell": "B2", "code": "xl('A1') + 2"}}));
+    assert_eq!(r["result"]["value"], json!({"error": "#BUSY!"}), "{r}");
+    wait_python(&mut h);
+    // A wait that runs out.
+    h.state_mut().session.prefs.python_timeout_seconds = 60.0;
+    let r =
+        ask(&mut h, json!({"command": "python.set", "params": {"cell": "B3", "code": "while True:\n    pass"}, "wait": true, "waitSeconds": 0.2}));
+    assert_eq!(r["pythonBusy"], true, "{r}");
+    assert_eq!(r["result"]["value"], json!({"error": "#BUSY!"}));
+    h.state_mut().run("python.stop", json!({})).unwrap();
+}
