@@ -102,6 +102,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 if let Some(rect) = badge(app, ui, &t) {
                     buttons = buttons.union(rect);
                 }
+                if let Some(rect) = run_button(app, ui, &t) {
+                    buttons = buttons.union(rect);
+                }
                 if app.formula_badge.as_ref().is_some_and(|b| b.clicked) {
                     if let Some(b) = app.formula_badge.as_mut() {
                         b.clicked = false;
@@ -177,6 +180,118 @@ fn python_badge(app: &mut SheetApp) {
             tip: "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)".into(),
             clicked: false,
         });
+    }
+}
+
+/// What the formula bar's Python button does now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunButton {
+    /// Run (a play triangle): the cell hasn't run, is out of date, or its code is being edited;
+    /// in Python edit mode it commits the code first. Disabled while Python is turned off for
+    /// the workbook.
+    Run { enabled: bool },
+    /// Stop (a square): the cell, or the Python cells it waits on, run or wait to run.
+    Stop,
+    /// Re-run (a circular arrow): the cell has a result or an error.
+    Rerun,
+}
+
+impl RunButton {
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            RunButton::Run { enabled: true } => "Run Python cell",
+            RunButton::Run { enabled: false } => {
+                "Run Python cell: Python is turned off for this workbook. Choose Enable Python in the message bar to run it"
+            }
+            RunButton::Stop => "Stop Python",
+            RunButton::Rerun => "Re-run Python cell",
+        }
+    }
+}
+
+/// The Python button's state for the active cell, or `None` when it isn't a Python cell and the
+/// formula bar isn't in Python mode.
+pub fn run_button_state(app: &SheetApp) -> Option<RunButton> {
+    let d = app.session.active()?;
+    let (sheet, at, editing) = match &app.editor {
+        Some(ed) if ed.python => (ed.sheet, ed.cell, Some(ed.text.as_str())),
+        Some(_) => return None,
+        None => (d.wb.active_sheet, d.selection.active, None),
+    };
+    let cell = d.wb.sheet(sheet).and_then(|s| s.cell(at));
+    let py = cell.and_then(|c| c.py.as_deref());
+    if editing.is_none() && py.is_none() {
+        return None;
+    }
+    if !d.trust.allows_code() {
+        return Some(RunButton::Run { enabled: false });
+    }
+    if app.session.python_cell_pending(sheet, at) {
+        return Some(RunButton::Stop);
+    }
+    let Some(py) = py else { return Some(RunButton::Run { enabled: true }) };
+    if editing.is_some_and(|text| gridcraft_engine::model::python::normalize_code(text) != py.code) || py.stale {
+        return Some(RunButton::Run { enabled: true });
+    }
+    // A result, or an error (a #BUSY! left by a stop is an error too).
+    let ran = py.output.is_some() || matches!(cell.map(|c| &c.value), Some(gridcraft_engine::core::Value::Error(_)));
+    Some(if ran { RunButton::Rerun } else { RunButton::Run { enabled: true } })
+}
+
+/// The Python button beside the PY badge (see [`RunButton`]); returns its rect when shown.
+fn run_button(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
+    let state = run_button_state(app)?;
+    let (icon, color) = match state {
+        RunButton::Run { enabled: true } => (Icon::RunCell, t.cat(theme::Cat::Green)),
+        RunButton::Run { enabled: false } => (Icon::RunCell, t.text_disabled),
+        RunButton::Stop => (Icon::StopCell, t.danger),
+        RunButton::Rerun => (Icon::Rerun, t.text),
+    };
+    let enabled = state != RunButton::Run { enabled: false };
+    let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 24.0), if enabled { Sense::click() } else { Sense::hover() });
+    if enabled && resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, 4.0, t.pressed);
+    } else if enabled && resp.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
+    let label = state.tooltip();
+    let short = match state {
+        RunButton::Run { .. } => "Run Python cell",
+        RunButton::Stop => "Stop Python",
+        RunButton::Rerun => "Re-run Python cell",
+    };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, short));
+    let resp = resp.on_hover_text(label);
+    if enabled && resp.clicked() {
+        press_run_button(app, state);
+    }
+    Some(rect)
+}
+
+/// What the Python button does: Run commits the code being edited (as Ctrl+Enter does) and runs
+/// the cell; Stop stops Python; Re-run runs the cell again.
+pub fn press_run_button(app: &mut SheetApp, state: RunButton) {
+    match state {
+        RunButton::Run { enabled: false } => {}
+        RunButton::Stop => app.run_or_alert("python.stop", json!({})),
+        RunButton::Run { enabled: true } | RunButton::Rerun => {
+            let target = match &app.editor {
+                Some(ed) if ed.python => Some((ed.sheet, ed.cell)),
+                Some(_) => None,
+                None => app.session.active().map(|d| (d.wb.active_sheet, d.selection.active)),
+            };
+            let Some((sheet, cell)) = target else { return };
+            if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
+                return;
+            }
+            // New or changed code already runs from the commit; unchanged code runs here.
+            if app.session.python_cell_pending(sheet, cell) {
+                return;
+            }
+            let name = app.session.active().and_then(|d| d.wb.sheet(sheet)).map(|s| s.name.clone()).unwrap_or_default();
+            app.run_or_alert("python.run", json!({"cell": cell.a1(), "sheet": name}));
+        }
     }
 }
 

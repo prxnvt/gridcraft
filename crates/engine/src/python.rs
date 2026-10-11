@@ -853,6 +853,38 @@ impl Session {
         Ok(pending.len())
     }
 
+    /// Runs the Python cell `key` of the active workbook again, and, as every Python cell shares
+    /// one namespace, the Python cells after it in run order (as an edit of its code would).
+    /// A cell that stopped Python before runs too: the person asked for it. In the background it
+    /// queues the run and returns; headless callers wait for the results.
+    pub(crate) fn python_run_cell(&mut self, key: Key) -> crate::Result<()> {
+        let d = self.doc()?;
+        let (uid, wb) = (d.uid, d.wb.clone());
+        let dp = self.python.docs.entry(uid).or_default();
+        dp.refused.remove(&key);
+        let cells = dp.cells(&wb);
+        let Some(first) = cells.iter().position(|pc| pc.key == key) else {
+            return Err(crate::EngineError::Other(format!("{} is not a Python cell", key.1.a1())));
+        };
+        self.schedule_python(uid, Some(first), &HashSet::from([key]), true);
+        self.finish_unless_background(uid);
+        // The run is the command's whole effect: the refresh after it has nothing to add.
+        self.python.refreshed = true;
+        Ok(())
+    }
+
+    /// Whether the Python cell at `cell` on sheet `sheet` of the active workbook is running or
+    /// waiting to run (it shows `#BUSY!` meanwhile).
+    pub fn python_cell_pending(&self, sheet: usize, cell: CellRef) -> bool {
+        let Some(uid) = self.active().map(|d| d.uid) else { return false };
+        let key = (sheet, cell);
+        self.python
+            .docs
+            .get(&uid)
+            .and_then(|dp| dp.job.as_ref())
+            .is_some_and(|job| job.inflight.as_ref().is_some_and(|i| i.key == key) || job.queue.contains(&key) || job.replay.contains(&key))
+    }
+
     /// Throws the namespace away and runs every Python cell of the workbook again.
     pub(crate) fn python_rerun_all(&mut self, uid: u64) {
         let dp = self.python.docs.entry(uid).or_default();

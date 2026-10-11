@@ -50,6 +50,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             output
         ),
+        cmd!(
+            noundo "python.run",
+            "Run Python Cell",
+            [],
+            None,
+            "{cell?, sheet?} → {cell, value}: runs the Python cell (default: the active cell) again, then the Python cells after it in run order, which share its namespace; in the app the run goes on in the background (`engine.execute` with `wait: true` waits for it). An error for a cell that isn't a Python cell, or when Python is turned off for the workbook",
+            has_doc,
+            run
+        ),
         cmd!(noundo "python.stop", "Stop", ["Formulas", "Python"], None, "{} → {stopped}: stops the Python cells running or waiting in the active workbook; they show #PYTHON! (\"Stopped\") until the next edit or Reset", has_doc, stop),
         cmd!(noundo "python.reset", "Reset Runtime", ["Formulas", "Python"], None, "{clearDiagnostics?: bool} starts Python afresh and runs every Python cell again", has_doc, reset),
         cmd!(
@@ -255,6 +264,18 @@ fn reset(s: &mut Session, p: &Json) -> Result<Json> {
     s.python_detect();
     s.python_reset()?;
     Ok(json!({"runs": s.doc()?.py_log.len()}))
+}
+
+fn run(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, at) = target_cell(s, p)?;
+    if existing(s, sheet, at)?.is_none() {
+        return Err(EngineError::Other(format!("{} is not a Python cell", at.a1())));
+    }
+    if s.doc().is_ok_and(|d| !d.trust.allows_code()) {
+        return Err(EngineError::Other("Python is turned off for this workbook: enable Python to run its cells.".into()));
+    }
+    s.python_run_cell((sheet, at))?;
+    result(s, sheet, at)
 }
 
 fn stop(s: &mut Session, _p: &Json) -> Result<Json> {

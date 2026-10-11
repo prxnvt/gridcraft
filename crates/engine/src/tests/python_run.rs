@@ -413,3 +413,67 @@ fn a_cell_that_stops_the_worker_is_not_rerun_until_it_changes() {
     s.execute("python.set", json!({"cell": "A2", "code": "xl('C1') * 2"})).unwrap();
     assert_eq!(v(&s, "A2"), Value::Number(16.0));
 }
+
+fn run_count(s: &mut Session, cell: &str) -> u64 {
+    let log = s.execute("python.diagnostics", json!({})).unwrap();
+    log["runs"].as_array().unwrap().iter().filter(|r| r["cell"] == cell).map(|r| r["count"].as_u64().unwrap()).sum()
+}
+
+/// python.run reruns the cell and the cells after it (they share its namespace), not those before.
+#[test]
+fn python_run_reruns_a_cell_and_the_cells_after_it() {
+    let mut s = py_session();
+    s.execute("python.set", json!({"cell": "A1", "code": "a = 1\na"})).unwrap();
+    s.execute("python.set", json!({"cell": "A2", "code": "b = a + 1\nb"})).unwrap();
+    s.execute("python.set", json!({"cell": "A3", "code": "b * 10"})).unwrap();
+    let before = [run_count(&mut s, "A1"), run_count(&mut s, "A2"), run_count(&mut s, "A3")];
+    let r = s.execute("python.run", json!({"cell": "A2"})).unwrap();
+    assert_eq!(r, json!({"cell": "A2", "value": 2.0}));
+    assert_eq!(run_count(&mut s, "A1"), before[0], "A1 comes before it");
+    assert_eq!(run_count(&mut s, "A2"), before[1] + 1);
+    assert_eq!(run_count(&mut s, "A3"), before[2] + 1);
+    assert_eq!(v(&s, "A3"), Value::Number(20.0));
+    // The active cell by default; undo has nothing to take back.
+    s.execute("selection.set", json!({"cell": "A3"})).unwrap();
+    s.execute("python.run", json!({})).unwrap();
+    assert_eq!(run_count(&mut s, "A3"), before[2] + 2);
+    assert_eq!(run_count(&mut s, "A2"), before[1] + 1);
+}
+
+#[test]
+fn python_run_refuses_normal_cells_and_workbooks_with_python_turned_off() {
+    let mut s = py_session();
+    set(&mut s, "B1", "5");
+    let e = s.execute("python.run", json!({"cell": "B1"})).unwrap_err().to_string();
+    assert!(e.contains("B1 is not a Python cell"), "{e}");
+    let e = s.execute("python.run", json!({"cell": "C9"})).unwrap_err().to_string();
+    assert!(e.contains("C9 is not a Python cell"), "{e}");
+    assert!(s.execute("python.run", json!({"cell": "nope"})).is_err());
+    plant(&mut s, "A1", "1 + 1");
+    s.doc_mut().unwrap().trust = Trust::FromFile;
+    let e = s.execute("python.run", json!({"cell": "A1"})).unwrap_err().to_string();
+    assert!(e.contains("Python is turned off for this workbook"), "{e}");
+    assert_eq!(v(&s, "A1"), Value::Number(0.0), "nothing ran");
+    s.execute("python.enable", json!({})).unwrap();
+    s.execute("python.run", json!({"cell": "A1"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(2.0));
+}
+
+/// In the background python.run queues the cells (#BUSY!) and the host's steps finish them.
+#[test]
+fn python_run_goes_through_the_background_job() {
+    let mut s = py_session();
+    s.execute("python.set", json!({"cell": "A1", "code": "21 * 2"})).unwrap();
+    s.set_python_background(true);
+    let r = s.execute("python.run", json!({"cell": "A1"})).unwrap();
+    assert_eq!(r["value"], json!({"error": "#BUSY!"}));
+    assert!(s.python_cell_pending(0, CellRef::new(0, 0)));
+    for _ in 0..2000 {
+        if !s.step_python() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(!s.python_cell_pending(0, CellRef::new(0, 0)));
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+}

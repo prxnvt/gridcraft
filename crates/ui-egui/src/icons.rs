@@ -180,6 +180,12 @@ pub enum Icon {
     RunTo,
     /// Stop: a square.
     StopSquare,
+    /// Run a Python cell (the formula bar): a play triangle, in the colour given.
+    RunCell,
+    /// Stop Python (the formula bar): a rounded square, in the colour given.
+    StopCell,
+    /// Re-run a Python cell (the formula bar): a circular arrow.
+    Rerun,
 }
 
 struct G<'a> {
@@ -883,6 +889,21 @@ pub fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette
             g.line(&[(13.0, 3.0), (13.0, 9.0)], c, 1.1);
         }
         Icon::StopSquare => g.rect(3.0, 3.0, 10.0, 10.0, Some(pal.recording), None),
+        Icon::RunCell => g.poly(&[(4.5, 2.5), (13.0, 8.0), (4.5, 13.5)], c),
+        Icon::StopCell => {
+            g.p.rect_filled(Rect::from_min_max(g.pt(3.5, 3.5), g.pt(12.5, 12.5)), 1.5 * g.s, c);
+        }
+        Icon::Rerun => {
+            // Most of a circle, clockwise from the top right, with the head at its end.
+            let pts: Vec<(f32, f32)> = (0..=14)
+                .map(|i| {
+                    let a = (-60.0 + i as f32 * 21.0).to_radians();
+                    (8.0 + 5.2 * a.cos(), 8.5 + 5.2 * a.sin())
+                })
+                .collect();
+            g.line(&pts, c, 1.4);
+            g.poly(&[(10.2, 0.9), (13.9, 4.6), (9.0, 5.6)], c);
+        }
     }
 }
 
