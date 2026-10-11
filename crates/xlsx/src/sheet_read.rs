@@ -63,6 +63,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     drop(bytes);
 
     let mut fit_to_page = false;
+    let mut controls: Option<El> = None;
     for e in &root.children {
         match e.name.as_str() {
             "sheetPr" => {
@@ -186,9 +187,18 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 }
             }
             "extLst" => read_ext(cx, e, &mut sheet),
-            "oleObjects" | "controls" => cx.warn(format!("sheet \"{name}\": embedded objects and form controls are not supported")),
+            "oleObjects" => cx.warn(format!("sheet \"{name}\": embedded objects are not supported")),
+            "controls" | "AlternateContent" => {
+                if let Some(c) = crate::controls::controls_element(e) {
+                    controls = Some(c.clone());
+                }
+            }
             _ => {}
         }
+    }
+    // Form controls: the <controls> list with its properties parts, else the VML shapes.
+    if controls.is_some() || rels.iter().any(|r| r.kind == "vmlDrawing") {
+        crate::controls::read(cx, controls.as_ref(), &rels, &mut sheet)?;
     }
     // Comments are related to the sheet without an element in it.
     for rel in rels.iter().filter(|r| r.kind == "comments") {

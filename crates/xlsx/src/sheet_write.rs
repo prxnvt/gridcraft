@@ -508,17 +508,38 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         let rid = rels.add("drawing", &format!("../drawings/drawing{dn}.xml"));
         let _ = write!(s, "<drawing r:id=\"{rid}\"/>");
     }
-    // Notes: comments part + VML so Excel shows them.
-    if !sheet.comments.is_empty() {
-        out.comments += 1;
-        let n = out.comments;
-        out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet).into_bytes());
+    // Notes and form controls share one legacy VML drawing (notes need it for Excel to show them,
+    // controls carry their x:ClientData there). Shape ids come from 1024-id blocks listed in the
+    // drawing's idmap, notes first, so a control's `shapeId` matches its VML shape.
+    let mut controls_xml = String::new();
+    if !sheet.comments.is_empty() || !sheet.controls.is_empty() {
+        let shapes = (sheet.comments.len() + sheet.controls.len()) as u64;
+        let blocks = (shapes + 1).div_ceil(1024).max(1) as u32;
+        let first = out.vml_block.saturating_add(1);
+        out.vml_block = out.vml_block.saturating_add(blocks);
+        let base = u64::from(first) * 1024;
+        let notes = sheet.comments.len() as u64;
+        let mut extra = String::new();
+        if !sheet.controls.is_empty() {
+            let w = crate::controls::write(out, &mut rels, sheet, |i| base + 1 + notes + i as u64);
+            controls_xml = w.sheet_xml;
+            extra = format!("{}{}", crate::controls::SHAPETYPE, w.vml);
+        }
+        out.vmls += 1;
+        let v = out.vmls;
+        if !sheet.comments.is_empty() {
+            out.comments += 1;
+            let n = out.comments;
+            out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet).into_bytes());
+            rels.add("comments", &format!("../comments{n}.xml"));
+        }
+        let idmap = (first..first.saturating_add(blocks)).map(|b| b.to_string()).collect::<Vec<_>>().join(",");
         out.default_type("vml", "application/vnd.openxmlformats-officedocument.vmlDrawing");
-        out.part(&format!("xl/drawings/vmlDrawing{n}.vml"), None, vml_xml(sheet, n).into_bytes());
-        rels.add("comments", &format!("../comments{n}.xml"));
-        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{n}.vml"));
+        out.part(&format!("xl/drawings/vmlDrawing{v}.vml"), None, vml_xml(sheet, &idmap, base, &extra).into_bytes());
+        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{v}.vml"));
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
     }
+    s.push_str(&controls_xml);
     // Tables.
     if !tables.is_empty() {
         let mut parts = String::new();
@@ -1060,12 +1081,12 @@ fn comments_xml(sheet: &Sheet) -> String {
 }
 
 /// Legacy VML shapes Excel uses to display notes.
-fn vml_xml(sheet: &Sheet, n: u32) -> String {
+fn vml_xml(sheet: &Sheet, idmap: &str, base: u64, controls: &str) -> String {
     let mut s = format!(
-        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{n}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
+        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{idmap}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
     );
     for (i, (cell, c)) in sheet.comments.iter().enumerate() {
-        let id = n as u64 * 1024 + 1 + i as u64;
+        let id = base + 1 + i as u64;
         let vis = if c.visible { "visible" } else { "hidden" };
         let _ = write!(
             s,
@@ -1080,6 +1101,7 @@ fn vml_xml(sheet: &Sheet, n: u32) -> String {
             if c.visible { "<x:Visible/>" } else { "" }
         );
     }
+    s.push_str(controls);
     s.push_str("</xml>");
     s
 }

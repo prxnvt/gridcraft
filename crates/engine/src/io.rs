@@ -41,6 +41,7 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let (mut wb, mut warnings) = read_bytes(name, bytes)?;
     warnings.extend(enforce_limits(&mut wb, &LOAD_LIMITS));
     warnings.extend(crate::macros::load(&mut wb));
+    crate::cmd::controls::load_action_names(&mut wb);
     Ok((wb, warnings))
 }
 
@@ -283,8 +284,12 @@ pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
     let sheet = wb.active_sheet;
     match FileKind::from_path(path).unwrap_or(FileKind::Xlsx) {
         FileKind::Xlsx => {
-            // Macros travel in hidden names.
+            // Macros, and button actions xlsx has no place for, travel in hidden names.
             let named = crate::macros::with_names(wb)?;
+            let named = match crate::cmd::controls::with_action_names(named.as_ref().unwrap_or(wb))? {
+                Some(w) => Some(w),
+                None => named,
+            };
             gridcraft_xlsx::write_xlsx(named.as_ref().unwrap_or(wb)).map_err(|e| EngineError::Other(e.to_string()))
         }
         FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),

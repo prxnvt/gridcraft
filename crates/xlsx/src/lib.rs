@@ -14,6 +14,7 @@ mod array_formula;
 mod cfb;
 mod chart;
 mod chartex;
+mod controls;
 mod csv;
 mod drawing;
 mod fmla;
