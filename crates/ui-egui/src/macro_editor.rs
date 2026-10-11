@@ -728,7 +728,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
     let screen = ctx.content_rect();
     let mut win_open = true;
     egui::Window::new(format!("Macro: {}{dirty_mark}", ed.draft.name))
-        .id(Id::new("macro_editor"))
+        .id(app.widget_id("macro_editor"))
         .collapsible(false)
         .resizable(true)
         .default_size(vec2(840.0, 560.0))
@@ -768,7 +768,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
 fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut bool) {
     if ed.ask_stop {
         let mut answer: Option<Option<bool>> = None;
-        egui::Modal::new(Id::new("macro_stop")).show(ctx, |ui| {
+        egui::Modal::new(app.widget_id("macro_stop")).show(ctx, |ui| {
             ui.set_width(360.0);
             ui.label(egui::RichText::new("Stop debugging").strong());
             ui.label("Keep the changes the macro has made so far? They are one undo step either way.");
@@ -804,7 +804,7 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
     }
     if ed.ask_close {
         let mut answer: Option<Option<bool>> = None;
-        egui::Modal::new(Id::new("macro_close")).show(ctx, |ui| {
+        egui::Modal::new(app.widget_id("macro_close")).show(ctx, |ui| {
             ui.set_width(360.0);
             ui.label(egui::RichText::new(format!("Save changes to macro “{}”?", ed.draft.name)).strong());
             ui.add_space(8.0);

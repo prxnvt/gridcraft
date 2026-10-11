@@ -17,8 +17,8 @@ pub struct EditState {
     rect: Option<Rect>,
 }
 
-pub(crate) fn editor_id() -> egui::Id {
-    egui::Id::new("gridcraft.text_box_editor")
+pub(crate) fn editor_id(app: &SheetApp) -> egui::Id {
+    app.widget_id("gridcraft.text_box_editor")
 }
 
 impl SheetApp {
@@ -94,13 +94,13 @@ pub(crate) fn before_ui(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(ed) = &app.text_box_editor else { return };
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         app.cancel_text_box_edit();
-        ctx.memory_mut(|m| m.surrender_focus(editor_id()));
+        ctx.memory_mut(|m| m.surrender_focus(editor_id(app)));
         return;
     }
     let outside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| ed.rect.is_none_or(|r| !r.contains(p))));
     if outside {
         match app.commit_text_box_edit() {
-            Ok(()) => ctx.memory_mut(|m| m.surrender_focus(editor_id())),
+            Ok(()) => ctx.memory_mut(|m| m.surrender_focus(editor_id(app))),
             Err(e) => app.message = Some(("Text Box".into(), crate::clean_error(&e))),
         }
     }
@@ -139,7 +139,7 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcr
         return;
     }
     ed.rect = Some(rect);
-    let id = editor_id();
+    let id = editor_id(app);
     if ed.request_focus {
         // A new editing session must not reuse the previous box's caret/undo history.
         egui::text_edit::TextEditState::default().store(ui.ctx(), id);

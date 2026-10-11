@@ -47,14 +47,21 @@ impl Default for BarLayout {
 }
 
 impl BarLayout {
-    pub fn id() -> egui::Id {
-        egui::Id::new("formula_bar.layout")
+    /// Kept per window (viewport): each workbook window lays out its own formula bar.
+    pub fn id(ctx: &egui::Context) -> egui::Id {
+        egui::Id::new("formula_bar.layout").with(ctx.viewport_id())
     }
 
-    /// Last frame's layout.
+    /// Last frame's layout (of the window being drawn).
     pub fn get(ctx: &egui::Context) -> BarLayout {
-        ctx.data(|d| d.get_temp(Self::id())).unwrap_or_default()
+        let id = Self::id(ctx);
+        ctx.data(|d| d.get_temp(id)).unwrap_or_default()
     }
+}
+
+/// The formula bar's editor (each workbook window's own, see [`SheetApp::widget_id`]).
+pub fn bar_id(app: &SheetApp) -> egui::Id {
+    app.widget_id("gridcraft.formula_bar")
 }
 
 /// What the editor widget laid out: its line count and caret.
@@ -73,7 +80,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // at MAX_LINES. It eases only when that target changes.
     let lines = if app.ui.formula_bar_expanded { MAX_LINES } else { last.lines.clamp(1, MAX_LINES) };
     let target = ONE_LINE + (lines - 1) as f32 * row_h;
-    let h = ui.ctx().animate_value_with_time(egui::Id::new("formula_bar.height"), target, EASE_SECONDS);
+    let h = ui.ctx().animate_value_with_time(app.widget_id("formula_bar.height"), target, EASE_SECONDS);
     let mut layout = BarLayout { height: h, ..Default::default() };
     egui::Panel::top("formula_bar")
         .exact_size(h)
@@ -123,7 +130,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ui.painter().rect_stroke(field, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
                 let inner = field.shrink2(vec2(6.0, 3.0));
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
-                let id = egui::Id::new("gridcraft.formula_bar");
+                let id = bar_id(app);
                 let info = if app.editor.is_some() && !window {
                     editor_widget(app, &mut child, id, font.clone(), true, inner.width(), inner.height())
                 } else {
@@ -172,7 +179,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 }
             });
         });
-    ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(), layout));
+    let id = BarLayout::id(ui.ctx());
+    ui.ctx().data_mut(|d| d.insert_temp(id, layout));
 }
 
 /// Whether the formula bar shows Python: editing in Python mode, or a Python cell selected.
@@ -434,7 +442,7 @@ fn active_input(app: &SheetApp) -> String {
 }
 
 fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
-    let id = egui::Id::new("gridcraft.name_box");
+    let id = app.widget_id("gridcraft.name_box");
     let shown = app.name_box_text();
     let mut text = app.name_box.clone().unwrap_or(shown.clone());
     let rect = Rect::from_min_size(ui.cursor().min, vec2(118.0, 24.0));
@@ -496,7 +504,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         return python_editor(app, ui, id, width, max_height);
     }
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
-    let mine = ed.from_formula_bar == (id == egui::Id::new("gridcraft.formula_bar"));
+    let mine = ed.from_formula_bar == (id == bar_id(app));
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
     let focused = ui.ctx().memory(|m| m.focused());
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
@@ -593,7 +601,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     // The text widget.
     let refs = formula_refs(&ed.text);
     let t = Tokens::get(ui.ctx());
-    let on_sheet = id == egui::Id::new("gridcraft.cell_editor");
+    let on_sheet = id == crate::grid::cell_editor_id(app);
     let cell_text_color = if on_sheet { t.cell_text } else { t.text };
     let font2 = font.clone();
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
@@ -650,7 +658,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         output.state.store(ui.ctx(), id);
     } else if resp.clicked() || resp.gained_focus() {
         // Clicking into the other editor moves editing there.
-        ed.from_formula_bar = id == egui::Id::new("gridcraft.formula_bar");
+        ed.from_formula_bar = id == bar_id(app);
         ed.enter_mode = false;
         app.session.mode = gridcraft_engine::Mode::Edit;
     }

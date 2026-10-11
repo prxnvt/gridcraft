@@ -105,7 +105,7 @@ fn at(cell: &str) -> CellRef {
 }
 
 fn focused_in_window(h: &Harness) -> bool {
-    h.ctx.memory(|m| m.focused()) == Some(python_window::editor_id())
+    h.ctx.memory(|m| m.focused()) == Some(python_window::editor_id(h.state()))
 }
 
 fn runs_of(h: &mut Harness, cell: &str) -> u64 {
@@ -188,7 +188,7 @@ fn esc_and_the_x_close_the_window_and_keep_the_edit() {
     assert!(window(&h).is_none(), "Esc closes the window");
     assert_eq!(editor_text(&h).as_deref(), Some("a = 10"), "and keeps the edit");
     h.run_steps(3);
-    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("gridcraft.formula_bar")), "the formula bar has it now");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(gridcraft_ui_egui::formula_bar::bar_id(h.state())), "the formula bar has it now");
     // Reopened, the edit continues in the window; the X closes it, keeping the edit too.
     h.get_by_label(EXPAND).click();
     h.run_steps(3);
@@ -243,7 +243,7 @@ fn the_toolbar_runs_stops_and_reruns() {
     assert_eq!(window(&h).map(|w| w.cell), Some(at("A3")), "the window follows the selection");
     assert!(h.query_by_label("Running\u{2026}").is_some());
     // The window's Stop (the status bar has one too).
-    let window_rect = h.ctx.memory(|m| m.area_rect(python_window::window_id())).unwrap();
+    let window_rect = h.ctx.memory(|m| m.area_rect(python_window::window_id(h.state()))).unwrap();
     h.get_all_by_label("Stop").find(|n| window_rect.contains(n.rect().center())).unwrap().click();
     h.run_steps(3);
     assert!(!h.state().session.python_busy(), "stopped");
@@ -362,4 +362,55 @@ fn snapshots() {
         select(&mut h, "F8");
         save(&mut h, "normal");
     }
+}
+
+/// Two workbook windows (one process, one egui context) each have their own Python editor: the
+/// text editor's cursor and undo, and the window's size, are kept apart.
+#[test]
+fn each_workbook_windows_python_editor_has_its_own_ids() {
+    let a = SheetApp::new(Session::new(), Default::default());
+    let b = SheetApp::new(Session::new(), Default::default());
+    assert_ne!(python_window::editor_id(&a), python_window::editor_id(&b));
+    assert_ne!(python_window::window_id(&a), python_window::window_id(&b));
+    assert_eq!(python_window::editor_id(&a), python_window::editor_id(&a));
+    assert_ne!(gridcraft_ui_egui::formula_bar::bar_id(&a), gridcraft_ui_egui::formula_bar::bar_id(&b));
+    assert_ne!(gridcraft_ui_egui::grid::cell_editor_id(&a), gridcraft_ui_egui::grid::cell_editor_id(&b));
+}
+
+/// Two windows' Python editors drawn with one context, each editing its own code: typing in one
+/// leaves the other's cursor and text alone.
+#[test]
+fn two_python_editors_in_one_context_keep_their_own_state() {
+    let ctx = egui::Context::default();
+    SheetApp::setup_context(&ctx, false);
+    let mut apps: Vec<SheetApp> = (0..2)
+        .map(|_| {
+            let mut s = Session::new();
+            s.new_workbook();
+            s.set_python_launcher(Launcher::InProcess);
+            SheetApp::new(s, Default::default())
+        })
+        .collect();
+    for (i, app) in apps.iter_mut().enumerate() {
+        app.begin_python_edit();
+        if let Some(ed) = app.editor.as_mut() {
+            ed.text = format!("{i} + {i}");
+        }
+        python_window::open(app);
+    }
+    for _ in 0..4 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for app in &mut apps {
+                python_window::show(app, ui.ctx());
+            }
+        });
+        out.textures_delta.clear();
+    }
+    // Each editor's caret is where its own text ends, not where the other's does.
+    let caret = |app: &SheetApp| {
+        egui::text_edit::TextEditState::load(&ctx, python_window::editor_id(app)).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index)
+    };
+    assert!(caret(&apps[0]).is_some() && caret(&apps[1]).is_some(), "each editor keeps its own state");
+    assert_eq!(apps[0].editor.as_ref().map(|e| e.text.as_str()), Some("0 + 0"));
+    assert_eq!(apps[1].editor.as_ref().map(|e| e.text.as_str()), Some("1 + 1"));
 }

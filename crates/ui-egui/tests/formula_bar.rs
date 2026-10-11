@@ -135,7 +135,7 @@ fn in_cell_height(lines: usize) -> f32 {
     h.state_mut().begin_edit(Some(text.clone()), false);
     settle(&mut h);
     assert_eq!(h.state().editor.as_ref().unwrap().text, text, "the text is kept whole");
-    let rect: Rect = h.ctx.data(|d| d.get_temp(egui::Id::new("gridcraft.cell_editor.rect"))).expect("the in-cell editor painted");
+    let rect: Rect = h.ctx.data(|d| d.get_temp(gridcraft_ui_egui::grid::cell_editor_rect_id(h.state()))).expect("the in-cell editor painted");
     rect.height()
 }
 

@@ -288,7 +288,7 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
 }
 
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
-    let shown_key = egui::Id::new("message_box_shown");
+    let shown_key = app.widget_id("message_box_shown");
     let Some((title, msg)) = app.message.clone() else {
         ctx.data_mut(|d| d.remove::<u64>(shown_key));
         return;
@@ -298,7 +298,7 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let first = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(shown_key, || frame));
     let keys_live = frame > first;
     let mut close = false;
-    egui::Modal::new(egui::Id::new("message_box")).show(ctx, |ui| {
+    egui::Modal::new(app.widget_id("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
@@ -330,7 +330,7 @@ pub fn confirm_box(app: &mut SheetApp, ctx: &egui::Context) {
     }
     let Some(q) = app.confirm.clone() else { return };
     let mut answer: Option<Option<serde_json::Value>> = None;
-    egui::Modal::new(egui::Id::new("confirm_box")).show(ctx, |ui| {
+    egui::Modal::new(app.widget_id("confirm_box")).show(ctx, |ui| {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
@@ -395,7 +395,7 @@ pub fn job_paused(app: &mut SheetApp, ctx: &egui::Context) {
         return;
     }
     let mut answer: Option<bool> = None;
-    egui::Modal::new(egui::Id::new("job_paused")).show(ctx, |ui| {
+    egui::Modal::new(app.widget_id("job_paused")).show(ctx, |ui| {
         ui.set_width(360.0);
         ui.label(egui::RichText::new(&label).strong());
         ui.label(format!("{label} is paused. Continue, or stop and keep the best result found so far?"));

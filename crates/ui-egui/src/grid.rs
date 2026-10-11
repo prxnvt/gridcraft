@@ -1780,15 +1780,20 @@ fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
     let _ = app.session.run("selection.set", json!({"range": ranges.join(","), "active": active.a1()}));
 }
 
+/// The in-cell editor (each workbook window's own, see [`SheetApp::widget_id`]).
+pub fn cell_editor_id(app: &SheetApp) -> egui::Id {
+    app.widget_id("gridcraft.cell_editor")
+}
+
+/// Where the in-cell editor was painted last (a rectangle in egui's memory).
+pub fn cell_editor_rect_id(app: &SheetApp) -> egui::Id {
+    app.widget_id("gridcraft.cell_editor.rect")
+}
+
 /// Grid keyboard handling when no text field has focus.
 fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     // Focus left on an editor that no longer exists goes back to the grid.
-    let stale = [
-        egui::Id::new("gridcraft.cell_editor"),
-        egui::Id::new("gridcraft.formula_bar"),
-        crate::text_box::editor_id(),
-        crate::python_window::editor_id(),
-    ];
+    let stale = [cell_editor_id(app), crate::formula_bar::bar_id(app), crate::text_box::editor_id(app), crate::python_window::editor_id(app)];
     let editing = app.editor.is_some() || app.text_box_editor.is_some();
     if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
         resp.request_focus();
@@ -1942,10 +1947,10 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     };
     ui.painter().rect_filled(erect, 0.0, fill);
     ui.painter().rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
-    let id = egui::Id::new("gridcraft.cell_editor");
+    let id = cell_editor_id(app);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0, erect.height() - 2.0);
-    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("gridcraft.cell_editor.rect"), erect));
+    ui.ctx().data_mut(|d| d.insert_temp(cell_editor_rect_id(app), erect));
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.

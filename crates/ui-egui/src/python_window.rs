@@ -29,14 +29,14 @@ pub struct PyWindow {
 /// Lines of code the window shows when it opens.
 pub const LINES: usize = 40;
 
-/// The window's code editor.
-pub fn editor_id() -> Id {
-    Id::new("gridcraft.python_window")
+/// The window's code editor (each workbook window's own, see [`SheetApp::widget_id`]).
+pub fn editor_id(app: &SheetApp) -> Id {
+    app.widget_id("gridcraft.python_window")
 }
 
 /// The window (egui keeps its size and position under this id).
-pub fn window_id() -> Id {
-    Id::new("python_editor")
+pub fn window_id(app: &SheetApp) -> Id {
+    app.widget_id("python_editor")
 }
 
 /// The active cell (the top left of a merged area) and its sheet.
@@ -181,7 +181,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut open = true;
     let mut close_now = false;
     egui::Window::new(title)
-        .id(window_id())
+        .id(window_id(app))
         .collapsible(false)
         .resizable(true)
         .default_size(vec2(760.0, height))
@@ -208,10 +208,10 @@ fn contents(app: &mut SheetApp, ui: &mut Ui, w: PyWindow, t: &Tokens) -> bool {
         placeholder(app, ui, t);
         return false;
     }
-    egui::Panel::top("python_editor.toolbar")
+    egui::Panel::top(app.widget_id("python_editor.toolbar"))
         .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 0, right: 0, top: 0, bottom: 4 }))
         .show(ui, |ui| toolbar(app, ui, w, t));
-    egui::Panel::bottom("python_editor.output")
+    egui::Panel::bottom(app.widget_id("python_editor.output"))
         .resizable(true)
         .default_size(STRIP)
         .size_range(48.0..=600.0)
@@ -239,7 +239,7 @@ fn error_mark(app: &SheetApp, w: PyWindow, code: &str) -> Option<std::ops::Range
 /// The code: the editor while the cell is edited, otherwise the cell's code, which a click starts
 /// editing (with the caret where it was clicked). Returns true on Esc.
 fn code(app: &mut SheetApp, ui: &mut Ui, w: PyWindow, t: &Tokens) -> bool {
-    let id = editor_id();
+    let id = editor_id(app);
     let size = ui.available_size();
     if let Some(mut ed) = app.editor.take() {
         if !ed.python {

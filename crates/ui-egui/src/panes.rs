@@ -10,33 +10,36 @@ use gridcraft_engine::model::{ObjKind, ObjRef};
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let Some(pane) = app.grid.pane.clone() else { return };
     let t = Tokens::get(ui.ctx());
-    egui::Panel::right("task_pane").default_size(300.0).resizable(true).frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(10)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            let title = match pane.as_str() {
-                "comments" => "Comments",
-                "watch" => "Watch Window",
-                "selection" => "Selection",
-                "formatChart" => "Format Chart Area",
-                crate::python_ui::PANE => "Python Diagnostics",
-                _ => "",
-            };
-            ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, "Close", vec2(22.0, 22.0)).clicked() {
-                    app.grid.pane = None;
-                }
+    egui::Panel::right(app.widget_id("task_pane")).default_size(300.0).resizable(true).frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(10)).show(
+        ui,
+        |ui| {
+            ui.horizontal(|ui| {
+                let title = match pane.as_str() {
+                    "comments" => "Comments",
+                    "watch" => "Watch Window",
+                    "selection" => "Selection",
+                    "formatChart" => "Format Chart Area",
+                    crate::python_ui::PANE => "Python Diagnostics",
+                    _ => "",
+                };
+                ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, "Close", vec2(22.0, 22.0)).clicked() {
+                        app.grid.pane = None;
+                    }
+                });
             });
-        });
-        ui.separator();
-        egui::ScrollArea::vertical().show(ui, |ui| match pane.as_str() {
-            "comments" => comments(app, ui),
-            "watch" => watch(app, ui),
-            "selection" => selection(app, ui),
-            "formatChart" => format_chart(app, ui),
-            crate::python_ui::PANE => crate::python_ui::diagnostics(app, ui),
-            _ => {}
-        });
-    });
+            ui.separator();
+            egui::ScrollArea::vertical().show(ui, |ui| match pane.as_str() {
+                "comments" => comments(app, ui),
+                "watch" => watch(app, ui),
+                "selection" => selection(app, ui),
+                "formatChart" => format_chart(app, ui),
+                crate::python_ui::PANE => crate::python_ui::diagnostics(app, ui),
+                _ => {}
+            });
+        },
+    );
 }
 
 fn comments(app: &mut SheetApp, ui: &mut Ui) {

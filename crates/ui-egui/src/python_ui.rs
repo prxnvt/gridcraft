@@ -22,7 +22,7 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(d) = app.session.active() else { return };
     let sheet = d.wb.active().map(|s| s.name.clone()).unwrap_or_default();
-    let key = egui::Id::new("python.diagnostics.filters");
+    let key = app.widget_id("python.diagnostics.filters");
     let (mut this_sheet, mut errors_only): (bool, bool) = ui.ctx().data(|m| m.get_temp(key)).unwrap_or((false, false));
     let summary = backend_summary(app, ui.ctx());
     ui.add(egui::Label::new(RichText::new(summary).color(t.text).font(theme::ui_font(12.0))).wrap());
@@ -241,7 +241,7 @@ pub fn initialization(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, confirm: 
     ui.label("This code runs first, before any Python cell, each time Python starts. Put imports and shared definitions here.");
     ui.add_space(6.0);
     let mut code = d.values.get("code").and_then(Json::as_str).unwrap_or("").to_string();
-    if crate::widgets::code_editor(ui, egui::Id::new("python.initialization.code"), &mut code, Lang::Python, 12).changed() {
+    if crate::widgets::code_editor(ui, app.widget_id("python.initialization.code"), &mut code, Lang::Python, 12).changed() {
         d.values.insert("code".into(), json!(code));
     }
     ui.add_space(8.0);
