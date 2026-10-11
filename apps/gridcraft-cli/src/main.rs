@@ -56,6 +56,11 @@ fn stdout_failed(e: std::io::Error) -> ! {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The Python worker (`--python-worker`): this binary serving the protocol on standard input and
+    // output for a parent GridCraft.
+    if gridcraft_python::is_worker_invocation(&args) {
+        return ExitCode::from(u8::try_from(gridcraft_python::worker_main()).unwrap_or(1));
+    }
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
         Some("--version" | "-V" | "version") => {

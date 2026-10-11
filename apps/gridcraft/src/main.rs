@@ -171,6 +171,12 @@ fn icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result<()> {
+    // The Python worker is this binary started again with `--python-worker`: it serves the
+    // protocol on standard input and output and must not open a window, a log file or anything else.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if gridcraft_python::is_worker_invocation(&args) {
+        std::process::exit(gridcraft_python::worker_main());
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to
@@ -191,7 +197,6 @@ fn main() -> eframe::Result<()> {
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("gridcraft: {report}\n"));
         }
     }));
-    let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
         return Ok(());

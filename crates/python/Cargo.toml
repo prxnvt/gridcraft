@@ -1,0 +1,33 @@
+[package]
+name = "gridcraft-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Monty 1.1 needs Rust 1.96.
+rust-version = "1.96"
+description = "GridCraft Python cells: the sandboxed Python worker process, its JSON-lines protocol and the client that drives it"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The interpreter itself (Monty). Only the app binaries, which run as the worker with
+# `--python-worker`, need it; the engine only drives a worker through the protocol.
+python = ["dep:monty", "dep:monty-types"]
+
+[dependencies]
+gridcraft-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Python is compiled out of the web build (cells show #BLOCKED!).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Monty (pydantic, MIT): a Python interpreter written for sandboxed code. It has no ambient host
+# access: file, environment and network operations suspend to the host, and the worker refuses
+# them. Pinned exactly: review the diff before bumping. (RustPython was the first choice, but every
+# recent release depends on the LGPL-3.0 malachite crates, which would be linked into the app.)
+monty = { version = "=1.1.0", optional = true }
+monty-types = { version = "=1.1.0", optional = true }
+# MIT. The client's memory watchdog reads the worker's resident set size.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }

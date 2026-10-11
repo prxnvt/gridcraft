@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 gridcraft-engine = { workspace = true }
+# The app binary doubles as the sandboxed Python worker (`--python-worker`).
+gridcraft-python = { workspace = true, features = ["python"] }
 gridcraft-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
