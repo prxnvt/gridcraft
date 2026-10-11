@@ -96,6 +96,11 @@ fn target_cell(s: &Session, p: &Json) -> Result<(usize, CellRef)> {
 /// formula's spill.
 fn put(s: &mut Session, sheet: usize, at: CellRef, py: PyCode) -> Result<()> {
     let before = s.doc()?.wb.clone();
+    // A table header is the column's name, never a formula or code (as in Excel).
+    let header = before.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.header_row && t.range.start.row == at.row && t.range.contains(at)));
+    if header {
+        return Err(EngineError::Other(format!("{} is a table header; Python cells can't go in a table's header row", at.a1())));
+    }
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let style = sh.style_id(at);

@@ -39,8 +39,48 @@ impl FileKind {
 /// don't say. Whatever the format, content over the [`LOAD_LIMITS`] is dropped with a warning.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let (mut wb, mut warnings) = read_bytes(name, bytes)?;
+    adopt_python(&mut wb);
     warnings.extend(enforce_limits(&mut wb, &LOAD_LIMITS));
     Ok((wb, warnings))
+}
+
+/// Python cells from a file: a cell whose formula is `PY("…",0|1)` (a format that kept it as a
+/// formula) becomes a Python cell, and a Python cell whose spilled values the file cached gets
+/// them back as its result, so it shows them until it runs again.
+pub fn adopt_python(wb: &mut Workbook) {
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let formulas: Vec<(CellRef, gridcraft_model::PyCode)> = sh
+            .cells
+            .iter()
+            .filter_map(|(c, cell)| cell.formula.as_ref().and_then(|f| gridcraft_model::PyCode::from_formula(&f.text)).map(|p| (c, p)))
+            .collect();
+        let spills: Vec<(CellRef, RangeRef)> = sh
+            .spill_ranges
+            .iter()
+            .filter(|(a, r)| r.count() <= 1_000_000 && sh.cell(**a).and_then(|c| c.py.as_ref()).is_some_and(|p| p.output.is_none()))
+            .map(|(a, r)| (*a, *r))
+            .collect();
+        if formulas.is_empty() && spills.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for (c, py) in formulas {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.formula = None;
+                cell.py = Some(std::sync::Arc::new(py));
+            }
+        }
+        for (anchor, range) in spills {
+            let data: Vec<gridcraft_core::Value> =
+                range.iter().map(|c| if c == anchor { sh.cell(c).map(|x| x.value.clone()).unwrap_or_default() } else { sh.value(c) }).collect();
+            let Some(array) = gridcraft_core::Array::new(range.height() as usize, range.width() as usize, data) else { continue };
+            if let Some(py) = sh.cells.get_mut(anchor).and_then(|x| x.py.as_mut()) {
+                std::sync::Arc::make_mut(py).output =
+                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), preview: String::new(), convertible: true });
+            }
+        }
+    }
 }
 
 /// What a file may hold. A file is somebody else's work: these keep a crafted one from handing
@@ -74,7 +114,16 @@ pub fn enforce_limits(wb: &mut Workbook, limits: &LoadLimits) -> Vec<String> {
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheets.get(si) else { continue };
         let mut over = Vec::new();
+        let mut bad_output = Vec::new();
         for (c, cell) in sh.cells.iter() {
+            if let Some(py) = &cell.py {
+                if py.code.chars().nth(limits.python_code).is_some() {
+                    python.push(format!("{}!{}", sh.name, c.a1()));
+                    over.push(c);
+                } else if py.output.as_ref().is_some_and(|o| !sane_output(&o.value)) {
+                    bad_output.push(c);
+                }
+            }
             let Some(f) = cell.formula.as_ref() else { continue };
             let why = formula_problem(&f.text, limits);
             if let Some(why) = why {
@@ -87,7 +136,7 @@ pub fn enforce_limits(wb: &mut Workbook, limits: &LoadLimits) -> Vec<String> {
                 over.push(c);
             }
         }
-        if over.is_empty() {
+        if over.is_empty() && bad_output.is_empty() {
             continue;
         }
         if let Some(sh) = wb.sheets.get_mut(si) {
@@ -95,6 +144,14 @@ pub fn enforce_limits(wb: &mut Workbook, limits: &LoadLimits) -> Vec<String> {
             for c in over {
                 if let Some(cell) = sh.cells.get_mut(c) {
                     cell.formula = None;
+                    cell.py = None;
+                }
+            }
+            // A kept Python result that isn't a well-formed array of at most a million cells is
+            // dropped (the cell keeps its value).
+            for c in bad_output {
+                if let Some(py) = sh.cells.get_mut(c).and_then(|x| x.py.as_mut()) {
+                    std::sync::Arc::make_mut(py).output = None;
                 }
             }
         }
@@ -155,6 +212,17 @@ pub fn enforce_limits(wb: &mut Workbook, limits: &LoadLimits) -> Vec<String> {
         ));
     }
     warnings
+}
+
+/// A Python result a file may hold: a scalar, or an array whose size matches its data and has at
+/// most a million cells.
+fn sane_output(v: &gridcraft_core::Value) -> bool {
+    match v {
+        gridcraft_core::Value::Array(a) => {
+            a.rows >= 1 && a.cols >= 1 && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= 1_000_000)
+        }
+        _ => true,
+    }
 }
 
 enum Over {

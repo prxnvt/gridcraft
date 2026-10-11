@@ -149,3 +149,15 @@ fn the_time_limit_is_a_setting() {
     py(&mut s, "A1", "while True: pass");
     assert_eq!(v(&s, "A1"), Value::Error(CellError::Timeout));
 }
+
+#[test]
+fn table_headers_refuse_python() {
+    let mut s = py_session();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["a", 1]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B2", "headers": true})).unwrap();
+    assert!(s.execute("python.set", json!({"cell": "B1", "code": "1"})).is_err());
+    assert!(s.execute("python.insert", json!({"cell": "B1"})).is_err());
+    assert_eq!(v(&s, "B1"), Value::text("Score"), "the header keeps its name");
+    py(&mut s, "B2", "40 + 2");
+    assert_eq!(v(&s, "B2"), Value::Number(42.0), "body cells take Python");
+}
