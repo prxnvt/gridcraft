@@ -1635,6 +1635,7 @@ fn notes_comments_and_links_survive_a_json_save() {
 }
 
 mod controls;
+mod equation;
 mod macros;
 mod objects;
 mod python_cells;

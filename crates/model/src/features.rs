@@ -430,6 +430,55 @@ pub struct Shape {
     pub fill: Color,
     pub line: Color,
     pub text: String,
+    /// An equation's layout, rebuilt from `text` and never saved.
+    #[serde(skip)]
+    pub math: EquationCache,
+}
+
+/// The laid-out form of an equation's LaTeX source. It is derived data: rebuilt by
+/// [`EquationCache::refresh`] whenever the source changes, never saved, and ignored when shapes
+/// are compared. Painters read it and never lay equations out themselves, so nothing in a paint
+/// path can reach the layout engine.
+#[derive(Clone, Debug, Default)]
+pub struct EquationCache {
+    /// A hash of the source the layout was built from.
+    key: u64,
+    layout: Option<Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>>,
+}
+
+impl PartialEq for EquationCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+fn source_key(src: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    h.finish()
+}
+
+impl EquationCache {
+    /// The layout of `src`, or why it has none; `None` until [`EquationCache::refresh`] has run
+    /// for this source.
+    pub fn get(&self, src: &str) -> Option<Result<&gridcraft_math::MathList, &gridcraft_math::MathError>> {
+        if self.key != source_key(src) {
+            return None;
+        }
+        self.layout.as_ref().map(|r| r.as_ref().map(|l| l.as_ref()))
+    }
+
+    /// Lays `src` out again unless the cache already holds its layout. True when it did.
+    pub fn refresh(&mut self, src: &str) -> bool {
+        let key = source_key(src);
+        if self.layout.is_some() && self.key == key {
+            return false;
+        }
+        self.key = key;
+        self.layout = Some(gridcraft_math::layout(src).map(std::sync::Arc::new));
+        true
+    }
 }
 
 /// What a form control on the sheet is.

@@ -235,7 +235,7 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
                 continue;
             }
             ShapeKind::Equation => {
-                paint_equation_stub(p, r, &sp.text, geo.z);
+                crate::equation::paint_shape(p, r, sp, wb, geo.z);
                 continue;
             }
             ShapeKind::Line | ShapeKind::Arrow => {
@@ -330,15 +330,6 @@ fn selection_frame(p: &Painter, r: Rect) {
         p.circle_filled(c, 4.0, t.sheet_control_bg);
         p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
-}
-
-/// Stand-in drawing of an equation: its source, centred. The equation renderer replaces it.
-fn paint_equation_stub(p: &Painter, r: Rect, latex: &str, z: f32) {
-    let t = Tokens::get(p.ctx());
-    let text = if latex.trim().is_empty() { "Type equation here." } else { latex };
-    let font = FontId::new(14.0 * z, egui::FontFamily::Name(theme::CELL.into()));
-    let g = p.layout(text.to_string(), font, t.cell_text, (r.width() - 8.0).max(1.0));
-    p.with_clip_rect(r.intersect(p.clip_rect())).galley(r.center() - g.size() / 2.0, g, t.cell_text);
 }
 
 /// Where object `o` sits on screen, when it exists on `sh`.

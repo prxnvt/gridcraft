@@ -23,10 +23,18 @@ fn sheet(s: &Session, i: usize) -> &Sheet {
     s.doc().unwrap().wb.sheet(i).unwrap()
 }
 
-/// An equation (stored as a shape) on sheet `i`; the commands that make one come later.
+/// An equation (stored as a shape) on sheet `i`, placed directly (`insert.equation` is tested in `equation.rs`).
 pub(super) fn add_equation(s: &mut Session, i: usize, cell: &str, latex: &str) -> u32 {
     let id = s.doc().unwrap().wb.next_object_id();
-    let shape = Shape { id, kind: ShapeKind::Equation, anchor: anchor(cell), fill: Color::Auto, line: Color::Auto, text: latex.into() };
+    let shape = Shape {
+        math: Default::default(),
+        id,
+        kind: ShapeKind::Equation,
+        anchor: anchor(cell),
+        fill: Color::Auto,
+        line: Color::Auto,
+        text: latex.into(),
+    };
     sheet_mut(s, i).shapes.push(shape);
     id
 }

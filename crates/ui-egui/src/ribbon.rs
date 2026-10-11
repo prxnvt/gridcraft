@@ -1353,6 +1353,8 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if kt(app, big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false), "NH").clicked() {
         app.open_dialog("headerFooter", json!({}));
     }
+    // Symbols: Symbol, then Equation.
+    sep(ui);
     let sym = kt(app, big_button(ui, Icon::Symbol, "Symbol", "Symbol", true), "NU");
     egui::Popup::menu(&sym).show(|ui| {
         ui.set_width(260.0);
@@ -1367,6 +1369,23 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
+    let (eq, eq_menu) = big_split_button(ui, Icon::Equation, None, "Equation", "Insert an equation, or pick one from the gallery");
+    if kt(app, eq, "NQ").clicked() {
+        app.open_dialog("equation", json!({}));
+    }
+    let eq_menu = kt(app, eq_menu, "NG");
+    egui::Popup::menu(&eq_menu).show(|ui| {
+        ui.set_width(300.0);
+        if ui.add(egui::Button::new(app.ui.language.tr("Insert New Equation...")).frame(false).min_size(vec2(290.0, 24.0))).clicked() {
+            app.open_dialog("equation", json!({}));
+            ui.close();
+        }
+        ui.separator();
+        if let Some(latex) = crate::equation::gallery(ui) {
+            act(app, "insert.equation", json!({"latex": latex}));
+            ui.close();
+        }
+    });
     sep(ui);
     // Controls: draw a button, slider or spin button on the sheet (or click for the default size);
     // Checkbox turns the selected cells into checkboxes.
@@ -1374,7 +1393,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     let placing = app.grid.placing;
     ui.vertical(|ui| {
         for (icon, kind, label, tip, key) in [
-            (Icon::Button, ControlKind::Button, "Button", "Draw a button that runs a macro or a command", "NQ"),
+            (Icon::Button, ControlKind::Button, "Button", "Draw a button that runs a macro or a command", "NO"),
             (Icon::Slider, ControlKind::Slider, "Slider", "Draw a slider that sets a whole number in a linked cell", "NJ"),
             (Icon::Spin, ControlKind::Spin, "Spin Button", "Draw a spin button that steps a whole number in a linked cell", "NW"),
         ] {

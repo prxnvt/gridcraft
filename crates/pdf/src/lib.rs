@@ -1,7 +1,8 @@
 //! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
-//!   ([`text_width`]) so callers can measure, align and wrap text.
+//!   ([`text_width`]) so callers can measure, align and wrap text. Symbol uses its own built-in
+//!   encoding ([`symbol_code`]), for Greek letters and mathematical operators.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
@@ -12,13 +13,16 @@
 #![forbid(unsafe_code)]
 
 mod metrics;
+mod symbol;
+
+pub use symbol::{symbol_code, symbol_width};
 
 use std::fmt::Write as _;
 
 /// RGB colour, 0–255 per channel.
 pub type Rgb = [u8; 3];
 
-/// The standard 14 fonts minus Symbol and ZapfDingbats.
+/// The standard 14 fonts minus ZapfDingbats.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Font {
     #[default]
@@ -34,7 +38,12 @@ pub enum Font {
     CourierBold,
     CourierOblique,
     CourierBoldOblique,
+    /// Greek letters and mathematical symbols, in the font's own encoding.
+    Symbol,
 }
+
+/// How many fonts a document can use.
+const FONT_COUNT: usize = 13;
 
 /// A font family for [`Font::styled`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -46,7 +55,7 @@ pub enum Family {
 }
 
 impl Font {
-    pub const ALL: [Font; 12] = [
+    pub const ALL: [Font; FONT_COUNT] = [
         Font::Helvetica,
         Font::HelveticaBold,
         Font::HelveticaOblique,
@@ -59,6 +68,7 @@ impl Font {
         Font::CourierBold,
         Font::CourierOblique,
         Font::CourierBoldOblique,
+        Font::Symbol,
     ];
 
     /// PostScript base font name.
@@ -76,6 +86,7 @@ impl Font {
             Font::CourierBold => "Courier-Bold",
             Font::CourierOblique => "Courier-Oblique",
             Font::CourierBoldOblique => "Courier-BoldOblique",
+            Font::Symbol => "Symbol",
         }
     }
 
@@ -116,8 +127,19 @@ impl Font {
         }
     }
 
+    /// Whether this font can show `c` (rather than a `?`).
+    pub fn can_encode(self, c: char) -> bool {
+        match self {
+            Font::Symbol => symbol_code(c).is_some(),
+            _ => c == '?' || win_ansi(c) != b'?',
+        }
+    }
+
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
+        if self == Font::Symbol {
+            return symbol_code(c).and_then(symbol_width).unwrap_or(500);
+        }
         let table: Option<&[u16; 95]> = match self {
             Font::Helvetica | Font::HelveticaOblique => Some(&metrics::HELVETICA),
             Font::HelveticaBold | Font::HelveticaBoldOblique => Some(&metrics::HELVETICA_BOLD),
@@ -190,10 +212,16 @@ pub fn win_ansi(c: char) -> u8 {
 
 /// A PDF literal string `( … )` for `text` in WinAnsiEncoding.
 fn pdf_string(text: &str) -> String {
+    pdf_string_in(text, false)
+}
+
+/// A PDF literal string for `text` in WinAnsiEncoding, or in Symbol's encoding (where a
+/// character Symbol lacks becomes `?`).
+fn pdf_string_in(text: &str, symbol: bool) -> String {
     let mut s = String::with_capacity(text.len() + 2);
     s.push('(');
     for c in text.chars() {
-        let b = win_ansi(c);
+        let b = if symbol { symbol_code(c).unwrap_or(b'?') } else { win_ansi(c) };
         match b {
             b'(' | b')' | b'\\' => {
                 s.push('\\');
@@ -238,7 +266,7 @@ pub struct Page {
     width: f32,
     height: f32,
     content: String,
-    fonts: [bool; 12],
+    fonts: [bool; FONT_COUNT],
     images: Vec<ImageData>,
     depth: u32,
 }
@@ -437,7 +465,7 @@ impl Page {
             n(cs),
             n(x),
             n(self.y(y)),
-            pdf_string(text)
+            pdf_string_in(text, font == Font::Symbol)
         );
         self.op(&s);
     }
@@ -529,7 +557,7 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; 12], images: Vec::new(), depth: 0 });
+        self.pages.push(Page { width, height, content: String::new(), fonts: [false; FONT_COUNT], images: Vec::new(), depth: 0 });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
     }
@@ -549,14 +577,14 @@ impl PdfDoc {
             self.add_page(612.0, 792.0);
         }
         // Object numbering: 1 catalog, 2 page tree, 3 info, then fonts, then per page.
-        let mut used = [false; 12];
+        let mut used = [false; FONT_COUNT];
         for p in &self.pages {
             for (u, f) in used.iter_mut().zip(p.fonts.iter()) {
                 *u |= *f;
             }
         }
         let mut next = 4u32;
-        let mut font_ids = [0u32; 12];
+        let mut font_ids = [0u32; FONT_COUNT];
         for (i, u) in used.iter().enumerate() {
             if *u {
                 font_ids[i] = next;

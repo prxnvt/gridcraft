@@ -205,6 +205,18 @@ impl Workbook {
         }
         None
     }
+    /// Rebuilds the cached layout of every equation whose source changed (or was never laid
+    /// out, as after loading a file).
+    pub fn refresh_equations(&mut self) {
+        let stale = |s: &crate::Shape| s.kind == crate::ShapeKind::Equation && s.math.get(&s.text).is_none();
+        // Only sheets with a stale equation are copied (sheets are shared with undo snapshots).
+        for sh in self.sheets.iter_mut().filter(|sh| sh.shapes.iter().any(stale)) {
+            for s in Arc::make_mut(sh).shapes.iter_mut().filter(|s| s.kind == crate::ShapeKind::Equation) {
+                s.math.refresh(&s.text);
+            }
+        }
+    }
+
     pub fn next_object_id(&self) -> u32 {
         let mut m = 0;
         for s in &self.sheets {
@@ -272,6 +284,7 @@ mod tests {
         if let Some(sh) = wb.sheet_mut(0) {
             sh.controls.clear();
             sh.shapes.push(crate::Shape {
+                math: Default::default(),
                 id: u32::MAX,
                 kind: crate::ShapeKind::Equation,
                 anchor: Default::default(),

@@ -66,7 +66,7 @@ shortcut lists for Windows and Mac, then fill the gaps: 6–10 h.
 Format Cells, Insert Function/Formula Builder, Find and Replace, Go To and Go To Special, Sort,
 Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup, Goal
 Seek, Scenario Manager and others exist. Missing or partial: Options, Solver, Data Analysis,
-Forecast Sheet, Power Query editor, Insert Object, Equation editor, Protect/Allow Edit Ranges,
+Forecast Sheet, Power Query editor, Insert Object, Protect/Allow Edit Ranges,
 Workbook Links, Accessibility checker.
 
 ## Accessibility
