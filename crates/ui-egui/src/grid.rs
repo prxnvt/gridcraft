@@ -2039,6 +2039,14 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
         let error = matches!(sh.value(d.selection.active), Value::Error(_));
         Some((d.wb.active_sheet, d.selection.active, py.object, error))
     });
+    let offer = app.session.active().and_then(|d| {
+        let (_, c, _, error) = python?;
+        let sh = d.wb.active()?;
+        if !error {
+            return None;
+        }
+        d.py_log.iter().rev().find(|r| r.sheet == sh.name && r.cell == c.a1()).and_then(crate::python_ui::install_offer)
+    });
     let resp = egui::Area::new(egui::Id::new("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
@@ -2053,6 +2061,12 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 if item(ui, "Show Preview Card") {
                     close = true;
                     app.grid.py_card = Some((si, c));
+                }
+                if let Some((label, params)) = &offer
+                    && item(ui, label)
+                {
+                    close = true;
+                    app.open_dialog("pythonInstall", params.clone());
                 }
                 if error && item(ui, "Show Diagnostics") {
                     close = true;
@@ -2157,6 +2171,12 @@ fn py_card(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_ope
         }),
         _ => None,
     };
+    // A module the last run couldn't import: offer to install its package.
+    let offer = match value {
+        Value::Error(_) => d.py_log.iter().rev().find(|r| r.sheet == sh.name && r.cell == c.a1()).and_then(crate::python_ui::install_offer),
+        _ => None,
+    };
+    let mut install: Option<serde_json::Value> = None;
     let t = Tokens::get(ui.ctx());
     let cell_rect = geo.cell_rect(sh, c);
     let mut close = false;
@@ -2192,13 +2212,23 @@ fn py_card(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_ope
             });
             if matches!(value, Value::Error(_)) {
                 ui.add_space(4.0);
-                if ui.button("Show Diagnostics").clicked() {
-                    show_diagnostics = true;
-                }
+                ui.horizontal(|ui| {
+                    if let Some((label, params)) = &offer
+                        && ui.button(label).on_hover_text("Install the package that provides this module, after you approve").clicked()
+                    {
+                        install = Some(params.clone());
+                    }
+                    if ui.button("Show Diagnostics").clicked() {
+                        show_diagnostics = true;
+                    }
+                });
             }
         });
     });
-    if show_diagnostics {
+    if let Some(params) = install {
+        app.grid.py_card = None;
+        app.open_dialog("pythonInstall", params);
+    } else if show_diagnostics {
         app.grid.pane = Some(crate::python_ui::PANE.into());
         app.grid.py_card = None;
     } else if close || popup_dismissed(&resp.response, was_open) {

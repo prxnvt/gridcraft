@@ -58,11 +58,14 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
         ui.label(RichText::new("No Python runs yet.").italics().color(t.text_dim));
     }
     let mut goto: Option<(String, String)> = None;
+    let mut offer: Option<Json> = None;
     for r in &runs {
         egui::Frame::NONE.fill(t.menu_bg).corner_radius(6.0).inner_margin(8.0).stroke(egui::Stroke::new(1.0, t.separator)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                if r.cell.is_empty() {
+                if r.cell.is_empty() && matches!(r.status, "installed" | "installFailed" | "cancelled") {
+                    ui.label(RichText::new("Package install").strong());
+                } else if r.cell.is_empty() {
                     ui.label(RichText::new("Initialization").strong());
                 } else if ui.link(RichText::new(format!("{}!{}", gridcraft_engine::formula::quote_sheet(&r.sheet), r.cell)).strong()).clicked() {
                     goto = Some((r.sheet.clone(), r.cell.clone()));
@@ -76,6 +79,9 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
                     "blocked" => ("Turned off", t.text_dim),
                     "cycle" => ("Cycle", t.danger),
                     "refused" => ("Not run", t.danger),
+                    "installed" => ("Installed", t.text_dim),
+                    "installFailed" => ("Install failed", t.danger),
+                    "cancelled" => ("Cancelled", t.text_dim),
                     other => (other, t.text_dim),
                 };
                 ui.label(RichText::new(status).color(color).font(theme::ui_bold(12.0)));
@@ -90,6 +96,11 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
                 };
                 ui.add(egui::Label::new(RichText::new(text).color(t.danger)).wrap());
             }
+            if let Some((label, params)) = install_offer(r)
+                && ui.button(label).on_hover_text("Install the package that provides this module, after you approve").clicked()
+            {
+                offer = Some(params);
+            }
             for (label, out) in [("Output", &r.stdout), ("Errors", &r.stderr)] {
                 if !out.is_empty() {
                     ui.label(RichText::new(label).color(t.text_dim).font(theme::ui_font(11.5)));
@@ -98,6 +109,9 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
         ui.add_space(4.0);
+    }
+    if let Some(params) = offer {
+        app.open_dialog("pythonInstall", params);
     }
     if let Some((sheet, cell)) = goto {
         let other = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.name != sheet);
@@ -187,12 +201,19 @@ pub fn enable_bar(app: &mut SheetApp, ui: &mut Ui) {
                 let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::hover());
                 crate::icons::paint_accent(ui.painter(), r, Icon::Python, t.text, Some(t.cat(theme::Cat::Green)));
                 ui.label(RichText::new("Python cells are turned off for this workbook.").font(theme::ui_bold(12.5)).color(t.text));
-                let note = match cpython_path(app) {
+                let mut note = match cpython_path(app) {
                     Some(path) => format!(
                         "Python cells run with your Python at {path}, with full access to your files and network. Enable only for workbooks you trust."
                     ),
                     None => "Python runs in a sandbox with no file or network access.".to_string(),
                 };
+                let needs = app.session.active().map(|d| gridcraft_engine::pyenv::declared(&d.wb)).unwrap_or_default();
+                if !needs.is_empty() {
+                    note.push_str(&format!(
+                        " It needs {}; GridCraft installs packages only after you approve, into its own environment.",
+                        needs.join(", ")
+                    ));
+                }
                 // Room is kept for the button: a long path is cut, with the whole text on hover.
                 let room = (ui.available_width() - 150.0).max(80.0);
                 ui.allocate_ui(vec2(room, 24.0), |ui| {
@@ -297,9 +318,9 @@ pub fn options(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, confirm: &mut bo
             });
             ui.add_space(4.0);
             let note = if b["externallyManaged"].as_bool().unwrap_or(false) {
-                "Cells have full access to your files and network. This Python is managed by your system: install packages into a virtual environment (python3 -m venv), then choose its python here."
+                "Cells have full access to your files and network. This Python is managed by your system, so GridCraft never installs into it: when a cell needs a package, it offers to install it, only after you approve, into GridCraft's own environment below."
             } else {
-                "Cells have full access to your files and network. A missing package's error says how to install it; GridCraft never installs anything."
+                "Cells have full access to your files and network. When a cell needs a package that isn't installed, GridCraft offers to install it, only after you approve, into your own virtual environment when it runs cells, otherwise into GridCraft's own environment (never into a system Python)."
             };
             ui.add(egui::Label::new(RichText::new(note).color(t.text_dim).font(theme::ui_font(12.0))).wrap());
         } else if kind == "builtin" || kind == "custom" {
@@ -344,12 +365,32 @@ pub fn options(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, confirm: &mut bo
         detect = ui.button("Detect Again").on_hover_text("Look for Python again (after installing Python or a package)").clicked();
     });
     ui.label(
-        RichText::new("Leave it empty to look for Python 3.11 or newer: an active virtual environment first, then python3 on PATH.")
+        RichText::new("Leave it empty to look for Python 3.11 or newer: an active virtual environment first, then GridCraft's own environment, then python3 on PATH.")
             .color(t.text_dim)
             .font(theme::ui_font(12.0)),
     );
     if detect && let Err(e) = app.run("python.options", json!({"interpreter": path, "detect": true})) {
         app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    }
+    ui.add_space(10.0);
+    environment_section(app, ui, open);
+    // The packages this workbook needs (kept in the workbook).
+    let has_doc = app.session.active().is_some();
+    if has_doc {
+        ui.add_space(10.0);
+        ui.label(RichText::new("Packages this workbook needs").strong());
+        if !d.values.contains_key("packages") {
+            let list = app.session.active().map(|doc| gridcraft_engine::pyenv::declared(&doc.wb)).unwrap_or_default();
+            d.values.insert("packages".into(), json!(list.join(", ")));
+        }
+        let mut text = d.values.get("packages").and_then(Json::as_str).unwrap_or_default().to_string();
+        let edit = egui::TextEdit::singleline(&mut text).hint_text("None (for example: pandas, numpy)").desired_width(ui.available_width());
+        if ui.add(edit).on_hover_text("Package names, each with an optional version; saved with the workbook").changed() {
+            d.values.insert("packages".into(), json!(text));
+        }
+        if let Err(e) = gridcraft_engine::pyenv::env::check_requirements(&gridcraft_engine::pyenv::env::split_requirements(&text)) {
+            ui.add(egui::Label::new(RichText::new(e).color(t.danger).font(theme::ui_font(12.0))).wrap());
+        }
     }
     ui.add_space(10.0);
     let mut secs = d.values.get("timeoutSeconds").and_then(Json::as_f64).unwrap_or(5.0);
@@ -370,9 +411,232 @@ pub fn options(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, confirm: &mut bo
     });
     if *confirm {
         *confirm = false;
-        match app.run("python.options", json!({"interpreter": path, "timeoutSeconds": secs})) {
+        let mut result = app.run("python.options", json!({"interpreter": path, "timeoutSeconds": secs}));
+        // The workbook's packages, when they changed.
+        if result.is_ok()
+            && let Some(text) = d.values.get("packages").and_then(Json::as_str)
+        {
+            let list = gridcraft_engine::pyenv::env::split_requirements(text);
+            let now = app.session.active().map(|doc| gridcraft_engine::pyenv::declared(&doc.wb)).unwrap_or_default();
+            if gridcraft_engine::pyenv::env::check_requirements(&list).is_ok_and(|l| l != now) {
+                result = app.run("python.packages", json!({"packages": list}));
+            }
+        }
+        match result {
             Ok(_) => *open = false,
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
         }
+    }
+}
+
+/// The status bar while Python works in the background: "Running Python…" or "Installing
+/// pandas, numpy…", with Stop (Esc does the same); then, for a while, how the install ended
+/// (click it for Diagnostics).
+pub fn busy_status(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let install = app.session.python_install_status();
+    let state = install["state"].as_str().unwrap_or("idle").to_string();
+    let packages = || install["packages"].as_array().map(|a| a.iter().filter_map(Json::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    if app.session.python_busy() {
+        ui.add_space(12.0);
+        ui.add(egui::Spinner::new().size(12.0).color(t.text_dim));
+        let (text, tip) = if state == "running" {
+            let p = packages();
+            let text = if p.is_empty() { "Making the Python environment…".to_string() } else { format!("Installing {p}…") };
+            (text, "Stop the install (Esc)")
+        } else {
+            (app.ui.language.tr("Running Python…").to_string(), app.ui.language.tr("Stop the Python cells that are running (Esc)"))
+        };
+        let tip = tip.to_string();
+        ui.label(RichText::new(text).font(theme::ui_font(12.5)).color(t.text_dim));
+        let stop =
+            ui.add(egui::Button::new(RichText::new(app.ui.language.tr("Stop")).font(theme::ui_font(12.0)).color(t.text)).min_size(vec2(44.0, 18.0)));
+        if stop.on_hover_text(tip).clicked() {
+            app.run_or_alert("python.stop", json!({}));
+        }
+        return;
+    }
+    if !matches!(state.as_str(), "installed" | "installFailed" | "cancelled") {
+        return;
+    }
+    // The result shows for 20 seconds from when it first appeared.
+    let message = install["message"].as_str().unwrap_or_default().to_string();
+    let key = egui::Id::new("python.install.shown").with(&message).with(&state);
+    let now = ui.input(|i| i.time);
+    let since: f64 = ui.ctx().data_mut(|m| *m.get_temp_mut_or_insert_with(key, || now));
+    if now - since > 20.0 {
+        return;
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+    ui.add_space(12.0);
+    let color = if state == "installFailed" { t.danger } else { t.text_dim };
+    let short: String = if message.chars().count() > 90 { format!("{}…", message.chars().take(90).collect::<String>()) } else { message.clone() };
+    let r = ui.add(egui::Label::new(RichText::new(short).font(theme::ui_font(12.5)).color(color)).sense(egui::Sense::click()));
+    if r.on_hover_text(format!("{message}\nClick for Diagnostics")).clicked() {
+        app.grid.pane = Some(PANE.into());
+    }
+}
+
+/// Opens the Install Python Packages dialog for `{packages: [pip names], declare?}`, or says
+/// why nothing can be installed (with how to install by hand).
+pub fn open_install(app: &mut SheetApp, params: &Json) -> Option<Dialog> {
+    let packages: Vec<String> =
+        params["packages"].as_array().map(|a| a.iter().filter_map(Json::as_str).map(str::to_string).collect()).unwrap_or_default();
+    let declare = params["declare"].as_bool().unwrap_or(false);
+    match app.session.python_install_target(&packages) {
+        Err(why) => {
+            app.message = Some(("Install Python Packages".into(), why));
+            None
+        }
+        Ok(target) => {
+            let (label, path, create) = match &target {
+                gridcraft_engine::pyenv::env::Target::Own { python, .. } => ("Your Python environment", python.display().to_string(), false),
+                gridcraft_engine::pyenv::env::Target::GridCraft { dir, .. } => {
+                    ("GridCraft's Python environment", dir.display().to_string(), !gridcraft_engine::pyenv::env::is_env(dir))
+                }
+            };
+            Some(Dialog::custom(
+                "pythonInstall",
+                "Install Python Packages",
+                json!({"packages": packages.join(", "), "targetLabel": label, "target": path, "create": create, "declare": declare}),
+            ))
+        }
+    }
+}
+
+/// The "Install <packages>…" offer for a run that couldn't import a module, if there is one.
+pub fn install_offer(run: &gridcraft_engine::python::PyRunLog) -> Option<(String, Json)> {
+    let pkg = run.missing.clone()?;
+    Some((format!("Install {pkg}…"), json!({"packages": [pkg], "declare": true})))
+}
+
+/// The approval to install packages: where they go, the exact list (editable), and a warning
+/// that installing runs code from the internet. Install runs `python.install` with
+/// `approve: true` in the background.
+pub fn install_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let t = Tokens::get(ui.ctx());
+    let s = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or_default().to_string();
+    ui.label(RichText::new("Install into").strong());
+    ui.label(RichText::new(s("targetLabel")).color(t.text));
+    ui.add(egui::Label::new(RichText::new(s("target")).font(crate::code_editor::font()).color(t.text_dim)).wrap());
+    if d.values.get("create").and_then(Json::as_bool).unwrap_or(false) {
+        ui.label(RichText::new("GridCraft makes this environment first, from the Python it found.").color(t.text_dim).font(theme::ui_font(12.0)));
+    }
+    ui.add_space(8.0);
+    ui.label(RichText::new("Packages").strong());
+    let mut text = s("packages");
+    let edit = egui::TextEdit::singleline(&mut text).hint_text("pandas, numpy>=1.26").desired_width(ui.available_width());
+    if ui.add(edit).on_hover_text("Package names from the Python Package Index, each with an optional version").changed() {
+        d.values.insert("packages".into(), json!(text));
+        d.values.remove("error");
+    }
+    let list = gridcraft_engine::pyenv::env::split_requirements(&text);
+    let checked = gridcraft_engine::pyenv::env::check_requirements(&list);
+    let error = match &checked {
+        Ok(l) if l.is_empty() => Some("List at least one package.".to_string()),
+        Ok(_) => d.values.get("error").and_then(Json::as_str).map(str::to_string),
+        Err(e) => Some(e.clone()),
+    };
+    if let Some(e) = &error {
+        ui.add(egui::Label::new(RichText::new(e).color(t.danger).font(theme::ui_font(12.0))).wrap());
+    }
+    ui.add_space(8.0);
+    egui::Frame::NONE.fill(t.menu_bg).corner_radius(6.0).inner_margin(8.0).stroke(egui::Stroke::new(1.0, t.danger)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.add(
+            egui::Label::new(
+                RichText::new(
+                    "Installing downloads packages from the internet and runs their code on this computer, with access to your files and network. Install only packages you trust.",
+                )
+                .color(t.text)
+                .font(theme::ui_font(12.0)),
+            )
+            .wrap(),
+        );
+    });
+    ui.add_space(8.0);
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), 26.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let ok = matches!(&checked, Ok(l) if !l.is_empty());
+        if ui.add_enabled(ok, egui::Button::new(RichText::new("  Install  ").color(t.on_accent)).fill(t.accent)).clicked() {
+            *confirm = true;
+        }
+        if ui.button(" Cancel ").clicked() {
+            *open = false;
+        }
+    });
+    if *confirm {
+        *confirm = false;
+        let Ok(list) = checked else { return };
+        let declare = d.values.get("declare").and_then(Json::as_bool).unwrap_or(false);
+        match app.run("python.install", json!({"packages": list, "approve": true, "declare": declare})) {
+            Ok(_) => *open = false,
+            Err(e) => {
+                d.values.insert("error".into(), json!(crate::clean_error(&e)));
+            }
+        }
+    }
+}
+
+/// GridCraft's environment in Python Options: its folder, whether it exists and runs cells, its
+/// packages, and Create, Install packages… and Delete environment.
+fn environment_section(app: &mut SheetApp, ui: &mut Ui, open: &mut bool) {
+    let t = Tokens::get(ui.ctx());
+    let env = app.session.python_environment();
+    ui.label(RichText::new("GridCraft's Python environment").strong());
+    let path = env["path"].as_str().unwrap_or("(no data folder)").to_string();
+    ui.add(egui::Label::new(RichText::new(&path).font(crate::code_editor::font()).color(t.text_dim)).wrap());
+    let exists = env["exists"].as_bool().unwrap_or(false);
+    let packages = env["packages"].as_array().cloned().unwrap_or_default();
+    let note = if !exists {
+        "Not made yet. GridCraft makes it from the Python it found when you first install a package, and installs only after you approve.".to_string()
+    } else if env["active"].as_bool().unwrap_or(false) {
+        format!("Runs Python cells now. {} packages installed.", packages.len())
+    } else {
+        format!("{} packages installed.", packages.len())
+    };
+    ui.add(egui::Label::new(RichText::new(note).color(t.text_dim).font(theme::ui_font(12.0))).wrap());
+    if exists && !packages.is_empty() {
+        egui::CollapsingHeader::new(RichText::new(format!("Packages ({})", packages.len())).color(t.text_dim))
+            .id_salt("python.options.envpackages")
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                    for p in &packages {
+                        let text = format!("{} {}", p["name"].as_str().unwrap_or_default(), p["version"].as_str().unwrap_or_default());
+                        ui.label(RichText::new(text).color(t.text).font(theme::ui_font(12.0)));
+                    }
+                });
+            });
+    }
+    let busy = app.session.python_installing();
+    let (mut create, mut install, mut delete) = (false, false, false);
+    ui.horizontal(|ui| {
+        if !exists {
+            create = ui
+                .add_enabled(!busy, egui::Button::new("Create"))
+                .on_hover_text("Make the environment now, from the Python GridCraft found")
+                .clicked();
+        }
+        install = ui.add_enabled(!busy, egui::Button::new("Install packages…")).clicked();
+        if exists {
+            delete =
+                ui.add_enabled(!busy, egui::Button::new("Delete environment")).on_hover_text("Delete the folder and every package in it").clicked();
+        }
+    });
+    if create {
+        app.run_or_alert("python.environment", json!({"action": "create"}));
+    }
+    if install && let Some(dialog) = open_install(app, &json!({"packages": []})) {
+        // Python Options closes, and the install dialog opens in its place.
+        app.dialog_next = Some(dialog);
+        *open = false;
+    }
+    if delete {
+        app.confirm = Some(crate::Confirm {
+            title: "Python Options".into(),
+            text: format!("Delete GridCraft's Python environment at {path}, with every package installed in it?"),
+            command: "python.environment".into(),
+            params: json!({"action": "delete"}),
+            choices: vec![("Delete".into(), json!({"approve": true}))],
+        });
     }
 }

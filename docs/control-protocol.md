@@ -59,6 +59,17 @@ its `value` (such as `python.set`'s) then carries the cell's final value, and th
 "Escape"}` with no editor open) stops them. `editor.python` is true while the formula bar edits a
 Python cell's code; Ctrl+Enter (Cmd+Enter on macOS) commits it.
 
+`python.install {packages, approve: true}` installs Python packages in the background too (into
+the person's own virtual environment when it runs cells, else GridCraft's own environment, made
+first if needed; never into a system Python). Without `approve: true` it answers with the
+approval question instead. `pythonBusy` stays true while it runs, so `wait: true` with a
+generous `waitSeconds` (an install may take minutes; the limit is 10) waits for it;
+`python.installStatus` reports `running`, `installed`, `installFailed` or `cancelled` with the
+captured output, and `python.stop` cancels it. When it succeeds, Python restarts on the
+environment and the Python cells run again. `python.environment` reports GridCraft's environment
+(`{action: "create"}` makes it, `{action: "delete", approve: true}` removes it); its folder is the
+app's data folder, or `GRIDCRAFT_PYTHON_ENV`, or `python.options {environment}`.
+
 Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
 to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.
 System follows live OS appearance changes and falls back to Light when the platform supplies no preference.

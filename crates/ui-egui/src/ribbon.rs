@@ -1873,6 +1873,7 @@ The last expression is the cell's result: a list, a list of lists or a pandas Da
 Python cells share one namespace and run in order, row by row and sheet by sheet. \
 When Python 3.11 or newer is installed, cells run on it, with its packages (pandas, numpy) and full access to your files and network; \
 otherwise they run on the built-in Python, a sandboxed subset with no packages. Python Options shows which one and lets you choose. \
+When a cell needs a package that isn't installed, GridCraft offers to install it: only after you approve the list, and only into a virtual environment (yours, or GridCraft's own). \
 Each cell may run for 5 seconds (a setting in Python Options). Esc stops cells that are running.";
 
 fn data(app: &mut SheetApp, ui: &mut Ui) {

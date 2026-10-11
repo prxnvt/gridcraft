@@ -17,6 +17,7 @@ pub mod job;
 pub mod macros;
 pub mod pivot;
 pub mod pivot_formula;
+pub mod pyenv;
 pub mod python;
 pub mod record;
 pub mod report;
@@ -241,6 +242,9 @@ pub struct Prefs {
     pub python_timeout_seconds: f64,
     /// The user's Python for Python cells (a path, or a name on PATH); empty to look for one.
     pub python_interpreter: String,
+    /// Where GridCraft's own Python environment lives; empty for `GRIDCRAFT_PYTHON_ENV`, else the
+    /// app's data folder.
+    pub python_environment: String,
 }
 
 impl Default for Prefs {
@@ -256,6 +260,7 @@ impl Default for Prefs {
             user_dictionary: vec![],
             python_timeout_seconds: 5.0,
             python_interpreter: String::new(),
+            python_environment: String::new(),
         }
     }
 }

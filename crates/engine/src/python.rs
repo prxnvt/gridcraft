@@ -54,6 +54,8 @@ pub struct PyRunLog {
     pub stderr: String,
     pub error: Option<String>,
     pub line: Option<u32>,
+    /// The pip package of a module the run couldn't import (GridCraft offers to install it).
+    pub missing: Option<String>,
 }
 
 /// The Python workers and the work queued for them.
@@ -62,7 +64,7 @@ pub struct PyRuntime {
     /// How workers start; `None` for the app's default.
     launcher: Option<Launcher>,
     /// Run in the background (stepped by the host) rather than inside commands.
-    background: bool,
+    pub(crate) background: bool,
     docs: HashMap<u64, DocPy>,
     /// The running command already refreshed its workbook's Python cells.
     pub(crate) refreshed: bool,
@@ -71,6 +73,8 @@ pub struct PyRuntime {
     detector: Option<Detector>,
     /// Whether to look for the user's Python; `None` follows the app (`interp::enable_search`).
     search: Option<bool>,
+    /// The package install running in the background, and the last one's result.
+    pub(crate) install: crate::pyenv::InstallState,
 }
 
 #[derive(Default)]
@@ -353,7 +357,7 @@ fn failure_status(kind: FailureKind) -> &'static str {
     }
 }
 
-fn push_log(d: &mut DocState, mut entry: PyRunLog) {
+pub(crate) fn push_log(d: &mut DocState, mut entry: PyRunLog) {
     d.py_log_seq = d.py_log_seq.saturating_add(1);
     entry.seq = d.py_log_seq;
     d.py_log.push_back(entry);
@@ -373,6 +377,7 @@ fn log_entry(wb: &Workbook, (si, c): Key, status: &'static str) -> PyRunLog {
         stderr: String::new(),
         error: None,
         line: None,
+        missing: None,
     }
 }
 
@@ -439,6 +444,9 @@ fn write_outcome(d: &mut DocState, key: Key, o: &RunOutcome) -> HashMap<usize, C
             entry.status = failure_status(f.kind);
             entry.error = Some(f.message.clone());
             entry.line = f.line;
+            if f.kind == FailureKind::Error {
+                entry.missing = gridcraft_python::env::missing_module(&f.message).map(|m| gridcraft_python::env::pip_name(&m));
+            }
             write_error(d, key, failure_error(f.kind))
         }
     };
@@ -462,7 +470,7 @@ impl Session {
         if !self.python_searches() {
             return;
         }
-        self.python.detector = Some(Detector::start(self.prefs.python_interpreter.clone()));
+        self.python.detector = Some(Detector::start(self.prefs.python_interpreter.clone(), self.python_env_dir()));
         // The interpreter may change: workers start again on whatever the search finds, from a
         // fresh namespace.
         for dp in self.python.docs.values_mut() {
@@ -490,7 +498,7 @@ impl Session {
             return None;
         }
         if self.python.detector.is_none() {
-            self.python.detector = Some(Detector::start(self.prefs.python_interpreter.clone()));
+            self.python.detector = Some(Detector::start(self.prefs.python_interpreter.clone(), self.python_env_dir()));
         }
         let det = self.python.detector.as_mut()?;
         if wait { det.wait(DETECT_WAIT) } else { det.poll() }
@@ -580,14 +588,16 @@ impl Session {
         self.python.background = on;
     }
 
-    /// Whether Python cells are waiting to run or running.
+    /// Whether Python cells are waiting to run or running, or packages are being installed.
     pub fn python_busy(&self) -> bool {
-        self.python.docs.values().any(|d| d.job.is_some())
+        self.python.docs.values().any(|d| d.job.is_some()) || self.python_installing()
     }
 
-    /// Advances background Python work: takes finished results, starts the next cells. Call it
-    /// every frame while [`Session::python_busy`]. Returns whether work remains.
+    /// Advances background Python work: takes finished results, starts the next cells, and
+    /// finishes a package install that ended. Call it every frame while
+    /// [`Session::python_busy`]. Returns whether work remains.
     pub fn step_python(&mut self) -> bool {
+        self.poll_install();
         let uids: Vec<u64> = self.python.docs.iter().filter(|(_, d)| d.job.is_some()).map(|(u, _)| *u).collect();
         for uid in uids {
             self.drive_python(uid, false);
@@ -595,8 +605,9 @@ impl Session {
         self.python_busy()
     }
 
-    /// Runs queued Python work for every workbook to the end.
+    /// Runs queued Python work for every workbook to the end (a package install too).
     pub fn finish_python(&mut self) {
+        self.wait_install();
         let uids: Vec<u64> = self.python.docs.iter().filter(|(_, d)| d.job.is_some()).map(|(u, _)| *u).collect();
         for uid in uids {
             self.drive_python(uid, true);
@@ -606,6 +617,17 @@ impl Session {
     /// The namespace no longer matches the cells: the next refresh resets it and runs every cell.
     pub(crate) fn python_mark_dirty(&mut self, uid: u64) {
         if let Some(dp) = self.python.docs.get_mut(&uid) {
+            dp.dirty = true;
+        }
+    }
+
+    /// Stops the workbook's worker; the next run starts a fresh one (from a fresh namespace).
+    pub(crate) fn python_stop_worker(&mut self, uid: u64) {
+        if let Some(dp) = self.python.docs.get_mut(&uid) {
+            if let Some(w) = dp.worker.as_mut() {
+                w.kill();
+            }
+            dp.worker = None;
             dp.dirty = true;
         }
     }
@@ -628,6 +650,11 @@ impl Session {
     /// next edit or Reset Runtime (which start from a fresh namespace). Returns how many cells
     /// were stopped.
     pub fn python_stop(&mut self) -> crate::Result<usize> {
+        // A package install stops too (its programs are killed).
+        let cancelled = self.python_cancel_install();
+        if cancelled && self.doc().is_err() {
+            return Ok(0);
+        }
         let uid = self.doc()?.uid;
         let Some(dp) = self.python.docs.get_mut(&uid) else { return Ok(0) };
         let Some(job) = dp.job.take() else { return Ok(0) };

@@ -184,6 +184,7 @@ fn options_and_diagnostics_report_the_python_that_runs_cells() {
         numpy: None,
         externally_managed: true,
         source: "PATH".into(),
+        ..Default::default()
     };
     s.set_python_detection(Detection { found: Some(found), rejected });
     let b = &s.execute("python.options", json!({})).unwrap()["backend"];

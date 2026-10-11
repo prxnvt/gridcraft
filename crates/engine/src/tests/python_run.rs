@@ -350,7 +350,7 @@ fn background_edits_during_the_first_run_of_a_worker_process() {
 /// Cells on this machine's own Python (3.11 or newer), found by the search, when there is one.
 #[test]
 fn cells_run_on_the_users_python_when_the_search_finds_one() {
-    let detection = gridcraft_python::interp::detect("");
+    let detection = gridcraft_python::interp::detect(&std::env::var("GRIDCRAFT_TEST_PYTHON").unwrap_or_default(), None);
     if detection.found.is_none() {
         eprintln!("skipped: no Python 3.11 or newer here ({:?})", detection.rejected);
         return;

@@ -168,6 +168,7 @@ fn cpython() -> gridcraft_python::interp::Detection {
             numpy: Some("2.1.0".into()),
             externally_managed: true,
             source: "PATH".into(),
+            ..Default::default()
         }),
         rejected: vec![gridcraft_python::interp::Rejected {
             path: "/usr/bin/python3".into(),

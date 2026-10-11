@@ -204,19 +204,9 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 }
                 // Which Python runs cells, on workbooks that have them.
                 crate::python_ui::status(app, ui);
-                // Python cells running in the background, with a Stop button (Esc does the same).
-                if app.session.python_busy() {
-                    ui.add_space(12.0);
-                    ui.add(egui::Spinner::new().size(12.0).color(t.text_dim));
-                    ui.label(egui::RichText::new(app.ui.language.tr("Running Python…")).font(theme::ui_font(12.5)).color(t.text_dim));
-                    let stop = ui.add(
-                        egui::Button::new(egui::RichText::new(app.ui.language.tr("Stop")).font(theme::ui_font(12.0)).color(t.text))
-                            .min_size(vec2(44.0, 18.0)),
-                    );
-                    if stop.on_hover_text(app.ui.language.tr("Stop the Python cells that are running (Esc)")).clicked() {
-                        app.run_or_alert("python.stop", json!({}));
-                    }
-                }
+                // Python cells running in the background, or a package install, with a Stop
+                // button (Esc does the same).
+                crate::python_ui::busy_status(app, ui);
                 if let Some(d) = app.session.active() {
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);

@@ -778,7 +778,8 @@ mod cpython_tests {
     use gridcraft_core::{Array, CellError, Value};
 
     fn cpython(limits: Limits) -> Option<(PyWorker, crate::interp::Interpreter)> {
-        let d = crate::interp::detect("");
+        // GRIDCRAFT_TEST_PYTHON picks the interpreter (a virtual environment with pandas, say).
+        let d = crate::interp::detect(&std::env::var("GRIDCRAFT_TEST_PYTHON").unwrap_or_default(), None);
         match d.found {
             Some(i) => Some((PyWorker::new(i.launcher(), limits, "base = 100".into()), i)),
             None => {
@@ -849,17 +850,10 @@ mod cpython_tests {
         assert!(failure(&w.run_blocking("xl('nowhere')", &mut cells)).message.starts_with("ValueError"));
         let o = w.run_blocking("[[0] * 2000 for _ in range(1000)]", &mut cells);
         assert!(failure(&o).message.contains("more than 1000000 cells"), "{o:?}");
-        // A missing package names the command that installs it (GridCraft never runs pip).
+        // A missing package is named plainly; GridCraft offers to install it (or says how).
         let o = w.run_blocking("import gridcraft_no_such_module.sub", &mut cells);
-        let m = &failure(&o).message;
-        assert!(m.starts_with("ModuleNotFoundError: No module named 'gridcraft_no_such_module'"), "{m}");
-        let exe = i.program.display().to_string();
-        if i.externally_managed {
-            assert!(m.contains(&format!("\"{exe}\" -m venv <folder>")) && m.contains("-m pip install gridcraft_no_such_module"), "{m}");
-        } else {
-            assert!(m.ends_with(&format!("Install it with: \"{exe}\" -m pip install gridcraft_no_such_module")), "{m}");
-        }
-        assert!(failure(&w.run_blocking("import sklearn_gc_missing", &mut cells)).message.contains("pip install sklearn_gc_missing"));
+        assert_eq!(failure(&o).message, "ModuleNotFoundError: No module named 'gridcraft_no_such_module'");
+        assert_eq!(crate::env::missing_module(&failure(&o).message).as_deref(), Some("gridcraft_no_such_module"));
         // Runaway recursion.
         assert_eq!(failure(&w.run_blocking("def f(n): return f(n + 1)\nf(0)", &mut cells)).message, "Too much recursion");
         // SystemExit is a cell error, not the end of the worker.
