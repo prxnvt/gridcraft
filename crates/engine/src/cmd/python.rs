@@ -61,6 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             diagnostics
         ),
+        cmd!(noundo "python.clearDiagnostics", "Clear Diagnostics", [], None, "{} empties the active workbook's Python diagnostics", has_doc, clear_diagnostics),
         cmd!(
             "python.initialization",
             "Initialization…",
@@ -219,6 +220,11 @@ fn diagnostics(s: &mut Session, p: &Json) -> Result<Json> {
     let runs: Vec<&crate::python::PyRunLog> =
         d.py_log.iter().filter(|r| sheet_name.as_ref().is_none_or(|n| r.sheet == *n)).filter(|r| !errors_only || r.status != "ok").collect();
     Ok(json!({"runs": runs}))
+}
+
+fn clear_diagnostics(s: &mut Session, _p: &Json) -> Result<Json> {
+    s.doc_mut()?.py_log.clear();
+    Ok(json!({"runs": 0}))
 }
 
 fn initialization(s: &mut Session, p: &Json) -> Result<Json> {

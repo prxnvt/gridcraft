@@ -25,6 +25,7 @@ pub mod panes;
 pub mod pivot_calc_ui;
 pub mod pivot_filter;
 pub mod pivot_pane;
+pub mod python_ui;
 pub mod ribbon;
 pub mod solver_ui;
 pub mod tabs;
@@ -400,6 +401,12 @@ impl SheetApp {
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
+            }
+            "ui.pane" => {
+                // `{name}` shows a task pane (comments, watch, selection, formatChart,
+                // pythonDiagnostics); no name closes it.
+                self.grid.pane = p.get("name").and_then(Json::as_str).filter(|n| !n.is_empty()).map(str::to_string);
+                Ok(json!({"pane": self.grid.pane}))
             }
             "ui.message.dismiss" => {
                 self.message = None;
@@ -837,6 +844,7 @@ impl SheetApp {
         if self.ui.formula_bar || self.editor.as_ref().is_some_and(|e| e.python) {
             formula_bar::show(self, ui);
         }
+        python_ui::enable_bar(self, ui);
         if self.ui.status_bar {
             tabs::status_bar(self, ui);
         }

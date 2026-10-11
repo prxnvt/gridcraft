@@ -197,6 +197,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.theme", "Display Theme", ""),
                 ("view.zoom100", "100%", ""),
                 ("ui.dialog", "Open Dialog", ""),
+                ("ui.pane", "Task Pane", "{name?: comments|watch|selection|formatChart|pythonDiagnostics} shows a task pane; no name closes it"),
                 ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"} (alias: code)"),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),

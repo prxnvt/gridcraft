@@ -1996,12 +1996,13 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let python = app.session.active().and_then(|d| {
         let sh = d.wb.active()?;
         let py = sh.cell(d.selection.active)?.py.as_deref()?;
-        Some((d.wb.active_sheet, d.selection.active, py.object))
+        let error = matches!(sh.value(d.selection.active), Value::Error(_));
+        Some((d.wb.active_sheet, d.selection.active, py.object, error))
     });
     let resp = egui::Area::new(egui::Id::new("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
-            if let Some((si, c, object)) = python {
+            if let Some((si, c, object, error)) = python {
                 let item = |ui: &mut egui::Ui, label: &str| ui.add(egui::Button::new(label).frame(false).min_size(vec2(190.0, 20.0))).clicked();
                 for (label, mode, on) in [("Output as Python Object", "object", object), ("Output as Cell Values", "value", !object)] {
                     if item(ui, &format!("{}{label}", if on { "• " } else { "   " })) && !on {
@@ -2012,6 +2013,10 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 if item(ui, "Show Preview Card") {
                     close = true;
                     app.grid.py_card = Some((si, c));
+                }
+                if error && item(ui, "Show Diagnostics") {
+                    close = true;
+                    app.grid.pane = Some(crate::python_ui::PANE.into());
                 }
                 if item(ui, "Convert to Normal Cell") {
                     close = true;
@@ -2115,6 +2120,7 @@ fn py_card(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_ope
     let t = Tokens::get(ui.ctx());
     let cell_rect = geo.cell_rect(sh, c);
     let mut close = false;
+    let mut show_diagnostics = false;
     let area = egui::Area::new(egui::Id::new("py_card")).fixed_pos(cell_rect.left_bottom() + vec2(0.0, 2.0)).order(egui::Order::Foreground);
     let resp = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(8.0).show(ui, |ui| {
@@ -2144,9 +2150,18 @@ fn py_card(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_ope
                 let color = if error.is_some() { t.danger } else { t.text };
                 ui.add(egui::Label::new(egui::RichText::new(body).font(crate::code_editor::font()).color(color)).wrap());
             });
+            if matches!(value, Value::Error(_)) {
+                ui.add_space(4.0);
+                if ui.button("Show Diagnostics").clicked() {
+                    show_diagnostics = true;
+                }
+            }
         });
     });
-    if close || popup_dismissed(&resp.response, was_open) {
+    if show_diagnostics {
+        app.grid.pane = Some(crate::python_ui::PANE.into());
+        app.grid.py_card = None;
+    } else if close || popup_dismissed(&resp.response, was_open) {
         app.grid.py_card = None;
     }
 }

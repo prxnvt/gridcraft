@@ -33,6 +33,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.edit.begin` / `ui.edit.text` / `ui.edit.commit` / `ui.edit.cancel` | `{text?}` / `{move?: down\|right\|up\|left\|none}` | Drive the cell editor |
 | `ui.ribbon` | `{tab}` | Switch ribbon tab |
 | `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs |
+| `ui.pane` (through `engine.execute`) | `{name?}` | Show a task pane (`comments`, `watch`, `selection`, `formatChart`, `pythonDiagnostics`); no name closes it |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path) |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?}` | UI preferences |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
