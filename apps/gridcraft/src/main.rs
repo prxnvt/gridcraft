@@ -122,6 +122,9 @@ impl eframe::App for App {
         self.windows.show(&ctx);
     }
     fn on_exit(&mut self) {
+        // Preferences and recent files are app-wide: a change made in any window this last frame
+        // reaches the first window's, which are saved.
+        self.windows.sync_shared(&mut self.root);
         save_prefs(&self.root);
     }
 }
@@ -177,7 +180,12 @@ fn save_prefs(app: &SheetApp) {
         return;
     }
     let Some(dir) = config_dir() else { return };
-    let _ = std::fs::create_dir_all(&dir);
+    save_prefs_in(&dir, app);
+}
+
+/// Writes `ui.json` and `prefs.json` in `dir`.
+fn save_prefs_in(dir: &std::path::Path, app: &SheetApp) {
+    let _ = std::fs::create_dir_all(dir);
     if let Ok(b) = serde_json::to_vec_pretty(&app.ui) {
         let _ = std::fs::write(dir.join("ui.json"), b);
     }
@@ -392,4 +400,32 @@ fn main() -> eframe::Result<()> {
             }))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Recent files and preferences changed in a second window are saved on exit, and every
+    /// window sees them.
+    #[test]
+    fn a_second_windows_recents_and_preferences_are_saved() {
+        let ctx = egui::Context::default();
+        let mut root = SheetApp::new(Session::new(), Services::default());
+        let mut w = windows::Windows::default();
+        w.sync_shared(&mut root);
+        w.open(&ctx, SheetApp::new(Session::new(), Services::default()), egui::ViewportBuilder::default());
+        let second = w.front(&mut root);
+        second.ui.recent.insert(0, "/books/second.xlsx".into());
+        second.session.prefs.user_name = "Second Window".into();
+        // What `on_exit` does.
+        w.sync_shared(&mut root);
+        let dir = std::env::temp_dir().join(format!("gridcraft-prefs-{}", std::process::id()));
+        save_prefs_in(&dir, &root);
+        let ui: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("ui.json")).unwrap()).unwrap();
+        let prefs: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("prefs.json")).unwrap()).unwrap();
+        assert_eq!(ui["recent"], json!(["/books/second.xlsx"]));
+        assert_eq!(prefs["userName"], "Second Window");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

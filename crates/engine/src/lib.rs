@@ -225,7 +225,7 @@ impl DocState {
 }
 
 /// Engine-side preferences.
-#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Prefs {
     /// After pressing Enter, move the selection: "down", "right", "up", "left", "none".

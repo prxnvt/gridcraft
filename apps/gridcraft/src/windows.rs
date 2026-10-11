@@ -36,18 +36,48 @@ pub struct Windows {
     /// The control channel, taken from a window that closed, until the next frame hands it to
     /// the window in front.
     spare_control: Option<Receiver<ControlRequest>>,
-    /// The display settings every window shows (see [`Windows::sync_shared`]).
-    shared: Option<Shared>,
+    /// The settings every window shares (see [`Windows::sync_shared`]).
+    shared: Shared,
 }
 
-/// Display settings shared by every window: egui draws all of them with one context, which has
-/// one theme and one set of fonts, so windows with different themes or languages would fight over
-/// it each frame (garbled text, the theme flickering). Theme (light, dark, follow the system) and
-/// interface language are app-wide, as the Mac's appearance is.
-type Shared = (bool, bool, gridcraft_ui_egui::i18n::Language);
+/// Settings every window shares, as the last value seen in all of them (see
+/// [`Windows::sync_shared`]).
+///
+/// Display: egui draws every window with one context, which has one theme and one set of fonts,
+/// so windows with different themes or languages would fight over it each frame (garbled text,
+/// the theme flickering). Theme (light, dark, follow the system) and interface language are
+/// app-wide, as the Mac's appearance is.
+///
+/// Preferences: the Options (`session.prefs`), the recent files and the recently used functions
+/// are the app's, not a window's: a change in any window reaches every window, and is saved on
+/// exit whichever window made it.
+#[derive(Default)]
+struct Shared {
+    display: Option<(bool, bool, gridcraft_ui_egui::i18n::Language)>,
+    prefs: Option<gridcraft_engine::Prefs>,
+    recent: Option<Vec<String>>,
+    recent_functions: Option<Vec<String>>,
+}
 
-fn shared_of(app: &SheetApp) -> Shared {
-    (app.ui.dark, app.ui.system_theme, app.ui.language)
+/// Gives every app the value of one shared setting last changed in any of them: the front
+/// window's (`apps[front]`) when it changed, else the first that changed. `last` is the value
+/// they all had.
+fn sync_part<T: Clone + PartialEq>(
+    last: &mut Option<T>,
+    apps: &mut [&mut SheetApp],
+    front: usize,
+    get: impl Fn(&SheetApp) -> T,
+    set: impl Fn(&mut SheetApp, &T),
+) {
+    let values: Vec<T> = apps.iter().map(|a| get(a)).collect();
+    let changed = |v: &&T| last.as_ref() != Some(*v);
+    let Some(next) = values.get(front).filter(changed).or_else(|| values.iter().find(changed)).cloned() else { return };
+    for (app, value) in apps.iter_mut().zip(&values) {
+        if *value != next {
+            set(app, &next);
+        }
+    }
+    *last = Some(next);
 }
 
 impl Windows {
@@ -116,31 +146,31 @@ impl Windows {
                 front.message = message.or(front.message.take());
                 continue;
             }
-            // Recent files are kept with the first window's preferences (saved on exit).
-            root.ui.recent.clone_from(&app.ui.recent);
             self.open(ctx, app, builder());
         }
     }
 
-    /// Give every window the theme and language last chosen in any of them (the front window's
-    /// when several changed at once). Call once per frame before the windows run.
+    /// Give every window the shared settings (theme, language, Options, recent files and
+    /// functions) last changed in any of them (the front window's when several changed at once).
+    /// Call once per frame before the windows run, and before saving the preferences.
     pub fn sync_shared(&mut self, root: &mut SheetApp) {
-        let front = shared_of(self.front(root));
-        let next = if Some(front) != self.shared {
-            front
-        } else {
-            match std::iter::once(&*root).chain(self.extras.iter().map(|e| &e.app)).map(shared_of).find(|s| Some(*s) != self.shared) {
-                Some(s) => s,
-                None => return,
-            }
-        };
-        self.shared = Some(next);
-        let (dark, system_theme, language) = next;
-        for app in std::iter::once(root).chain(self.extras.iter_mut().map(|e| &mut e.app)) {
-            app.ui.dark = dark;
-            app.ui.system_theme = system_theme;
-            app.ui.language = language;
-        }
+        let front = self.extras.iter().position(|e| Some(e.id) == self.focused).map_or(0, |i| i + 1);
+        let mut apps: Vec<&mut SheetApp> = std::iter::once(root).chain(self.extras.iter_mut().map(|e| &mut e.app)).collect();
+        let shared = &mut self.shared;
+        sync_part(
+            &mut shared.display,
+            &mut apps,
+            front,
+            |a| (a.ui.dark, a.ui.system_theme, a.ui.language),
+            |a, &(dark, system_theme, language)| {
+                a.ui.dark = dark;
+                a.ui.system_theme = system_theme;
+                a.ui.language = language;
+            },
+        );
+        sync_part(&mut shared.prefs, &mut apps, front, |a| a.session.prefs.clone(), |a, p| a.session.prefs.clone_from(p));
+        sync_part(&mut shared.recent, &mut apps, front, |a| a.ui.recent.clone(), |a, r| a.ui.recent.clone_from(r));
+        sync_part(&mut shared.recent_functions, &mut apps, front, |a| a.ui.recent_functions.clone(), |a, r| a.ui.recent_functions.clone_from(r));
     }
 
     /// Hand the control channel to the window in front (from whichever window holds it).
@@ -534,6 +564,33 @@ mod tests {
         w.sync_shared(&mut root);
         assert_eq!(w.front(&mut root).ui.language, gridcraft_ui_egui::i18n::Language::Ja);
         assert!(w.front(&mut root).ui.dark);
+    }
+
+    #[test]
+    fn recents_and_preferences_are_shared_by_every_window() {
+        let ctx = egui::Context::default();
+        let mut root = blank();
+        let mut w = Windows::default();
+        w.open(&ctx, blank(), ViewportBuilder::default());
+        w.open(&ctx, blank(), ViewportBuilder::default());
+        w.sync_shared(&mut root);
+        // A file opened in the window in front is a recent file in every window.
+        let f = book("recent", "1");
+        w.front(&mut root).open_path(&f);
+        w.sync_shared(&mut root);
+        for id in w.ids() {
+            assert_eq!(w.app(&mut root, id).map(|a| a.ui.recent.clone()), Some(vec![f.clone()]));
+        }
+        // Options changed in a window behind reach the others, and so do recently used functions.
+        root.session.prefs.r1c1 = true;
+        root.ui.recent_functions.insert(0, "XLOOKUP".into());
+        w.sync_shared(&mut root);
+        for id in w.ids() {
+            let app = w.app(&mut root, id).unwrap();
+            assert!(app.session.prefs.r1c1);
+            assert_eq!(app.ui.recent_functions.first().map(String::as_str), Some("XLOOKUP"));
+        }
+        let _ = std::fs::remove_file(&f);
     }
 
     #[test]

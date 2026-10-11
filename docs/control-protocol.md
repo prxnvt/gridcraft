@@ -50,6 +50,9 @@ window comes to the front, so requests after Cmd+N go to it; when it closes, the
 the window in front then. `app.quit` closes every window without asking about unsaved changes.
 `ui.screenshot` works only while the first window is in front: eframe draws the other windows
 inside the first one's frame and does not capture them, so the request fails at once there.
+Settings are the app's, not a window's: the theme, the interface language, the Options, the
+recent files and the recently used functions changed in any window apply to every window from
+the next frame, and are saved on exit.
 
 `ui.inspect` reports the selected floating object as `selectedObject: {kind, id}` (or `null`),
 where `kind` is `chart`, `image`, `shape`, `equation` or `control`; the same names go in the
