@@ -4,11 +4,18 @@
 //! equation out, so nothing here can reach the layout engine. Glyphs are drawn with the system's
 //! maths fonts (`theme::MATH*`); a glyph no font has becomes a `[?]` box the size of its TeX box.
 
-use egui::epaint::{Mesh, PathShape, PathStroke};
-use egui::{Color32, FontFamily, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
-use gridcraft_engine::math::{Face, Item, MathList, PathCmd};
-use gridcraft_engine::model::{Shape, Workbook};
+use std::sync::Arc;
 
+use egui::epaint::{Mesh, PathShape, PathStroke};
+use egui::text::{CCursor, CCursorRange};
+use egui::{Color32, FontFamily, FontId, Key, Painter, Pos2, Rect, Stroke, StrokeKind, TextEdit, pos2, vec2};
+use gridcraft_engine::math::{Face, Item, MathError, MathList, PathCmd};
+use gridcraft_engine::model::{Shape, ShapeKind, Workbook};
+use serde_json::{Value as Json, json};
+
+use crate::SheetApp;
+use crate::code_editor::{Lang, code_editor_marked};
+use crate::dialogs::Dialog;
 use crate::theme::{self, Tokens};
 
 /// Most points one outline may have; longer ones are stroked instead of filled.
@@ -27,6 +34,206 @@ fn family(face: Face) -> FontFamily {
         }
         .into(),
     )
+}
+
+// ---------------------------------------------------------------- editor
+
+/// The editor's quick-insert buttons: (label, LaTeX, tooltip). The caret lands in the first `{}`.
+pub const QUICK: &[(&str, &str, &str)] = &[
+    ("a/b", "\\frac{}{}", "Fraction"),
+    ("\u{221A}x", "\\sqrt{}", "Square root"),
+    ("x^n", "^{}", "Superscript"),
+    ("x_i", "_{}", "Subscript"),
+    ("\u{2211}", "\\sum_{i=1}^{n} ", "Summation"),
+    ("\u{222B}", "\\int_{a}^{b} ", "Integral"),
+    ("lim", "\\lim_{x \\to {}} ", "Limit"),
+    ("( )", "\\left( {} \\right)", "Brackets that grow"),
+    ("[ ]", "\\begin{bmatrix} {} & b \\\\ c & d \\end{bmatrix}", "Matrix"),
+    ("\u{03B1}", "\\alpha ", "alpha"),
+    ("\u{03B2}", "\\beta ", "beta"),
+    ("\u{03B8}", "\\theta ", "theta"),
+    ("\u{03C0}", "\\pi ", "pi"),
+    ("\u{0394}", "\\Delta ", "Delta"),
+    ("\u{00B1}", "\\pm ", "Plus or minus"),
+    ("\u{00D7}", "\\times ", "Times"),
+    ("\u{00F7}", "\\div ", "Divided by"),
+    ("\u{2264}", "\\le ", "Less than or equal to"),
+    ("\u{2265}", "\\ge ", "Greater than or equal to"),
+    ("\u{2260}", "\\ne ", "Not equal to"),
+    ("\u{221E}", "\\infty ", "Infinity"),
+    ("\u{2192}", "\\to ", "Tends to"),
+];
+
+/// The editor dialog: a new equation at the active cell, or `{id}` to edit one.
+pub fn open_editor(app: &SheetApp, params: &Json) -> Option<Dialog> {
+    let id = params.get("id").and_then(Json::as_u64);
+    let mut d = match id {
+        Some(id) => {
+            let source = app
+                .session
+                .active()
+                .and_then(|doc| doc.wb.active())
+                .and_then(|sh| sh.shapes.iter().find(|s| s.id as u64 == id && s.kind == ShapeKind::Equation))
+                .map(|s| s.text.clone())?;
+            let mut d = Dialog::custom("equation", "Edit Equation", json!({"id": id, "latex": source}));
+            d.command = Some("equation.edit");
+            d
+        }
+        None => {
+            let at = app.session.active().map(|doc| doc.selection.active.a1()).unwrap_or_default();
+            let latex = params.get("latex").and_then(Json::as_str).unwrap_or("");
+            let mut d = Dialog::custom("equation", "Insert Equation", json!({"at": at, "latex": latex}));
+            d.command = Some("insert.equation");
+            d
+        }
+    };
+    d.result = None;
+    Some(d)
+}
+
+/// The preview's layout, kept in egui memory and rebuilt only when the source changes.
+#[derive(Clone)]
+struct Preview {
+    source: String,
+    result: Result<Arc<MathList>, MathError>,
+}
+
+/// The source laid out (guarded, capped) for the preview; the editor is one of the two places,
+/// with commands, that may lay equations out.
+fn preview(ctx: &egui::Context, id: egui::Id, source: &str) -> Preview {
+    if let Some(p) = ctx.data(|d| d.get_temp::<Preview>(id)).filter(|p| p.source == source) {
+        return p;
+    }
+    let p = Preview { source: source.to_string(), result: gridcraft_engine::math::layout(source).map(Arc::new) };
+    ctx.data_mut(|d| d.insert_temp(id, p.clone()));
+    p
+}
+
+/// Inserts `snippet` at the editor's caret (replacing a selection) and puts the caret in its
+/// first `{}`.
+fn insert_snippet(ctx: &egui::Context, id: egui::Id, text: &mut String, snippet: &str) {
+    let mut state = TextEdit::load_state(ctx, id).unwrap_or_default();
+    let count = text.chars().count();
+    let (a, b) = state
+        .cursor
+        .char_range()
+        .map(|r| -> (usize, usize) { (r.primary.index.into(), r.secondary.index.into()) })
+        .map_or((count, count), |(p, q)| (p.min(q), p.max(q)));
+    let byte = |c: usize| text.char_indices().nth(c).map_or(text.len(), |(i, _)| i);
+    let (ba, bb) = (byte(a.min(count)), byte(b.min(count)));
+    text.replace_range(ba..bb, snippet);
+    let caret = a + snippet.find("{}").map_or(snippet.chars().count(), |i| snippet.get(..i).map_or(0, |s| s.chars().count()) + 1);
+    state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+    state.store(ctx, id);
+    // Give the source the focus back once it has been drawn this frame.
+    ctx.data_mut(|m| m.insert_temp(id.with("refocus"), true));
+}
+
+/// The editor's body: quick-insert buttons, the LaTeX source with its error underlined, a live
+/// preview on a sheet-coloured card, and OK/Cancel.
+pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let _ = app;
+    let t = Tokens::get(ui.ctx());
+    let edit_id = ui.id().with("equation-source");
+    let mut text = d.values.get("latex").and_then(Json::as_str).unwrap_or("").to_string();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
+        for (label, snippet, tip) in QUICK {
+            let b = ui.add(egui::Button::new(*label).min_size(vec2(30.0, 22.0))).on_hover_text(*tip);
+            if b.clicked() {
+                insert_snippet(ui.ctx(), edit_id, &mut text, snippet);
+            }
+        }
+    });
+    ui.add_space(6.0);
+    ui.label("LaTeX:");
+    let pv = preview(ui.ctx(), ui.id().with("equation-preview"), &text);
+    let mark = pv.result.as_ref().err().and_then(|e| e.span.clone()).or_else(|| pv.result.as_ref().err().map(|_| text.len()..text.len()));
+    let mark = mark.filter(|_| !text.trim().is_empty());
+    let r = code_editor_marked(ui, edit_id, &mut text, Lang::Latex, 6, mark);
+    // Focus the source when the dialog opens and after a quick-insert button.
+    let focus_once = edit_id.with("focused-once");
+    let refocus = ui.ctx().data_mut(|m| m.remove_temp::<bool>(edit_id.with("refocus")).unwrap_or(false));
+    if refocus || !ui.ctx().data(|m| m.get_temp::<bool>(focus_once).unwrap_or(false)) {
+        r.request_focus();
+        ui.ctx().data_mut(|m| m.insert_temp(focus_once, true));
+    }
+    let pv = preview(ui.ctx(), ui.id().with("equation-preview"), &text);
+    d.values.insert("latex".into(), json!(text));
+    ui.add_space(4.0);
+    match &pv.result {
+        Err(e) if !text.trim().is_empty() => {
+            let msg = match e.char_pos(&text) {
+                Some(p) => format!("Error at character {p}: {}", e.message),
+                None => e.message.clone(),
+            };
+            ui.colored_label(t.danger, msg);
+        }
+        _ => {
+            ui.label(egui::RichText::new("Preview").color(t.text_dim));
+        }
+    }
+    // The preview card is the sheet's colour, with the sheet's ink, in both themes.
+    let (card, _) = ui.allocate_exact_size(vec2(ui.available_width(), 110.0), egui::Sense::hover());
+    ui.painter().rect_filled(card, 4.0, t.grid_bg);
+    ui.painter().rect_stroke(card, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
+    match &pv.result {
+        Ok(list) if !list.items.is_empty() => {
+            // Fit, but never larger than 24 pt.
+            let s = fit(list, card, 10.0).min(24.0 * 96.0 / 72.0);
+            let o = card.center() - vec2(list.width, list.total_height()) * s / 2.0;
+            paint_at(&ui.painter().with_clip_rect(card), o, list, t.cell_text, s);
+        }
+        _ => {
+            let hint = if text.trim().is_empty() { "Type an equation in LaTeX, such as x^2 + y^2 = r^2" } else { "" };
+            ui.painter().text(card.center(), egui::Align2::CENTER_CENTER, hint, theme::ui_font(12.0), t.stale_text);
+        }
+    }
+    ui.add_space(8.0);
+    let valid = pv.result.as_ref().is_ok_and(|l| !l.items.is_empty());
+    let cmd_enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Enter));
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), 28.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let ok = ui.add_enabled(valid, egui::Button::new(egui::RichText::new("OK").color(t.on_accent)).fill(t.accent).min_size(vec2(64.0, 0.0)));
+        if ok.clicked() || (valid && cmd_enter) {
+            ui.ctx().data_mut(|m| m.remove::<bool>(focus_once));
+            *confirm = true;
+        }
+        if ui.add(egui::Button::new("Cancel").min_size(vec2(64.0, 0.0))).clicked() {
+            ui.ctx().data_mut(|m| m.remove::<bool>(focus_once));
+            *open = false;
+        }
+        ui.label(egui::RichText::new("\u{2318}/Ctrl+Enter to insert").small().color(t.text_dim));
+    });
+}
+
+/// The gallery's layouts, made once (guarded, like every layout) the first time the menu opens.
+fn gallery_layouts() -> &'static [(&'static str, &'static str, Option<MathList>)] {
+    static G: std::sync::OnceLock<Vec<(&'static str, &'static str, Option<MathList>)>> = std::sync::OnceLock::new();
+    G.get_or_init(|| gridcraft_engine::math::GALLERY.iter().map(|(name, src)| (*name, *src, gridcraft_engine::math::layout(src).ok())).collect())
+}
+
+/// The gallery as menu rows: a name over a preview on a sheet-coloured card. Returns the source
+/// of the row clicked.
+pub fn gallery(ui: &mut egui::Ui) -> Option<&'static str> {
+    let t = Tokens::get(ui.ctx());
+    let mut picked = None;
+    for (name, src, list) in gallery_layouts() {
+        let (r, resp) = ui.allocate_exact_size(vec2(290.0, 62.0), egui::Sense::click());
+        if resp.hovered() {
+            ui.painter().rect_filled(r, 4.0, t.hover);
+        }
+        ui.painter().text(r.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, *name, theme::ui_font(12.0), t.text);
+        let card = Rect::from_min_max(r.left_top() + vec2(6.0, 21.0), r.right_bottom() - vec2(6.0, 3.0));
+        ui.painter().rect_filled(card, 3.0, t.grid_bg);
+        if let Some(list) = list {
+            let s = fit(list, card, 3.0).min(16.0);
+            paint_at(&ui.painter().with_clip_rect(card), card.center() - vec2(list.width, list.total_height()) * s / 2.0, list, t.cell_text, s);
+        }
+        if resp.on_hover_text(*src).clicked() {
+            picked = Some(*src);
+        }
+    }
+    picked
 }
 
 /// Draws an equation shape in its frame `r` (screen pixels, zoom `z`).

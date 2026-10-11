@@ -215,6 +215,39 @@ pub fn layout_job(text: &str, lang: Lang, font: &FontId, plain: egui::Color32, s
     job
 }
 
+/// Underlines the byte range `mark` of `job` in `color` (an error's position), splitting the
+/// sections it crosses. An empty range marks the character before it (the end of the text, for
+/// an error about missing input).
+pub fn underline(job: &mut egui::text::LayoutJob, mark: Range<usize>, color: egui::Color32) {
+    let text = job.text.as_str();
+    let mut mark = mark.start.min(text.len())..mark.end.min(text.len());
+    if mark.is_empty() {
+        let start = text.get(..mark.start).and_then(|t| t.char_indices().next_back()).map_or(0, |(i, _)| i);
+        mark = start..mark.start.max(start + text.get(start..).and_then(|t| t.chars().next()).map_or(0, char::len_utf8));
+    }
+    let mut out = Vec::with_capacity(job.sections.len() + 2);
+    for sec in job.sections.drain(..) {
+        let r = sec.byte_range.start.0..sec.byte_range.end.0;
+        let (a, b) = (mark.start.clamp(r.start, r.end), mark.end.clamp(r.start, r.end));
+        for (piece, marked) in [(r.start..a, false), (a..b, true), (b..r.end, false)] {
+            if piece.is_empty() {
+                continue;
+            }
+            let mut s = sec.clone();
+            s.byte_range = egui::text::ByteIndex(piece.start)..egui::text::ByteIndex(piece.end);
+            if marked {
+                s.format.underline = egui::Stroke::new(1.5, color);
+                s.format.color = color;
+            }
+            if s.byte_range.start.0 != r.start {
+                s.leading_space = 0.0;
+            }
+            out.push(s);
+        }
+    }
+    job.sections = out;
+}
+
 fn byte_of(text: &str, char_index: usize) -> usize {
     text.char_indices().nth(char_index).map(|(b, _)| b).unwrap_or(text.len())
 }
@@ -299,6 +332,11 @@ pub fn indent(text: &mut String, sel: (usize, usize), dedent: bool) -> Edit {
 /// The code editor. `max_lines` rows are shown before it scrolls; the scroll area follows the
 /// caret.
 pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max_lines: usize) -> Response {
+    code_editor_marked(ui, id, text, lang, max_lines, None)
+}
+
+/// [`code_editor`] with the byte range `mark` underlined in the error colour.
+pub fn code_editor_marked(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max_lines: usize, mark: Option<Range<usize>>) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = FontId::new(12.5, FontFamily::Name(theme::MONO.into()));
     let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
@@ -322,8 +360,12 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
     }
     let syntax = t.syntax;
     let plain = t.text;
+    let danger = t.danger;
     let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-        let job = layout_job(buf.as_str(), lang, &FontId::new(12.5, FontFamily::Name(theme::MONO.into())), plain, &syntax, wrap_width);
+        let mut job = layout_job(buf.as_str(), lang, &FontId::new(12.5, FontFamily::Name(theme::MONO.into())), plain, &syntax, wrap_width);
+        if let Some(m) = mark.clone() {
+            underline(&mut job, m, danger);
+        }
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let frame_h = row_h * max_lines as f32 + 8.0;
@@ -380,6 +422,28 @@ mod tests {
         assert_eq!(spans("s = '''a\n'b'\nc'''", Lang::Python), vec![("'''a\n'b'\nc'''", Token::String)]);
         assert_eq!(spans("x = 'it\\'s'", Lang::Python), vec![("'it\\'s'", Token::String)]);
         assert_eq!(spans("hello", Lang::Plain), vec![]);
+    }
+
+    #[test]
+    fn underline_splits_sections_at_the_mark() {
+        let t = Tokens::light();
+        let font = FontId::new(12.0, FontFamily::Monospace);
+        let mut job = layout_job("a + \\foo", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+        underline(&mut job, 4..8, t.danger);
+        let marked: Vec<&str> =
+            job.sections.iter().filter(|s| s.format.underline.width > 0.0).map(|s| &job.text[s.byte_range.start.0..s.byte_range.end.0]).collect();
+        assert_eq!(marked, vec!["\\foo"]);
+        let total: usize = job.sections.iter().map(|s| s.byte_range.end.0 - s.byte_range.start.0).sum();
+        assert_eq!(total, job.text.len(), "sections still cover the text");
+        // An empty mark at the end underlines the last character; out-of-range marks are clamped.
+        let mut job = layout_job("x^", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+        underline(&mut job, 2..2, t.danger);
+        let marked: Vec<&str> =
+            job.sections.iter().filter(|s| s.format.underline.width > 0.0).map(|s| &job.text[s.byte_range.start.0..s.byte_range.end.0]).collect();
+        assert_eq!(marked, vec!["^"]);
+        let mut job = layout_job("é", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+        underline(&mut job, 50..99, t.danger);
+        assert!(job.sections.iter().any(|s| s.format.underline.width > 0.0));
     }
 
     #[test]

@@ -271,7 +271,13 @@ fn double_clicks_route_by_kind() {
     assert_eq!(h.state().grid.pane.as_deref(), Some("formatChart"));
     assert_eq!(h.state().selected_object, Some(o.chart));
 
-    for obj in [o.equation, o.button, o.shape] {
+    double_click_on(&mut h, o.equation);
+    assert_eq!(h.state().selected_object, Some(o.equation));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name().to_string()).as_deref(), Some("equation"), "an equation opens its editor");
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+
+    for obj in [o.button, o.shape] {
         double_click_on(&mut h, obj);
         assert_eq!(h.state().selected_object, Some(obj));
         assert!(h.state().text_box_editor.is_none() && h.state().editor.is_none(), "{obj:?} opens no text editor");

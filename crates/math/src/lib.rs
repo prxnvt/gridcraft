@@ -183,6 +183,16 @@ pub fn check(latex: &str) -> Result<(), MathError> {
     guarded(|| parse(latex).map(|_| ()))
 }
 
+/// The equation gallery (Insert › Equation): GridCraft's own examples, as (name, LaTeX).
+pub const GALLERY: &[(&str, &str)] = &[
+    ("Quadratic formula", "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}"),
+    ("Pythagoras", "a^2 + b^2 = c^2"),
+    ("Binomial theorem", "(x + a)^n = \\sum_{k=0}^{n} \\binom{n}{k} x^k a^{n-k}"),
+    ("Area of a circle", "A = \\pi r^2"),
+    ("Euler's identity", "e^{i\\pi} + 1 = 0"),
+    ("2\u{00D7}2 matrix", "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}"),
+];
+
 /// Runs `f` so that a panic inside it becomes an error.
 fn guarded<T>(f: impl FnOnce() -> Result<T, MathError>) -> Result<T, MathError> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| Err(MathError::new("This equation could not be laid out.", None)))
@@ -500,6 +510,14 @@ mod tests {
         let e = layout("x").unwrap_err();
         assert_eq!(e.message, "This equation could not be laid out.");
         assert!(layout("x").is_ok(), "the next call is unaffected");
+    }
+
+    #[test]
+    fn the_gallery_lays_out_and_converts() {
+        for (name, src) in GALLERY {
+            assert!(layout(src).is_ok_and(|l| !l.items.is_empty()), "{name}");
+            assert!(to_omml(src, 11.0).is_ok(), "{name}");
+        }
     }
 
     #[test]

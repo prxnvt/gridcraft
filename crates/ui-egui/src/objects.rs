@@ -111,7 +111,7 @@ pub enum OpenAction {
     EditText(u32),
     /// The Format Chart pane.
     FormatChart(u32),
-    /// The equation editor (hook for the equation branch).
+    /// The equation editor.
     EditEquation(u32),
     /// The control's own editor (hook for the form-controls branch).
     EditControl(u32),
@@ -146,9 +146,9 @@ impl SheetApp {
         action
     }
 
-    /// Hook: opens the equation editor. Equations have no editor yet; the object stays selected.
+    /// Opens the equation editor on equation `id` (the object stays selected).
     pub fn edit_equation(&mut self, id: u32) {
-        let _ = id;
+        self.open_dialog("equation", json!({"id": id}));
     }
 
     /// Hook: opens a form control's editor. Controls have no editor yet; the object stays selected.

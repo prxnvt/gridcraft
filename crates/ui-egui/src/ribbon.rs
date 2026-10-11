@@ -7,7 +7,7 @@ use serde_json::json;
 use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -1350,6 +1350,8 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if kt(app, big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false), "NH").clicked() {
         app.open_dialog("headerFooter", json!({}));
     }
+    // Symbols: Symbol, then Equation.
+    sep(ui);
     let sym = kt(app, big_button(ui, Icon::Symbol, "Symbol", "Symbol", true), "NU");
     egui::Popup::menu(&sym).show(|ui| {
         ui.set_width(260.0);
@@ -1363,6 +1365,23 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 }
             }
         });
+    });
+    let (eq, eq_menu) = big_split_button(ui, Icon::Equation, None, "Equation", "Insert an equation, or pick one from the gallery");
+    if kt(app, eq, "NQ").clicked() {
+        app.open_dialog("equation", json!({}));
+    }
+    let eq_menu = kt(app, eq_menu, "NG");
+    egui::Popup::menu(&eq_menu).show(|ui| {
+        ui.set_width(300.0);
+        if ui.add(egui::Button::new(app.ui.language.tr("Insert New Equation...")).frame(false).min_size(vec2(290.0, 24.0))).clicked() {
+            app.open_dialog("equation", json!({}));
+            ui.close();
+        }
+        ui.separator();
+        if let Some(latex) = crate::equation::gallery(ui) {
+            act(app, "insert.equation", json!({"latex": latex}));
+            ui.close();
+        }
     });
 }
 
