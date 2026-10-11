@@ -207,3 +207,47 @@ fn an_ordinary_save_waits_for_running_python_cells() {
     assert!(!h.state().has_unsaved());
     let _ = std::fs::remove_file(&path);
 }
+
+/// Asks the window to close, as its close button (or Cmd+W) does.
+fn request_close(h: &mut Harness) {
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+}
+
+#[test]
+fn an_unsaved_macro_draft_makes_closing_ask_and_save_keeps_it() {
+    let path = std::env::temp_dir().join(format!("gridcraft-close-prompt-macro-{}.xlsx", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let mut h = harness_saving_to(&path);
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    // A new macro nobody has touched yet is nothing to lose.
+    assert!(!h.state().pending_macro_draft());
+    assert!(!h.state().has_unsaved());
+    if let Some(ed) = h.state_mut().macros.editor.as_mut() {
+        ed.draft.steps.push(gridcraft_engine::model::Step::command("cell.set", json!({"cell": "A1", "input": "7"})));
+        ed.dirty = true;
+    }
+    assert!(h.state().pending_macro_draft());
+    assert_eq!(h.state().unsaved_titles(), vec!["Book1".to_string()]);
+    request_close(&mut h);
+    assert!(h.state().asking_before_closing());
+    // Cancel brings the editor back with its draft.
+    // (The prompt's Cancel is the last one: the formula bar has one too.)
+    if let Some(cancel) = h.query_all_by_label("Cancel").last() {
+        cancel.click();
+    }
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("macroEditor"));
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    // Save puts the macro in the workbook and saves the workbook.
+    request_close(&mut h);
+    assert!(h.state().asking_before_closing());
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert!(h.state().quit_confirmed);
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path.to_str().unwrap()})).unwrap();
+    assert_eq!(s.active().map(|d| d.wb.macros.len()), Some(1));
+    let _ = std::fs::remove_file(&path);
+}

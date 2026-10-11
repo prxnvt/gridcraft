@@ -365,13 +365,34 @@ impl SheetApp {
     /// window can be long, so it counts as unsaved work; Save commits it first).
     pub fn unsaved_titles(&self) -> Vec<String> {
         let mut titles: Vec<String> = self.session.documents().iter().filter(|d| d.is_dirty()).map(|d| d.display_title()).collect();
-        if self.pending_python_edit()
+        if (self.pending_python_edit() || self.pending_macro_draft())
             && let Some(d) = self.session.active()
             && !d.is_dirty()
         {
             titles.push(d.display_title());
         }
         titles
+    }
+
+    /// The macro editor holds changes not yet saved into the workbook (a new macro counts once it
+    /// differs from the empty one the editor started with). Like an uncommitted Python edit, it
+    /// counts as unsaved work; Save in the close prompt saves it into the workbook first.
+    pub fn pending_macro_draft(&self) -> bool {
+        let Some(ed) = self.macros.editor.as_ref().filter(|e| e.dirty) else { return false };
+        let untouched = gridcraft_engine::model::Macro {
+            name: ed.draft.name.clone(),
+            inputs: vec![gridcraft_engine::model::NamedInput::default()],
+            ..Default::default()
+        };
+        ed.saved_as.is_some() || ed.draft != untouched
+    }
+
+    /// Saves the macro editor's draft into the workbook (true when there is none or it saved).
+    pub fn commit_macro_draft(&mut self) -> bool {
+        let Some(mut ed) = self.macros.editor.take() else { return true };
+        let saved = macro_editor::save(self, &mut ed);
+        self.macros.editor = Some(ed);
+        saved
     }
 
     /// A Python cell's code is being edited and differs from what the cell holds.

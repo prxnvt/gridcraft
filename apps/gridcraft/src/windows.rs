@@ -500,6 +500,25 @@ mod tests {
     }
 
     #[test]
+    fn quitting_asks_about_an_unsaved_macro_draft() {
+        let ctx = egui::Context::default();
+        let mut root = blank();
+        let mut w = Windows::default();
+        w.open(&ctx, blank(), ViewportBuilder::default());
+        w.front(&mut root).open_dialog("macroEditor", json!({}));
+        if let Some(ed) = w.front(&mut root).macros.editor.as_mut() {
+            ed.draft.steps.push(gridcraft_engine::model::Step::command("cell.set", json!({"cell": "A1", "input": "1"})));
+            ed.dirty = true;
+        }
+        w.quit(Quit::Ask, &mut root);
+        w.root_logic(&ctx, &mut root);
+        // The first window has nothing to lose; the one with the draft asks.
+        assert!(!root.asking_before_closing());
+        assert!(w.front(&mut root).asking_before_closing());
+        assert_eq!(w.ids().len(), 2);
+    }
+
+    #[test]
     fn theme_and_language_are_shared_by_every_window() {
         let ctx = egui::Context::default();
         let mut root = blank();

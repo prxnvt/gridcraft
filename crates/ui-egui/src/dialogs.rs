@@ -1008,11 +1008,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                                 open = false;
                             }
                             if ui.button("Save").clicked() {
-                                // An uncommitted Python edit is committed first, so it is saved
-                                // too (a refused commit keeps the window open with its message).
-                                // Python cells still running (the one just committed too)
-                                // finish first, so the file gets their results.
-                                let committed = !app.pending_python_edit() || app.commit_edit(0, 0, false, false);
+                                // An uncommitted Python edit and the macro editor's draft are
+                                // committed first, so they are saved too (a refused commit keeps
+                                // the window open with its message). Python cells still running
+                                // (the one just committed too) finish first, so the file gets
+                                // their results.
+                                let committed = (!app.pending_python_edit() || app.commit_edit(0, 0, false, false))
+                                    && (!app.pending_macro_draft() || app.commit_macro_draft());
                                 if committed {
                                     app.save_all_and_close(ctx);
                                 }
@@ -1105,6 +1107,15 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.dialog = Some(d);
     } else {
         restore_home(app, &d);
+        // The window's unsaved-changes prompt took the macro editor's place: unless the window
+        // is closing, bring the editor back with its draft.
+        if d.name == "quit"
+            && !app.quit_confirmed
+            && app.dialog_next.is_none()
+            && let Some(ed) = app.macros.editor.as_ref()
+        {
+            app.dialog_next = Some(Dialog::custom("macroEditor", &format!("Macro: {}", ed.draft.name), json!({})));
+        }
         // A dialog that leads to another (Data Analysis → a tool's form).
         if let Some(next) = app.dialog_next.take() {
             app.dialog = Some(next);
