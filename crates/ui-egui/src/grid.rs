@@ -87,6 +87,8 @@ pub struct GridState {
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
     pub header_menu: Option<(Pos2, bool)>,
+    /// What the macro step editor shows on the grid (Check, debugging).
+    pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
 }
 
 impl GridState {
@@ -2100,6 +2102,9 @@ fn paint_overlays(
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
+    }
+    if let Some(o) = &app.grid.macro_overlay {
+        crate::macro_editor::paint_overlay(p, geo, sh, o);
     }
     // Trace precedents / dependents arrows.
     if let Some(trace) = app.grid.trace.clone()

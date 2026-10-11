@@ -168,6 +168,16 @@ pub enum Icon {
     Spin,
     /// Use Relative References: a cell and an arrow to a cell offset from it.
     Relative,
+    /// Run (the debugger's Run): a play triangle.
+    Play,
+    /// Step: an arrow down onto a line.
+    Step,
+    /// Continue: a bar and a play triangle.
+    Continue,
+    /// Run to Here: an arrow to a marked line.
+    RunTo,
+    /// Stop: a square.
+    StopSquare,
 }
 
 struct G<'a> {
@@ -850,6 +860,23 @@ pub fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette
             g.line(&[(5.0, 7.5), (5.0, 12.0), (8.0, 12.0)], c, 1.1);
             g.poly(&[(7.5, 10.2), (9.6, 12.0), (7.5, 13.8)], c);
         }
+        Icon::Play => g.poly(&[(4.0, 2.5), (13.0, 8.0), (4.0, 13.5)], green),
+        Icon::Step => {
+            g.line(&[(8.0, 1.5), (8.0, 9.0)], c, 1.3);
+            g.poly(&[(4.8, 7.0), (11.2, 7.0), (8.0, 10.8)], c);
+            g.line(&[(3.0, 13.5), (13.0, 13.5)], c, 1.3);
+        }
+        Icon::Continue => {
+            g.rect(2.5, 2.5, 2.2, 11.0, Some(c), None);
+            g.poly(&[(6.5, 2.5), (14.0, 8.0), (6.5, 13.5)], green);
+        }
+        Icon::RunTo => {
+            g.line(&[(2.0, 5.0), (9.0, 5.0)], c, 1.3);
+            g.poly(&[(8.0, 2.0), (12.0, 5.0), (8.0, 8.0)], c);
+            g.line(&[(2.0, 11.5), (14.0, 11.5)], c, 1.6);
+            g.line(&[(13.0, 3.0), (13.0, 9.0)], c, 1.1);
+        }
+        Icon::StopSquare => g.rect(3.0, 3.0, 10.0, 10.0, Some(pal.recording), None),
     }
 }
 

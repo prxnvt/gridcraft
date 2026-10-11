@@ -21,11 +21,15 @@ pub struct MacroUi {
     pub relative: bool,
     /// Macros run from this window, most recent first (Run Macro's menu).
     pub recent: Vec<String>,
+    /// The step editor, while it is open.
+    pub editor: Option<crate::macro_editor::Editor>,
+    /// A debugger result from a prompt's button, for the editor to take in.
+    pub debug_result: Option<Json>,
 }
 
 impl Default for MacroUi {
     fn default() -> Self {
-        MacroUi { relative: true, recent: vec![] }
+        MacroUi { relative: true, recent: vec![], editor: None, debug_result: None }
     }
 }
 
@@ -131,6 +135,10 @@ pub fn ask(app: &mut SheetApp, title: &str, id: &str, params: &Json, e: &str) ->
 /// After a macro command ran (directly or from a prompt's button): remember the macro, say what
 /// it did.
 pub fn note_result(app: &mut SheetApp, id: &str, params: &Json, v: &Json) {
+    if id == "macro.debug" {
+        app.macros.debug_result = Some(v.clone());
+        return;
+    }
     if id != "macro.run" {
         return;
     }
@@ -149,8 +157,20 @@ pub fn note_result(app: &mut SheetApp, id: &str, params: &Json, v: &Json) {
 
 /// The recording indicator in the status bar: a red dot, "Recording · 7 steps" and Stop.
 pub fn status(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(n) = recorded_steps(app) else { return };
     let t = Tokens::get(ui.ctx());
+    if let Some(name) = app.session.macro_debug.as_ref().map(|d| d.name.clone()) {
+        ui.add_space(12.0);
+        let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+        ui.painter().circle_filled(r.center(), 4.5, t.breakpoint);
+        ui.label(egui::RichText::new(format!("Debugging “{name}”")).font(theme::ui_font(12.5)).color(t.text));
+        if app.macros.editor.is_none() {
+            let show = ui.add(egui::Button::new(egui::RichText::new("Show").font(theme::ui_font(12.0))).min_size(vec2(40.0, 18.0)));
+            if show.on_hover_text("Open the macro in the step editor").clicked() {
+                app.open_dialog("macroEditor", json!({"macro": name}));
+            }
+        }
+    }
+    let Some(n) = recorded_steps(app) else { return };
     ui.add_space(12.0);
     let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
     ui.painter().circle_filled(r.center(), 4.5, t.recording);

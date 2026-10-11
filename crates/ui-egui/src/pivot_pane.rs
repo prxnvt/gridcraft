@@ -3,11 +3,11 @@
 //! into an area, between areas and within one to reorder; dragging one out of the areas removes
 //! it. Each area field also has a menu. Everything runs `pivot.*` commands.
 
-use egui::{DragAndDrop, Id, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{DragAndDrop, Id, Rect, Sense, Ui, vec2};
 use serde_json::{Value as Json, json};
 
-use crate::SheetApp;
 use crate::theme::{self, Tokens};
+use crate::{SheetApp, dnd};
 
 /// Whether the active cell is inside a pivot report (so the pane should show).
 pub fn active_pivot(app: &SheetApp) -> Option<String> {
@@ -28,29 +28,6 @@ struct Drag {
 }
 
 const AREAS: [(&str, &str); 4] = [("filters", "Filters"), ("columns", "Columns"), ("rows", "Rows"), ("values", "Values")];
-
-/// Where a drop at `y` lands among an area's fields.
-fn insert_index(chips: &[Rect], y: f32) -> usize {
-    chips.iter().filter(|r| r.center().y < y).count()
-}
-
-/// Starts dragging `drag` when `r` (a widget sensing drags) begins a drag.
-fn drag_source(ui: &Ui, r: &egui::Response, drag: Drag) {
-    if r.drag_started() {
-        DragAndDrop::set_payload(ui.ctx(), drag);
-    }
-    if r.hovered() && !DragAndDrop::has_any_payload(ui.ctx()) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-    }
-}
-
-/// A drag handle under a widget that only senses clicks (a checkbox): it covers where the widget
-/// was last frame and is added first, so clicks still reach the widget on top.
-fn drag_under(ui: &mut Ui, id: Id, drag: Drag) {
-    let Some(rect) = ui.ctx().data(|d| d.get_temp::<Rect>(id)) else { return };
-    let r = ui.interact(rect, id, Sense::drag());
-    drag_source(ui, &r, drag);
-}
 
 /// What dropping `d` at `pos` does: the command and its params, if any.
 fn drop_action(pivot: &str, d: &Drag, target: Option<(&'static str, usize)>, areas: &[(&'static str, Vec<String>)]) -> Option<(&'static str, Json)> {
@@ -98,7 +75,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 let mut on = !areas.is_empty();
                 let numeric = f["numeric"].as_bool().unwrap_or(false);
                 let handle = Id::new(("pv_drag_list", fname.as_str()));
-                drag_under(ui, handle, Drag { field: fname.clone(), from: None, index: 0 });
+                dnd::drag_under(ui, handle, Drag { field: fname.clone(), from: None, index: 0 });
                 let r = ui.checkbox(&mut on, egui::RichText::new(&fname).font(theme::ui_font(13.0)));
                 ui.ctx().data_mut(|d| d.insert_temp(handle, r.rect));
                 if r.changed() {
@@ -150,7 +127,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                 .sense(Sense::click_and_drag()),
                         );
                         chips.push(b.rect);
-                        drag_source(ui, &b, Drag { field: f.clone(), from: Some(key), index: fi });
+                        dnd::drag_source(ui, &b, Drag { field: f.clone(), from: Some(key), index: fi });
                         egui::Popup::menu(&b).show(|ui| {
                             for (to, l) in [
                                 ("rows", "Move to Row Labels"),
@@ -215,26 +192,18 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
         // While dragging: the area under the pointer lights up and a line shows where the field goes.
-        if let (Some(_), Some(p)) = (&dragging, pointer) {
-            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::new("pv_drag_marks")));
-            if let Some((_, zone, chips)) = zones.iter().find(|(_, z, _)| z.contains(p)) {
-                painter.rect_stroke(*zone, 4.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
-                let k = insert_index(chips, p.y);
-                let y = match (chips.get(k), k.checked_sub(1).and_then(|j| chips.get(j))) {
-                    (Some(r), _) => r.top() - 2.0,
-                    (None, Some(r)) => r.bottom() + 2.0,
-                    (None, None) => zone.top() + 4.0,
-                };
-                painter.line_segment([pos2(zone.left() + 4.0, y), pos2(zone.right() - 4.0, y)], Stroke::new(2.0, t.accent));
-            }
+        if let (Some(_), Some(p)) = (&dragging, pointer)
+            && let Some((_, zone, chips)) = zones.iter().find(|(_, z, _)| z.contains(p))
+        {
+            dnd::drop_marker(ui, *zone, chips, p.y);
         }
         if let Some(d) = &dragging
             && let Some(p) = pointer
         {
-            ghost(ui, &d.field, p);
+            dnd::ghost(ui, &d.field, p);
             if ui.input(|i| i.pointer.any_released()) {
                 let _ = DragAndDrop::take_payload::<Drag>(ui.ctx());
-                let target = zones.iter().find(|(_, z, _)| z.contains(p)).map(|(k, _, chips)| (*k, insert_index(chips, p.y)));
+                let target = zones.iter().find(|(_, z, _)| z.contains(p)).map(|(k, _, chips)| (*k, dnd::insert_index(chips, p.y)));
                 if let Some((cmd, params)) = drop_action(&name, d, target, &lists) {
                     app.run_or_alert(cmd, params);
                 }
@@ -257,20 +226,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
-/// The field following the pointer while it's dragged.
-fn ghost(ui: &Ui, field: &str, at: Pos2) {
-    let t = Tokens::get(ui.ctx());
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::new("pv_drag_ghost")));
-    let galley = painter.layout_no_wrap(field.to_string(), theme::ui_font(12.0), t.text);
-    let rect = Rect::from_min_size(at + vec2(12.0, 8.0), galley.size() + vec2(12.0, 6.0));
-    painter.rect_filled(rect, 3.0, t.input_bg);
-    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-    painter.galley(rect.min + vec2(6.0, 3.0), galley, t.text);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::pos2;
 
     fn areas() -> Vec<(&'static str, Vec<String>)> {
         vec![
@@ -303,7 +262,7 @@ mod tests {
         assert_eq!((c, p["area"].as_str()), ("pivot.removeField", Some("rows")));
         assert!(drop_action("P", &d("Units", None, 0), None, &areas()).is_none());
         assert_eq!(
-            insert_index(&[Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 20.0)), Rect::from_min_size(pos2(0.0, 22.0), vec2(10.0, 20.0))], 25.0),
+            dnd::insert_index(&[Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 20.0)), Rect::from_min_size(pos2(0.0, 22.0), vec2(10.0, 20.0))], 25.0),
             1
         );
     }

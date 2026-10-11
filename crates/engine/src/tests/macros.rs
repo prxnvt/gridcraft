@@ -516,6 +516,24 @@ fn the_debugger_steps_continues_and_runs_to_a_step_as_one_undo_step() {
 }
 
 #[test]
+fn a_breakpoint_list_can_replace_the_steps_own() {
+    let mut s = s();
+    stepper(&mut s);
+    // Only step 4 stops the run: the flag on 3.1 is ignored.
+    let st = debug(&mut s, json!({"name": "Walk", "inputs": "B2:C5", "breakpoints": ["4"], "breakpointsOnly": true}));
+    assert_eq!(st["current"]["step"], "1");
+    let st = debug(&mut s, json!({"action": "continue"}));
+    assert_eq!((st["current"]["step"].as_str(), st["atBreakpoint"].as_bool()), (Some("4"), Some(true)));
+    debug(&mut s, json!({"action": "stop"}));
+    // Clearing the list mid-run (an editor removing its last breakpoint) runs to the end.
+    debug(&mut s, json!({"name": "Walk", "inputs": "B2:C5", "breakpoints": ["3.1"], "breakpointsOnly": true}));
+    let st = debug(&mut s, json!({"action": "continue"}));
+    assert_eq!(st["current"]["step"], "3.1");
+    let st = debug(&mut s, json!({"action": "continue", "breakpoints": [], "breakpointsOnly": true}));
+    assert_eq!(st["state"], "finished");
+}
+
+#[test]
 fn stopping_the_debugger_keeps_or_rolls_back() {
     for keep in [false, true] {
         let mut s = s();

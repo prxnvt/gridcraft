@@ -25,6 +25,9 @@ pub struct Debugger {
     token: Option<GroupToken>,
     /// Breakpoints set for this run (step paths), on top of the steps' own.
     pub breakpoints: BTreeSet<String>,
+    /// Only `breakpoints` stop the run; the steps' own flags are ignored (an editor that shows
+    /// its own breakpoints sends them all, so clearing one takes effect at once).
+    pub only_listed: bool,
     /// The workbook when the run started, for "changed so far".
     start: Arc<Workbook>,
     /// Every step path in the macro, for checking `runTo` targets.
@@ -78,6 +81,9 @@ pub fn debug(s: &mut Session, p: &Json) -> Result<Json> {
         && let (Some(d), Some(bps)) = (s.macro_debug.as_mut(), p.get("breakpoints"))
     {
         d.breakpoints = paths_param(bps)?;
+        if let Some(only) = p.get("breakpointsOnly").and_then(Json::as_bool) {
+            d.only_listed = only;
+        }
     }
     match action.as_str() {
         "start" => start(s, p),
@@ -148,6 +154,7 @@ fn start(s: &mut Session, p: &Json) -> Result<Json> {
         machine: Some(machine),
         token: Some(token),
         breakpoints,
+        only_listed: p.get("breakpointsOnly").and_then(Json::as_bool).unwrap_or(false),
         start: start_wb,
         paths,
         touched: BTreeSet::from([b.prepared.doc]),
@@ -179,6 +186,7 @@ fn all_paths(steps: &[gridcraft_model::Step], prefix: &str) -> BTreeSet<String> 
 fn advance(s: &mut Session, mode: Mode) -> Result<Json> {
     let d = s.macro_debug.as_mut().ok_or_else(not_debugging)?;
     let breakpoints = d.breakpoints.clone();
+    let only_listed = d.only_listed;
     let mut machine = d.machine.take().ok_or_else(not_debugging)?;
     machine.restart_clock();
     let before = versions(s);
@@ -191,7 +199,7 @@ fn advance(s: &mut Session, mode: Mode) -> Result<Json> {
             if matches!(mode, Mode::Step) {
                 break;
             }
-            if st.breakpoint || breakpoints.contains(&path) {
+            if (st.breakpoint && !only_listed) || breakpoints.contains(&path) {
                 hit = true;
                 break;
             }
