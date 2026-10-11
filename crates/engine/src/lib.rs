@@ -169,6 +169,9 @@ pub struct DocState {
     pub sheet_selections: Vec<Selection>,
     /// Whether the workbook's active content may run.
     pub trust: Trust,
+    /// While a macro's footprint is measured: every cell a command wrote, by sheet name, even
+    /// where it wrote what was already there.
+    pub touched: Option<Vec<(String, CellRef)>>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -193,6 +196,7 @@ impl DocState {
             title,
             sheet_selections: vec![],
             trust: Trust::Local,
+            touched: None,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -270,6 +274,8 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// Macros the person allowed to run this session: (document uid, macro content hash).
     pub macro_approvals: std::collections::HashSet<(u64, u64)>,
+    /// Where the macro recorder started (beside `recorder`, its buffer).
+    pub macro_recording: Option<macros::recorder::RecordingStart>,
     /// The macro being debugged, between debugger actions.
     pub macro_debug: Option<macros::debug::Debugger>,
     /// How many `execute` calls are running (0 between top-level commands).
@@ -398,7 +404,16 @@ impl Session {
             if let Some((doc, sheet, sheet_name, selection)) = recording
                 && let Some(rec) = self.recorder.as_mut()
             {
-                rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params: params.clone() });
+                // A toggle (Bold) is recorded with the state it set, as Excel records
+                // `Bold = True`: playing it back sets it rather than flipping it.
+                let mut params = params.clone();
+                if let (Ok(Json::Object(r)), Json::Object(p)) = (&result, &mut params)
+                    && !p.contains_key("on")
+                    && let Some(on @ Json::Bool(_)) = r.get("on")
+                {
+                    p.insert("on".into(), on.clone());
+                }
+                rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
             }
             self.journal.push((id.to_string(), params.clone()));
             if self.journal.len() > 10_000 {

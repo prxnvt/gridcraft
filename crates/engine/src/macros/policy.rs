@@ -10,7 +10,8 @@ use crate::Trust;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Policy {
     Allow,
-    /// Allowed once the person approves the macro: it came with a file they opened.
+    /// Allowed once the person approves the macro; the text says why it asks ("came with a
+    /// workbook you opened").
     Ask(String),
     /// Reads or writes files: the macro must list the command in its permissions, and the person
     /// approves the macro before it runs. The text says what it does ("reads a file").
@@ -59,7 +60,7 @@ pub fn macro_policy(id: &str, params: &Json, trust: Trust) -> Policy {
         Policy::Allow
     };
     match base {
-        Policy::Allow if !trust.allows_code() => Policy::Ask("it came with a workbook you opened".into()),
+        Policy::Allow if !trust.allows_code() => Policy::Ask("came with a workbook you opened".into()),
         other => other,
     }
 }

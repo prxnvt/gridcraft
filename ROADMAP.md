@@ -21,7 +21,7 @@ This page is the summary. The detail is in:
 
 | Number | Value | Kind |
 |---|---|---|
-| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 258 / 290 (89.0%), worksheet functions 501 / 523 (95.8%; 492 working, 94.1%) |
+| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 262 / 291 (90.0%), worksheet functions 501 / 523 (95.8%; 492 working, 94.1%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
@@ -85,7 +85,7 @@ collaboration, mobile, AI).
 | Get & Transform, external data, data model | ~15% | ~10% | 60–100 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 | Insert objects (pictures, shapes, ink, SmartArt, equations) | ~55% | ~45% | 25–40 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 | Review, comments, protection, collaboration | ~55% | ~40% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
-| Automation (recorded scripts; no VBA) | ~30% | ~20% | 12–20 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
+| Automation (typed macros: recorder, runner, debugger; no VBA; the macro UI is next) | ~40% | ~25% | 10–16 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 
 ## Languages
 
@@ -131,6 +131,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-10 | M14 macros engine (M14.21-M14.25): typed, declarative macros instead of VBA, saved in the workbook (a JSON field, hidden names in xlsx; old scripts migrate on open); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas) resolved before each command; one undo step with full rollback; a footprint dry run on the real workbook with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with per-macro permissions and approval for macros from files; Repeat, If and Stop steps with step and time limits; a debugger with breakpoints, step, continue and run to here as one undo step; a relative recorder; `macro.*` commands with `automate.*` as aliases |
 | 2026-10-10 | M14 engine seams (M14.6-M14.9): undo groups (one undo step for many commands, rolled back on error, nestable, and spanning calls for a debugger); script runs are one undo step; a recording buffer of top-level commands with their document, sheet and selection, unaffected by journal trimming; document trust (Local, FromFile, Trusted) carried through paste; load limits on formula length and nesting, Python code size, names, hidden data and macro count for every file format; workbook data in hidden names split over `_gc_<key>_<k>` names past 8,192 characters, still reading the older `_sc_` names |
 | 2026-10-10 | M14 objects (M14.4-M14.5): one selection model for charts, pictures, shapes, equations and form controls (stubs for the last two); every kind gets a frame with 8 resize handles, Delete and Backspace delete the selected object, double-clicks route by kind; shapes, equations and controls follow row and column inserts, deletes and sorts; control links and chart series follow inserts, deletes, cut-moves and sheet renames and deletes; copied sheets give their objects fresh ids |
 | 2026-10-10 | M14 UI kit (M14.1-M14.3): theme tokens with a category palette, code and sheet-control colours, and a WCAG contrast test over both themes; ribbon split buttons, accent icons, new code-drawn icons, scroll arrows on overflowing tabs and per-button keytips; a code editor widget; the formula bar grows from 1 to 5 lines and then scrolls, and the in-cell editor stops at 5 lines |

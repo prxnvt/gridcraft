@@ -101,7 +101,7 @@ const REF_KEYS: &[&str] = &[
 ];
 
 /// Whether a parameter called `key` holds a reference.
-fn is_ref_key(key: &str) -> bool {
+pub(crate) fn is_ref_key(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
     REF_KEYS.iter().any(|r| r.eq_ignore_ascii_case(key)) || ["cell", "cells", "range", "ranges", "ref"].iter().any(|end| k.ends_with(end))
 }

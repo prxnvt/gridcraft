@@ -192,7 +192,7 @@ fn a_script_run_is_one_undo_step_and_rolls_back_on_error() {
     let n = undo_labels(&s).len();
     s.execute("automate.runScript", json!({"name": "Two"})).unwrap();
     assert_eq!(undo_labels(&s).len(), n + 1);
-    assert_eq!(undo_labels(&s).last().map(String::as_str), Some("Run Script: Two"));
+    assert_eq!(undo_labels(&s).last().map(String::as_str), Some("Run Macro: Two"));
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(v(&s, "A1").display(), "before");
     assert!(v(&s, "A2").is_empty());
@@ -204,7 +204,7 @@ fn a_script_run_is_one_undo_step_and_rolls_back_on_error() {
     s.execute("automate.newScript", json!({"name": "Bad", "commands": bad})).unwrap();
     let n = undo_labels(&s).len();
     let err = s.execute("automate.runScript", json!({"name": "Bad"})).unwrap_err().to_string();
-    assert!(err.contains("step 2"), "{err}");
+    assert!(err.contains("Step 2 (no.such.command)"), "{err}");
     assert_eq!(v(&s, "A1").display(), "before", "the first step was rolled back");
     assert_eq!(undo_labels(&s).len(), n);
 }
@@ -462,7 +462,10 @@ fn workbooks_saved_with_the_old_names_still_work() {
     let mut s = s();
     open_json(&mut s, &wb);
     assert_eq!(s.execute("automate.allScripts", json!({})).unwrap(), json!([{"name": "Old", "steps": 1}]));
-    s.execute("automate.runScript", json!({"name": "Old"})).unwrap();
+    // A script from a file runs once the person approves it.
+    let asked = s.execute("automate.runScript", json!({"name": "Old"}));
+    assert!(matches!(asked, Err(EngineError::Approve(_))), "{asked:?}");
+    s.execute("automate.runScript", json!({"name": "Old", "approve": true})).unwrap();
     assert_eq!(v(&s, "A1").display(), "from an old file");
     assert_eq!(s.execute("formulas.watchWindow", json!({})).unwrap()[0]["cell"], "Sheet1!A1");
     assert_eq!(s.execute("data.scenarioManager", json!({})).unwrap()["scenarios"][0]["name"], "Old");
@@ -489,6 +492,6 @@ fn a_large_script_round_trips_through_xlsx() {
     assert!(names >= 3, "more than 8,192 characters needs several names, got {names}");
     s.execute("file.open", json!({"name": "big.xlsx", "base64": b64})).unwrap();
     assert_eq!(s.execute("automate.allScripts", json!({})).unwrap(), json!([{"name": "Big", "steps": 400}]));
-    s.execute("automate.runScript", json!({"name": "Big"})).unwrap();
+    s.execute("automate.runScript", json!({"name": "Big", "approve": true})).unwrap();
     assert_eq!(v(&s, "A400").display(), "row \"400\"");
 }

@@ -94,7 +94,7 @@ pub fn gate(m: &Macro, trust: Trust) -> Result<Vec<String>> {
             }
             Policy::NeedsPermission(what) => {
                 if m.permissions.iter().any(|p| p == id) {
-                    asks.insert(format!("{id} {what}"));
+                    asks.insert(format!("runs {id}, which {what}"));
                 } else {
                     err = Some(format!("Step {path} ({id}) {what}. Add {id} to the macro's permissions to allow it."));
                 }
@@ -833,22 +833,29 @@ pub fn footprint(s: &mut Session, p: &Prepared) -> Result<Footprint> {
     let saved = Saved::take(s, p.doc);
     let before = s.doc()?.wb.clone();
     let token = s.group_begin("Check Macro")?;
+    if let Some(d) = s.docs.iter_mut().find(|d| d.uid == p.doc) {
+        d.touched = Some(Vec::new());
+    }
     let mut m = Machine::new(p, true);
     let outcome = m.run_to_end(s);
-    let after = s.docs.iter().find(|d| d.uid == p.doc).map(|d| d.wb.clone()).unwrap_or_else(|| before.clone());
+    let (after, touched) = match s.docs.iter_mut().find(|d| d.uid == p.doc) {
+        Some(d) => (d.wb.clone(), d.touched.take().unwrap_or_default()),
+        None => (before.clone(), Vec::new()),
+    };
     let rolled = s.group_rollback(token);
     saved.restore(s, p.doc);
     rolled?;
-    let after = if matches!(m.stopped, Some((_, true))) { before.clone() } else { after };
-    let mut fp = diff(&before, &after, &p.inputs);
+    let (after, touched) = if matches!(m.stopped, Some((_, true))) { (before.clone(), Vec::new()) } else { (after, touched) };
+    let mut fp = diff(&before, &after, &p.inputs, &touched);
     fp.error = outcome.err();
     fp.stopped = m.stopped.map(|(msg, _)| msg);
     fp.partial = m.partial.map(|(step, reason)| json!({"step": step, "reason": reason}));
     Ok(fp)
 }
 
-/// Compares the workbook before and after a dry run.
-fn diff(before: &Workbook, after: &Workbook, inputs: &[Bound]) -> Footprint {
+/// Compares the workbook before and after a dry run. `touched` adds the cells commands wrote
+/// without changing them (a formula written again), so a shift moves everything the macro writes.
+fn diff(before: &Workbook, after: &Workbook, inputs: &[Bound], touched: &[(String, CellRef)]) -> Footprint {
     let mut fp = Footprint::default();
     // Sheets are matched by name; what's left is matched in order (a renamed sheet).
     let mut pairs: Vec<(usize, Option<usize>)> = before.sheets.iter().enumerate().map(|(bi, sh)| (bi, after.sheet_index(&sh.name))).collect();
@@ -865,7 +872,8 @@ fn diff(before: &Workbook, after: &Workbook, inputs: &[Bound]) -> Footprint {
             continue;
         };
         let Some(after_sheet) = after.sheets.get(ai) else { continue };
-        if Arc::ptr_eq(bs, after_sheet) {
+        let rewritten: BTreeSet<CellRef> = touched.iter().filter(|(n, _)| *n == after_sheet.name).map(|(_, c)| *c).collect();
+        if Arc::ptr_eq(bs, after_sheet) && rewritten.is_empty() {
             continue;
         }
         let (added, changed, removed) = objects(bs, after_sheet);
@@ -875,12 +883,14 @@ fn diff(before: &Workbook, after: &Workbook, inputs: &[Bound]) -> Footprint {
         let in_input = |c: CellRef| inputs.iter().any(|(_, p, _)| p.sheet == bi && p.range.contains(c));
         let mut written = Vec::new();
         let mut conflicts = Vec::new();
-        for c in bs.cells.diff(&after_sheet.cells) {
+        let mut cells: BTreeSet<CellRef> = bs.cells.diff(&after_sheet.cells).into_iter().collect();
+        cells.extend(rewritten.iter().copied());
+        for c in cells {
             if in_input(c) {
                 continue;
             }
             let (b, a) = (bs.cell(c), after_sheet.cell(c));
-            if recalculated_only(b, a) {
+            if recalculated_only(b, a) && !rewritten.contains(&c) {
                 continue;
             }
             written.push(c);

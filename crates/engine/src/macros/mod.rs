@@ -13,6 +13,7 @@ use crate::cmd::stash;
 
 pub mod debug;
 pub mod policy;
+pub mod recorder;
 pub mod resolve;
 pub mod run;
 

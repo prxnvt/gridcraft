@@ -1,5 +1,5 @@
 //! More ribbon commands: Chart Design and Format, object arrangement, workbook views, table
-//! tools, Get Data, scripts (Automate), cell checkboxes, theme colours and fonts.
+//! tools, Get Data, cell checkboxes, theme colours and fonts.
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::*;
@@ -127,7 +127,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "view.unhideWindow", "Unhide…", ["View", "Window"], None, "{index?}", has_doc, unhide_window),
         cmd!(query "view.switchWindows", "Switch Windows", ["View", "Window"], None, "{} → open windows", always, switch_windows),
         cmd!(noundo "view.ruler", "Ruler", ["View", "Show"], None, "{on?}", has_doc, |_, _| ok()),
-        cmd!(query "view.macros", "Macros", ["View", "Macros"], None, "{} → scripts", has_doc, all_scripts),
         // Table tools
         cmd!("table.resize", "Resize Table", ["Table Design", "Properties"], None, "{table?, range: \"A1:F20\"}", has_doc, table_resize),
         cmd!("table.removeDuplicates", "Remove Duplicates", ["Table Design", "Tools"], None, "{table?, columns?}", has_doc, |s, p| s
@@ -161,20 +160,6 @@ pub fn specs() -> Vec<CommandSpec> {
             from_table_range
         ),
         cmd!(query "data.queriesConnections", "Queries & Connections", ["Data", "Queries & Connections"], None, "{} → imported tables", has_doc, queries),
-        // Automate
-        cmd!(noundo "automate.recordActions", "Record Actions", ["Automate", "Scripting Tools"], None, "{stop?: bool, name?: script name when stopping} records top-level commands only; stopping saves them as a script → {saved, steps, dropped}", has_doc, record),
-        cmd!(
-            "automate.newScript",
-            "New Script",
-            ["Automate", "Scripting Tools"],
-            None,
-            "{name, commands: [{command, params}] }",
-            has_doc,
-            new_script
-        ),
-        cmd!(query "automate.allScripts", "All Scripts", ["Automate", "Scripting Tools"], None, "{} → saved scripts", has_doc, all_scripts),
-        cmd!("automate.runScript", "Run Script", [], None, "{name}", has_doc, run_script),
-        cmd!("automate.deleteScript", "Delete Script", [], None, "{name}", has_doc, delete_script),
         // Cell controls, themes, borders, styles
         cmd!(
             "insert.checkbox",
@@ -224,7 +209,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             new_cell_style
         ),
-        cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through MCP and scripts instead of add-ins", always, |_, _| Ok(json!({"addIns": [], "hint": "Use gridcraft-cli mcp or Automate › scripts"}))),
+        cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through MCP and macros instead of add-ins", always, |_, _| Ok(json!({"addIns": [], "hint": "Use gridcraft-cli mcp or Automate › Macros"}))),
         cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → recently used functions in this workbook", has_doc, recently_used),
         cmd!(query "formulas.financial", "Financial", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Financial"}))),
         cmd!(query "formulas.logical", "Logical", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Logical"}))),
@@ -760,95 +745,6 @@ fn queries(s: &mut Session, _: &Json) -> Result<Json> {
             })
             .collect(),
     ))
-}
-
-fn record(s: &mut Session, p: &Json) -> Result<Json> {
-    if bool_param(p, "stop").unwrap_or(false) || s.is_recording() {
-        let Some(rec) = s.stop_recording() else { return Ok(json!({"recording": false})) };
-        let wb = s.doc()?.wb.clone();
-        let mut cmds: Vec<Json> = Vec::new();
-        for st in &rec.steps {
-            if st.id == "automate.runScript" {
-                // A script run while recording is recorded as its steps, so the new script stands
-                // on its own (scripts never run other scripts).
-                let inner = st.params["name"].as_str().and_then(|n| crate::macros::find(&wb, n)).and_then(|i| wb.macros.get(i));
-                let inner = inner.map(|m| crate::macros::command_steps(&m.steps)).unwrap_or_default();
-                cmds.extend(inner.into_iter().map(|(_, id, params)| json!({"command": id, "params": params})));
-            } else if !st.id.starts_with("automate.") {
-                cmds.push(json!({"command": st.id, "params": st.params}));
-            }
-        }
-        cmds.truncate(gridcraft_model::MAX_MACRO_STEPS);
-        let name = match str_param(p, "name") {
-            Some(n) => n.to_string(),
-            None => (1..).map(|n| format!("Script {n}")).find(|n| crate::macros::find(&wb, n).is_none()).unwrap_or_else(|| "Script".into()),
-        };
-        s.execute("automate.newScript", json!({"name": name, "commands": cmds}))?;
-        return Ok(json!({"recording": false, "saved": name, "steps": cmds.len(), "dropped": rec.dropped}));
-    }
-    s.start_recording();
-    Ok(json!({"recording": true}))
-}
-
-fn new_script(s: &mut Session, p: &Json) -> Result<Json> {
-    let name = str_param(p, "name").ok_or_else(|| bad("automate.newScript", "missing `name`"))?.to_string();
-    let cmds = p.get("commands").cloned().unwrap_or(json!([]));
-    if !cmds.is_array() {
-        return Err(bad("automate.newScript", "`commands` must be an array"));
-    }
-    let m = crate::macros::legacy_script(&name, &cmds).map_err(|e| bad("automate.newScript", e))?;
-    edit(s, |cx| {
-        if let Some(old) = crate::macros::find(&cx.wb, &name).and_then(|i| cx.wb.macros.get_mut(i)) {
-            *old = m;
-        } else if cx.wb.macros.len() >= gridcraft_model::MAX_MACROS {
-            return Err(EngineError::Other(format!("A workbook can hold at most {} macros.", gridcraft_model::MAX_MACROS)));
-        } else {
-            cx.wb.macros.push(m);
-        }
-        Ok(json!({"name": name}))
-    })
-}
-
-fn all_scripts(s: &mut Session, _: &Json) -> Result<Json> {
-    let wb = &s.doc()?.wb;
-    Ok(Json::Array(wb.macros.iter().map(|m| json!({"name": m.name, "steps": m.step_count()})).collect()))
-}
-
-fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
-    let name = str_param(p, "name").ok_or_else(|| bad("automate.runScript", "missing `name`"))?;
-    let wb = s.doc()?.wb.clone();
-    let m = crate::macros::find(&wb, name).and_then(|i| wb.macros.get(i)).ok_or_else(|| bad("automate.runScript", "no such script"))?;
-    let steps: Vec<(String, Json)> = m
-        .steps
-        .iter()
-        .filter(|st| st.enabled)
-        .filter_map(|st| match &st.kind {
-            gridcraft_model::StepKind::Command { id, params } => Some((id.clone(), params.clone())),
-            _ => None,
-        })
-        .collect();
-    // One undo step for the whole run; a failing step rolls back the steps before it.
-    s.grouped(&format!("Run Script: {name}"), |s| {
-        let mut n = 0;
-        for (i, (id, params)) in steps.iter().take(100_000).enumerate() {
-            if id.starts_with("automate.") {
-                continue;
-            }
-            s.execute(id, params.clone()).map_err(|e| EngineError::Other(format!("step {} ({id}): {e}", i + 1)))?;
-            n += 1;
-        }
-        Ok(json!({"ran": n}))
-    })
-}
-
-fn delete_script(s: &mut Session, p: &Json) -> Result<Json> {
-    let name = str_param(p, "name").ok_or_else(|| bad("automate.deleteScript", "missing `name`"))?.to_string();
-    edit(s, |cx| {
-        if let Some(i) = crate::macros::find(&cx.wb, &name) {
-            cx.wb.macros.remove(i);
-        }
-        Ok(Json::Null)
-    })
 }
 
 /// Number format that marks checkbox cells (TRUE/FALSE values drawn as boxes).
