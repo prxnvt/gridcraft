@@ -288,8 +288,8 @@ fn write_into(s: &mut Session, si: usize, origin: CellRef, report: Report) -> Re
             let at = CellRef::new(origin.row.saturating_add(rc.row), origin.col.saturating_add(rc.col));
             let style = style_id(cx, &rc.style);
             let cell = match &rc.value {
-                RValue::Value(v) => Cell { value: v.clone(), formula: None, style },
-                RValue::Formula(f) => Cell { value: Value::Empty, formula: Some(Arc::new(Formula::new(f))), style },
+                RValue::Value(v) => Cell { value: v.clone(), formula: None, style, py: None },
+                RValue::Formula(f) => Cell { value: Value::Empty, formula: Some(Arc::new(Formula::new(f))), style, py: None },
             };
             cx.sheet_mut(si)?.set_cell(at, cell);
             cx.touch(si, at);

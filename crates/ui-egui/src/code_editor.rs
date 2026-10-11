@@ -196,21 +196,57 @@ fn color(s: &Syntax, token: Token) -> egui::Color32 {
     }
 }
 
+/// The code editors' font.
+pub fn font() -> FontId {
+    FontId::new(12.5, FontFamily::Name(theme::MONO.into()))
+}
+
 /// A layout job for `text` with syntax colours.
 pub fn layout_job(text: &str, lang: Lang, font: &FontId, plain: egui::Color32, syntax: &Syntax, wrap_width: f32) -> egui::text::LayoutJob {
+    layout_job_marked(text, lang, font, plain, syntax, &[], wrap_width)
+}
+
+/// A layout job for `text` with syntax colours, where `marks` (byte ranges, in order, not
+/// overlapping) take their own colour over the syntax colour: the reference colours of the
+/// `xl("…")` literals in Python cells. Ranges that are out of bounds or off a char boundary are
+/// ignored.
+pub fn layout_job_marked(
+    text: &str,
+    lang: Lang,
+    font: &FontId,
+    plain: egui::Color32,
+    syntax: &Syntax,
+    marks: &[(Range<usize>, egui::Color32)],
+    wrap_width: f32,
+) -> egui::text::LayoutJob {
+    let ok = |r: &Range<usize>| r.start <= r.end && r.end <= text.len() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end);
+    let tokens: Vec<(Range<usize>, egui::Color32)> = highlight(text, lang).into_iter().map(|(r, k)| (r, color(syntax, k))).collect();
+    let marks: Vec<&(Range<usize>, egui::Color32)> = marks.iter().filter(|(r, _)| ok(r)).collect();
+    // Cut the text at every span boundary, then colour each piece: a mark wins over a token.
+    let mut cuts: Vec<usize> = vec![0, text.len()];
+    cuts.extend(tokens.iter().flat_map(|(r, _)| [r.start, r.end]));
+    cuts.extend(marks.iter().flat_map(|(r, _)| [r.start, r.end]));
+    cuts.sort_unstable();
+    cuts.dedup();
     let mut job = egui::text::LayoutJob::default();
-    let mut pos = 0usize;
-    for (range, token) in highlight(text, lang) {
-        if range.start < pos {
-            continue;
+    let (mut ti, mut mi) = (0usize, 0usize);
+    for pair in cuts.windows(2) {
+        let [a, b] = pair else { continue };
+        let Some(piece) = text.get(*a..*b) else { continue };
+        while tokens.get(ti).is_some_and(|(r, _)| r.end <= *a) {
+            ti += 1;
         }
-        if let (Some(before), Some(span)) = (text.get(pos..range.start), text.get(range.clone())) {
-            job.append(before, 0.0, egui::TextFormat::simple(font.clone(), plain));
-            job.append(span, 0.0, egui::TextFormat::simple(font.clone(), color(syntax, token)));
-            pos = range.end;
+        while marks.get(mi).is_some_and(|(r, _)| r.end <= *a) {
+            mi += 1;
         }
+        let inside = |r: &Range<usize>| r.start <= *a && *b <= r.end;
+        let colour = match (marks.get(mi), tokens.get(ti)) {
+            (Some((r, c)), _) if inside(r) => *c,
+            (_, Some((r, c))) if inside(r) => *c,
+            _ => plain,
+        };
+        job.append(piece, 0.0, egui::TextFormat::simple(font.clone(), colour));
     }
-    job.append(text.get(pos..).unwrap_or(""), 0.0, egui::TextFormat::simple(font.clone(), plain));
     job.wrap.max_width = wrap_width;
     job
 }
@@ -300,7 +336,7 @@ pub fn indent(text: &mut String, sel: (usize, usize), dedent: bool) -> Edit {
 /// caret.
 pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max_lines: usize) -> Response {
     let t = Tokens::get(ui.ctx());
-    let font = FontId::new(12.5, FontFamily::Name(theme::MONO.into()));
+    let font = font();
     let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
     let max_lines = max_lines.clamp(1, 200);
     // Keys the editor handles itself, before the TextEdit sees them.
@@ -323,7 +359,7 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
     let syntax = t.syntax;
     let plain = t.text;
     let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-        let job = layout_job(buf.as_str(), lang, &FontId::new(12.5, FontFamily::Name(theme::MONO.into())), plain, &syntax, wrap_width);
+        let job = layout_job(buf.as_str(), lang, &self::font(), plain, &syntax, wrap_width);
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let frame_h = row_h * max_lines as f32 + 8.0;
@@ -431,8 +467,29 @@ mod tests {
                 }
                 let job = layout_job(text, lang, &FontId::default(), egui::Color32::BLACK, &Tokens::light().syntax, f32::INFINITY);
                 assert_eq!(job.text, text, "every character is laid out once");
+                let marks = [
+                    (0..1, egui::Color32::RED),
+                    (1..text.len().saturating_add(3), egui::Color32::RED),
+                    (std::ops::Range { start: 2, end: 1 }, egui::Color32::RED),
+                ];
+                let job = layout_job_marked(text, lang, &FontId::default(), egui::Color32::BLACK, &Tokens::light().syntax, &marks, f32::INFINITY);
+                assert_eq!(job.text, text, "every character is laid out once, whatever the marks");
             }
         }
+    }
+
+    #[test]
+    fn marks_take_their_colour_over_syntax() {
+        let text = "a = xl(\"A1:B2\") # c";
+        let syntax = Tokens::light().syntax;
+        let start = text.find("A1").unwrap_or(0);
+        let marks = [(start..start + 5, egui::Color32::RED)];
+        let job = layout_job_marked(text, Lang::Python, &FontId::default(), egui::Color32::BLACK, &syntax, &marks, f32::INFINITY);
+        let colour_at = |b: usize| job.sections.iter().find(|s| s.byte_range.start.0 <= b && b < s.byte_range.end.0).map(|s| s.format.color);
+        assert_eq!(colour_at(start), Some(egui::Color32::RED));
+        assert_eq!(colour_at(start - 1), Some(syntax.string), "the quote keeps the string colour");
+        assert_eq!(colour_at(text.len() - 1), Some(syntax.comment));
+        assert_eq!(colour_at(0), Some(egui::Color32::BLACK));
     }
 
     #[test]

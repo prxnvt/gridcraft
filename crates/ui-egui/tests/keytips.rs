@@ -15,7 +15,11 @@ fn harness(session: Session) -> Harness {
 }
 
 fn harness_on(session: Session, os: OperatingSystem) -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_os(os).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    harness_sized(session, os, 1200.0)
+}
+
+fn harness_sized(session: Session, os: OperatingSystem, width: f32) -> Harness {
+    let mut h = egui_kittest::Harness::builder().with_os(os).with_size(egui::vec2(width, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -332,16 +336,37 @@ fn tab_keys_switch_tabs_and_keep_keytips_on() {
     }
 }
 
-/// Every button the Formulas tab paints registers a keytip.
+/// In a narrow window Calculation and Python fold into one button each, which keep a keytip.
 #[test]
-fn formulas_tab_buttons_all_have_keytips() {
+fn folded_formulas_groups_keep_keytips() {
     let mut h = harness(blank());
     sequence(&mut h, &[Key::M], true);
     h.run_steps(2);
     let registered = h.state().keytips.reachable().to_vec();
-    for seq in
-        ["MF", "MU", "MI", "ML", "MT", "ME", "MO", "MG", "MQ", "MN", "MM", "MS", "MC", "MP", "MD", "MA", "MH", "MK", "MV", "MW", "MX", "MB", "MJ"]
-    {
+    for seq in ["MX", "MY"] {
+        assert!(registered.iter().any(|s| s == seq), "{seq} is not registered: {registered:?}");
+    }
+    assert!(!registered.iter().any(|s| s == "MB"), "Calculate Now is inside the folded Calculation button");
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::M], true);
+    h.run_steps(2);
+    letter(&mut h, Key::X, true);
+    h.run_steps(2);
+    assert!(h.query_by_label("Calculate Sheet").is_some(), "MX opens the folded Calculation group");
+}
+
+/// Every button the Formulas tab paints registers a keytip.
+#[test]
+fn formulas_tab_buttons_all_have_keytips() {
+    // Wide enough that no group folds into one button.
+    let mut h = harness_sized(blank(), OperatingSystem::Nix, 1700.0);
+    sequence(&mut h, &[Key::M], true);
+    h.run_steps(2);
+    let registered = h.state().keytips.reachable().to_vec();
+    for seq in [
+        "MF", "MU", "MI", "ML", "MT", "ME", "MO", "MG", "MQ", "MN", "MM", "MS", "MC", "MP", "MD", "MA", "MH", "MK", "MV", "MW", "MX", "MB", "MJ",
+        "MY", "MZ", "M1",
+    ] {
         assert!(registered.iter().any(|s| s == seq), "{seq} is not registered: {registered:?}");
     }
     let mut unique = registered.clone();

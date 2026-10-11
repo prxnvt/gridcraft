@@ -659,6 +659,14 @@ impl Calc {
                 sh.spill_ranges.clear();
             }
         }
+        // Python cells' arrays are laid out first, from their kept results.
+        for si in 0..wb.sheets.len() {
+            let anchors: Vec<CellRef> =
+                wb.sheet(si).map(|sh| sh.cells.iter().filter(|(_, c)| c.py.is_some()).map(|(c, _)| c).collect()).unwrap_or_default();
+            for a in anchors {
+                lay_python_spill(wb, si, a);
+            }
+        }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
         self.run(wb, all, true);
         self.refresh_tables(wb, None);
@@ -677,7 +685,10 @@ impl Calc {
                 None => {
                     self.graph.remove(k);
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.
-                    if let Some(sh) = wb.sheet_mut(k.0)
+                    // A Python cell's spill is its own result's, laid out by `lay_python_spill`.
+                    let python = wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.py.is_some());
+                    if !python
+                        && let Some(sh) = wb.sheet_mut(k.0)
                         && let Some(r) = sh.spill_ranges.remove(&k.1)
                     {
                         for c in r.iter() {
@@ -927,6 +938,56 @@ impl Calc {
     }
 }
 
+/// Lays out a Python cell's result: an array spills from the cell (or the cell shows `#SPILL!`
+/// when the area is blocked, as a formula's would), anything else is the cell's value. A cell
+/// that hasn't run keeps its value. Returns the cells whose values may have changed (the cell and
+/// its old and new spill areas), for [`Calc::cells_changed`].
+pub fn lay_python_spill(wb: &mut Workbook, sheet: usize, anchor: CellRef) -> Vec<Key> {
+    let mut changed = vec![(sheet, anchor)];
+    let Some(sh) = wb.sheet_mut(sheet) else { return changed };
+    if let Some(old) = sh.spill_ranges.remove(&anchor) {
+        for c in old.iter() {
+            sh.spill.remove(&c);
+        }
+        changed.extend(old.iter().take(65536).map(|c| (sheet, c)));
+    }
+    let Some(result) = sh.cells.get(anchor).and_then(|c| c.py.as_ref()).and_then(|p| p.result_value()) else { return changed };
+    let value = match result {
+        // A malformed or oversized array (only a crafted file can hold one) can't spill.
+        Value::Array(arr) if arr.rows.checked_mul(arr.cols).is_none_or(|n| n != arr.data.len() || n > 1_000_000) => Value::Error(CellError::Spill),
+        Value::Array(arr) if arr.rows > 1 || arr.cols > 1 => {
+            let end = CellRef::new(anchor.row.saturating_add(arr.rows as u32 - 1), anchor.col.saturating_add(arr.cols as u32 - 1));
+            let range = RangeRef::new(anchor, end);
+            let blocked = arr.rows as u64 > gridcraft_core::MAX_ROWS as u64
+                || arr.cols as u64 > gridcraft_core::MAX_COLS as u64
+                || end.row >= gridcraft_core::MAX_ROWS
+                || end.col >= gridcraft_core::MAX_COLS
+                || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && cell.has_content())
+                || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c))
+                || sh.merges.iter().any(|m| m.intersects(&range))
+                || sh.tables.iter().any(|t| t.range.contains(anchor));
+            if blocked {
+                Value::Error(CellError::Spill)
+            } else {
+                for (i, c) in range.iter().enumerate() {
+                    if c != anchor {
+                        sh.spill.insert(c, arr.data.get(i).cloned().unwrap_or_default());
+                    }
+                }
+                sh.spill_ranges.insert(anchor, range);
+                changed.extend(range.iter().take(65536).map(|c| (sheet, c)));
+                arr.data.first().cloned().unwrap_or_default()
+            }
+        }
+        Value::Array(arr) => arr.data.first().cloned().unwrap_or_default(),
+        v => v,
+    };
+    if let Some(cell) = sh.cells.get_mut(anchor) {
+        cell.value = value;
+    }
+    changed
+}
+
 /// Local date-time as a serial (1900 system). Wasm without a clock returns a fixed date.
 #[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn now_serial() -> f64 {
@@ -973,7 +1034,7 @@ impl Trial {
         for (si, c, v) in sets {
             if let Some(sh) = wb.sheet_mut(*si) {
                 let style = sh.style_id(*c);
-                sh.set_cell(*c, gridcraft_model::Cell { value: v.clone(), formula: None, style });
+                sh.set_cell(*c, gridcraft_model::Cell { value: v.clone(), formula: None, style, py: None });
                 keys.push((*si, *c));
             }
         }
@@ -1040,7 +1101,7 @@ impl Calc {
                     for (c, v) in results {
                         if sh.value(c) != v || sh.cell(c).is_some_and(|x| x.formula.is_some()) {
                             let style = sh.style_id(c);
-                            sh.set_cell(c, gridcraft_model::Cell { value: v, formula: None, style });
+                            sh.set_cell(c, gridcraft_model::Cell { value: v, formula: None, style, py: None });
                             written.push((si, c));
                         }
                     }

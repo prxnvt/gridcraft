@@ -1,10 +1,11 @@
 //! The formula bar (Name Box, ✕ ✓ fx, a badge slot, formula field) and the shared cell editor widget.
 
-use egui::{FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
+use egui::{FontId, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::formula_refs;
+use crate::code_editor::{self, Lang};
+use crate::editor::{formula_refs, python_refs};
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
@@ -97,8 +98,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     app.open_dialog("insertFunction", json!({}));
                 }
                 let mut buttons = cancel.rect.union(fx.rect);
+                python_badge(app);
                 if let Some(rect) = badge(app, ui, &t) {
                     buttons = buttons.union(rect);
+                }
+                if app.formula_badge.as_ref().is_some_and(|b| b.clicked) {
+                    if let Some(b) = app.formula_badge.as_mut() {
+                        b.clicked = false;
+                    }
+                    app.leave_python();
                 }
                 layout.buttons = buttons;
                 ui.add_space(4.0);
@@ -113,9 +121,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 let info = if app.editor.is_some() {
                     editor_widget(app, &mut child, id, font.clone(), true, inner.width(), inner.height())
                 } else {
-                    // Show the active cell's content; clicking starts editing in the bar.
+                    // Show the active cell's content (a Python cell's code in colour); clicking
+                    // starts editing in the bar.
                     let text = active_input(app);
-                    let galley = child.painter().layout(text, font.clone(), t.text, inner.width());
+                    let galley = if active_python(app) {
+                        let job = code_editor::layout_job(&text, Lang::Python, &code_editor::font(), t.text, &t.syntax, inner.width());
+                        child.fonts_mut(|f| f.layout_job(job))
+                    } else {
+                        child.painter().layout(text, font.clone(), t.text, inner.width())
+                    };
                     let lines = galley.rows.len();
                     egui::ScrollArea::vertical().id_salt(id.with("view")).max_height(inner.height()).auto_shrink([false, true]).show(
                         &mut child,
@@ -144,6 +158,39 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(), layout));
 }
 
+/// Whether the active cell is a Python cell.
+fn active_python(app: &SheetApp) -> bool {
+    app.session.active().and_then(|d| d.wb.active().and_then(|sh| sh.cell(d.selection.active))).is_some_and(|c| c.py.is_some())
+}
+
+/// The PY badge shows while editing in Python mode, and on a selected Python cell.
+fn python_badge(app: &mut SheetApp) {
+    let show = match &app.editor {
+        Some(ed) => ed.python,
+        None => active_python(app),
+    };
+    if !show {
+        app.formula_badge = None;
+    } else if app.formula_badge.as_ref().is_none_or(|b| b.label != "PY") {
+        app.formula_badge = Some(FormulaBadge {
+            label: "PY".into(),
+            tip: "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)".into(),
+            clicked: false,
+        });
+    }
+}
+
+/// Ctrl+Alt+Shift+P (also with Cmd on macOS), taken from this frame's input: Python mode on or off.
+pub fn take_python_shortcut(i: &mut egui::InputState) -> bool {
+    let hit = |e: &egui::Event| matches!(e, egui::Event::Key { key: Key::P, pressed: true, modifiers: m, .. } if m.shift && m.alt && (m.ctrl || m.mac_cmd || m.command));
+    let found = i.events.iter().any(hit);
+    if found {
+        // The key, and the character Option+Shift+P types on macOS.
+        i.events.retain(|e| !hit(e) && !matches!(e, egui::Event::Text(t) if t == "∏"));
+    }
+    found
+}
+
 /// The badge slot: paints `app.formula_badge`, if any, and returns its rect.
 fn badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
     let b = app.formula_badge.as_mut()?;
@@ -153,6 +200,8 @@ fn badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
     let pill = Rect::from_center_size(rect.center(), vec2(rect.width(), 18.0));
     ui.painter().rect_filled(pill, 9.0, t.badge_py);
     ui.painter().galley(pill.center() - text.size() / 2.0, text, t.on_badge);
+    let label = b.label.clone();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
     let resp = resp.on_hover_text(b.tip.clone());
     if resp.clicked() {
         b.clicked = true;
@@ -255,6 +304,9 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
 /// The text editor used in the cell and in the formula bar (they share `app.editor`). It shows
 /// `max_height` of text and scrolls beyond that, keeping the caret in view.
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, max_height: f32) -> EditorInfo {
+    if app.editor.as_ref().is_some_and(|e| e.python) {
+        return python_editor(app, ui, id, width, max_height);
+    }
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
     let mine = ed.from_formula_bar == (id == egui::Id::new("gridcraft.formula_bar"));
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
@@ -262,7 +314,9 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
     let mut action: Option<(i64, i64, bool, bool)> = None;
     let mut cancel = false;
+    let mut to_python = false;
     if has_focus && mine {
+        to_python = ui.input_mut(take_python_shortcut);
         let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
             let m = i.modifiers;
             let alt_enter =
@@ -283,6 +337,8 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         }
         if !ed.autocomplete.is_empty() && tab {
             ed.accept_autocomplete();
+            // `=PY` and Tab (through AutoComplete) start Python mode.
+            to_python |= ed.is_py_trigger();
         } else if enter {
             action = Some((if shift { -1 } else { 1 }, 0, false, false));
         } else if tab {
@@ -506,11 +562,130 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     let lines = output.galley.rows.len().max(1);
     let caret = Some(output.galley.pos_from_cursor(egui::text::CCursor::new(ed.caret)).translate(output.galley_pos.to_vec2()));
+    if to_python {
+        ed.enter_python();
+        app.session.mode = gridcraft_engine::Mode::Edit;
+        app.editor = Some(ed);
+        return EditorInfo { lines, caret };
+    }
     app.editor = Some(ed);
     if cancel {
         app.cancel_edit();
     } else if let Some((dr, dc, array, fill)) = action {
         app.commit_edit(dr, dc, array, fill);
+    }
+    EditorInfo { lines, caret }
+}
+
+/// The formula bar in Python mode: the code editor (monospace, Python colours, `xl("…")`
+/// references in their reference colours). Its keys come before the formula editor's: Enter
+/// starts a new line with the indentation, Tab and Shift+Tab indent, Ctrl+Enter (Cmd+Enter on
+/// macOS) commits through `python.set`, Esc cancels, F2 toggles pointing at cells, and
+/// Ctrl+Alt+Shift+P or Backspace in an empty editor leaves Python mode.
+fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32, max_height: f32) -> EditorInfo {
+    let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
+    let focused = ui.ctx().memory(|m| m.focused());
+    let has_focus = focused == Some(id) || ed.request_focus || focused.is_none();
+    let (mut commit, mut cancel, mut leave) = (false, false, false);
+    let mut edited: Option<code_editor::Edit> = None;
+    if has_focus {
+        let empty = ed.text.is_empty();
+        let keys = ui.input_mut(|i| {
+            let shortcut = take_python_shortcut(i);
+            let commit = i.consume_key(Modifiers::COMMAND, Key::Enter) || i.consume_key(Modifiers::CTRL, Key::Enter);
+            let enter = i.consume_key(Modifiers::NONE, Key::Enter);
+            let shift_tab = i.consume_key(Modifiers::SHIFT, Key::Tab);
+            let tab = i.consume_key(Modifiers::NONE, Key::Tab);
+            let esc = i.consume_key(Modifiers::NONE, Key::Escape);
+            let f2 = i.consume_key(Modifiers::NONE, Key::F2);
+            // F4 (anchors) is a formula key; it does nothing to code.
+            i.consume_key(Modifiers::NONE, Key::F4);
+            let backspace = empty && i.consume_key(Modifiers::NONE, Key::Backspace);
+            (shortcut, commit, enter, tab, shift_tab, esc, f2, backspace)
+        });
+        let (shortcut, commit_key, enter, tab, shift_tab, esc, f2, backspace) = keys;
+        commit = commit_key;
+        cancel = esc;
+        leave = shortcut || backspace;
+        if f2 {
+            ed.py_point = !ed.py_point;
+            ed.point = None;
+            ed.point_cell = None;
+        }
+        if enter || tab || shift_tab {
+            let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+            let count = ed.text.chars().count();
+            let sel = state
+                .cursor
+                .char_range()
+                .map(|r| (r.secondary.index.into(), r.primary.index.into()))
+                .unwrap_or((ed.caret.min(count), ed.caret.min(count)));
+            let e = if enter { code_editor::newline(&mut ed.text, sel, Lang::Python) } else { code_editor::indent(&mut ed.text, sel, shift_tab) };
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(e.anchor), egui::text::CCursor::new(e.caret))));
+            state.store(ui.ctx(), id);
+            ed.caret = e.caret;
+            ed.point = None;
+            edited = Some(e);
+        }
+    }
+    let t = Tokens::get(ui.ctx());
+    let font = code_editor::font();
+    let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+        let s = buf.as_str();
+        let marks: Vec<(std::ops::Range<usize>, egui::Color32)> = python_refs(s).iter().map(|r| (r.0..r.1, t.ref_color(r.4, false))).collect();
+        let job = code_editor::layout_job_marked(s, Lang::Python, &code_editor::font(), t.text, &t.syntax, &marks, wrap_width);
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    let synced = ed.request_focus || ed.sync_caret;
+    let caret_index = ed.caret;
+    let scroll_to = synced || edited.is_some();
+    let scrolled =
+        egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(max_height.max(1.0)).auto_shrink([false, true]).show(ui, |ui| {
+            let output = TextEdit::multiline(&mut ed.text)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .font(font)
+                .desired_width(width)
+                .desired_rows(1)
+                .layouter(&mut layouter)
+                .lock_focus(true)
+                .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+                .show(ui);
+            // A caret moved by our own keys isn't the TextEdit's doing, so it doesn't scroll to it.
+            if scroll_to {
+                let caret = output.galley.pos_from_cursor(egui::text::CCursor::new(caret_index)).translate(output.galley_pos.to_vec2());
+                ui.scroll_to_rect(caret.expand(2.0), None);
+            }
+            output
+        });
+    let mut output = scrolled.inner;
+    let resp = output.response.clone();
+    if synced {
+        if ed.request_focus {
+            resp.request_focus();
+        }
+        ed.request_focus = false;
+        ed.sync_caret = false;
+        let cursor = egui::text::CCursor::new(ed.caret);
+        output.state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
+        output.state.store(ui.ctx(), id);
+    } else if let Some(r) = output.cursor_range {
+        ed.caret = r.primary.index.into();
+    }
+    if resp.changed() {
+        // Typing ends the pointed reference: the next click inserts a new one.
+        ed.point = None;
+    }
+    app.session.mode = if ed.py_point { gridcraft_engine::Mode::Point } else { gridcraft_engine::Mode::Edit };
+    let lines = output.galley.rows.len().max(1);
+    let caret = Some(output.galley.pos_from_cursor(egui::text::CCursor::new(ed.caret)).translate(output.galley_pos.to_vec2()));
+    app.editor = Some(ed);
+    if cancel {
+        app.cancel_edit();
+    } else if leave {
+        app.leave_python();
+    } else if commit {
+        app.commit_edit(0, 0, false, false);
     }
     EditorInfo { lines, caret }
 }
@@ -553,7 +728,16 @@ fn cycle_anchor(ed: &mut crate::editor::EditState) {
 fn function_names() -> Vec<String> {
     static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     NAMES
-        .get_or_init(|| gridcraft_engine::cmd::formulas::function_list().iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect())
+        .get_or_init(|| {
+            let mut names: Vec<String> =
+                gridcraft_engine::cmd::formulas::function_list().iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect();
+            // PY isn't a worksheet function: picking it (=PY, Tab) starts a Python cell.
+            if !names.iter().any(|n| n == "PY") {
+                names.push("PY".into());
+                names.sort();
+            }
+            names
+        })
         .clone()
 }
 

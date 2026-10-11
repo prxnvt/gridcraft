@@ -373,6 +373,7 @@ fn formula_cell(text: &str) -> gridcraft_model::Cell {
         value: gridcraft_core::Value::text("cached"),
         formula: Some(std::sync::Arc::new(gridcraft_model::Formula::new(text))),
         style: Default::default(),
+        py: None,
     }
 }
 
@@ -438,7 +439,11 @@ fn load_limits_apply_to_every_format() {
         let sh = wb.sheet(0).unwrap();
         let formula = |a: &str| sh.cell(gridcraft_core::CellRef::parse(a).unwrap()).and_then(|c| c.formula.clone());
         assert!(formula("A1").is_none() && formula("B1").is_none() && formula("C1").is_none(), "{file}");
-        assert!(formula("A2").is_some() && formula("C2").is_some(), "{file}");
+        assert!(formula("A2").is_some(), "{file}");
+        // A PY() formula within the limits is a Python cell; the one over them is only a value.
+        let py = |a: &str| sh.cell(gridcraft_core::CellRef::parse(a).unwrap()).and_then(|c| c.py.clone());
+        assert_eq!(py("C2").map(|p| p.code.chars().count()), Some(7_000), "{file}");
+        assert!(py("C1").is_none(), "{file}");
         assert!(!wb.names.iter().any(|n| n.name == "LongName"), "{file}");
         assert!(warnings.len() >= 4, "{file}: {warnings:?}");
     }

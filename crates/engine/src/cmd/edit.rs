@@ -118,24 +118,31 @@ pub fn specs() -> Vec<CommandSpec> {
 
 // ---------------------------------------------------------------- entry
 
+/// Typing `=PY(` doesn't make a Python cell; this says what does.
+pub(crate) const PY_FORMULA: &str =
+    "Python cells are made with Formulas › Insert Python (the python.set command, with the code as `code`), not by typing =PY(…).";
+
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Inherits the destination's cell, row or column style, including its number
 /// format, before parsing. Errors when the formula can't be parsed.
 pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
     if input.is_empty() {
-        let c = Cell { value: Value::Empty, formula: None, style };
+        let c = Cell { value: Value::Empty, formula: None, style, py: None };
         return Ok(if c.is_blank() { None } else { Some(c) });
     }
     let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
     if fmt_is_text {
-        return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
+        return Ok(Some(Cell { value: Value::text(input), formula: None, style, py: None }));
     }
     let is_formula = input.starts_with('=')
         || (input.len() > 1
             && (input.starts_with('+') || input.starts_with('-'))
             && gridcraft_core::parse::parse_number_text(input).is_none()
             && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
+    if is_formula && gridcraft_model::python::is_py_formula(input) {
+        return Err(EngineError::Other(PY_FORMULA.into()));
+    }
     if is_formula {
         let body = input.strip_prefix('=').unwrap_or(input);
         // Excel closes missing parentheses for you.
@@ -199,7 +206,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if input.contains('\n') && !wb.styles.get(style).align.wrap {
         style = wb.styles.derive(style, |s| s.align.wrap = true);
     }
-    Ok(Some(Cell { value: parsed.value, formula: None, style }))
+    Ok(Some(Cell { value: parsed.value, formula: None, style, py: None }))
 }
 
 fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
@@ -227,7 +234,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(sheet)?;
             // The array takes the whole range: other cells in it lose their contents.
             for c in range.iter().skip(1).take(1_000_000) {
-                if let Some(old) = sh.cells.get(c).filter(|x| !x.value.is_empty() || x.formula.is_some()) {
+                if let Some(old) = sh.cells.get(c).filter(|x| x.has_content()) {
                     let style = old.style;
                     sh.set_cell(c, Cell { style, ..Cell::default() });
                 }
@@ -289,10 +296,14 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                         value: Value::number(n.as_f64().unwrap_or(0.0)),
                         formula: None,
                         style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
+                        py: None,
                     }),
-                    Json::Bool(b) => {
-                        Some(Cell { value: Value::Bool(*b), formula: None, style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default() })
-                    }
+                    Json::Bool(b) => Some(Cell {
+                        value: Value::Bool(*b),
+                        formula: None,
+                        style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
+                        py: None,
+                    }),
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
                 };
                 let sh = cx.sheet_mut(sheet)?;
@@ -531,7 +542,7 @@ fn go_to_special(s: &mut Session, p: &Json) -> Result<Json> {
         let v = sheet.value(c);
         let ok = match kind {
             "blanks" => v.is_empty(),
-            "constants" => cell.is_some_and(|x| x.formula.is_none() && !x.value.is_empty()),
+            "constants" => cell.is_some_and(|x| x.formula.is_none() && x.py.is_none() && !x.value.is_empty()),
             "formulas" => cell.is_some_and(|x| x.formula.is_some()),
             "comments" | "notes" => sheet.comments.contains_key(&c),
             "errors" => v.is_error(),
@@ -835,7 +846,11 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         };
                         let src_val = src_sheet.value(sc);
                         let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
-                        if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
+                        if skip_blanks
+                            && src_picture.is_none()
+                            && src_val.is_empty()
+                            && src_cell.as_ref().is_none_or(|x| x.formula.is_none() && x.py.is_none())
+                        {
                             continue;
                         }
                         let old = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell(dest)).cloned().unwrap_or_default();
@@ -875,6 +890,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             };
                             new.formula = Some(std::sync::Arc::new(Formula::new(&format!("={sheet_prefix}{}", sc.a1()))));
                             new.value = Value::Empty;
+                            new.py = None;
                             new_picture = None;
                         } else {
                             let sc_cell = src_cell.clone().unwrap_or_default();
@@ -883,6 +899,8 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                     new_picture = src_picture.clone();
                                     new.formula = shift(&sc_cell);
                                     new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
+                                    // A Python cell's code travels with it, unchanged.
+                                    new.py = sc_cell.py.clone();
                                     let st = map_style(sc_cell.style, &mut cx.wb);
                                     new.style = if what == What::AllExceptBorders {
                                         let borders = cx.wb.styles.get(old.style).borders;
@@ -895,6 +913,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                     new_picture = src_picture.clone();
                                     new.formula = shift(&sc_cell);
                                     new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
+                                    new.py = sc_cell.py.clone();
                                     if what == What::FormulasAndNumberFormats {
                                         let nf = src_wb.styles.get(sc_cell.style).num_fmt.clone();
                                         new.style = cx.wb.styles.derive(old.style, |s| s.num_fmt = nf);
@@ -903,6 +922,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 What::Values | What::ValuesAndNumberFormats => {
                                     new_picture = src_picture.clone();
                                     new.formula = None;
+                                    new.py = None;
                                     new.value = src_val.clone();
                                     if what == What::ValuesAndNumberFormats {
                                         let nf = src_wb.styles.get(sc_cell.style).num_fmt.clone();
@@ -916,6 +936,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             if op != "none"
                                 && matches!(what, What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas)
                                 && new.formula.is_none()
+                                && new.py.is_none()
                             {
                                 if old_picture.is_some() || new_picture.is_some() {
                                     new_picture = None;
@@ -1065,10 +1086,11 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 }
 
 /// The hook every reference-moving edit (insert and delete of lines or cells, cut-move, sheet
-/// rename and delete) runs over the cells floating objects point at: chart series and control
-/// links. `f` maps a reference held by an object on sheet `host` to its new form. Text that
-/// doesn't parse is kept.
+/// rename and delete) runs over the cells floating objects point at (chart series and control
+/// links) and over the `xl("…")` references in Python cells. `f` maps a reference held on sheet
+/// `host` to its new form. Text that doesn't parse is kept.
 pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(&str, gridcraft_formula::Expr) -> gridcraft_formula::Expr) {
+    rewrite_python_refs(wb, &f);
     for si in 0..wb.sheets.len() {
         let Some(host) = wb.sheets.get(si).filter(|s| !s.charts.is_empty() || !s.controls.is_empty()).map(|s| s.name.clone()) else { continue };
         let Some(sh) = wb.sheet_mut(si) else { continue };
@@ -1087,6 +1109,39 @@ pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(
         }
         for c in sh.controls.iter_mut() {
             c.link = c.link.as_deref().map(fix);
+        }
+    }
+}
+
+/// Rewrites the `xl("…")` literals in every Python cell with `f` (see [`rewrite_cell_links`]). A
+/// literal is only replaced when the reference it names changed.
+fn rewrite_python_refs(wb: &mut gridcraft_model::Workbook, f: &impl Fn(&str, gridcraft_formula::Expr) -> gridcraft_formula::Expr) {
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let host = sh.name.clone();
+        let mut new_code: Vec<(CellRef, String)> = Vec::new();
+        for (c, cell) in sh.cells.iter() {
+            let Some(py) = &cell.py else { continue };
+            let changed = gridcraft_model::python::rewrite_xl(&py.code, |reference| {
+                let expr = gridcraft_formula::parse(reference).ok()?;
+                let before = gridcraft_formula::print(&expr);
+                let after = gridcraft_formula::print(&f(&host, expr));
+                (after != before).then_some(after)
+            });
+            if let Some(code) = changed {
+                new_code.push((c, code));
+            }
+        }
+        if new_code.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for (c, code) in new_code {
+            if let Some(cell) = sh.cells.get_mut(c)
+                && let Some(py) = cell.py.as_mut()
+            {
+                std::sync::Arc::make_mut(py).code = code;
+            }
         }
     }
 }
@@ -1114,8 +1169,7 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                         sh.remove_cell(c);
                     }
                     "contents" => {
-                        cell.value = Value::Empty;
-                        cell.formula = None;
+                        cell.clear_content();
                         sh.set_cell(c, cell);
                     }
                     "formats" => {

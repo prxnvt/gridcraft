@@ -30,6 +30,7 @@ pub mod panes;
 pub mod pivot_calc_ui;
 pub mod pivot_filter;
 pub mod pivot_pane;
+pub mod python_ui;
 pub mod ribbon;
 pub mod solver_ui;
 pub mod tabs;
@@ -117,6 +118,8 @@ pub struct SheetView {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Native picker for a program (Python Options' interpreter).
+    pub pick_program: Option<Box<dyn Fn() -> Option<String>>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
@@ -212,7 +215,10 @@ pub fn confirm_text(e: &str) -> Option<String> {
 }
 
 impl SheetApp {
-    pub fn new(session: Session, services: Services) -> SheetApp {
+    pub fn new(mut session: Session, services: Services) -> SheetApp {
+        // Python cells run in the background, stepped every frame, so a slow cell never blocks
+        // the window.
+        session.set_python_background(true);
         SheetApp {
             session,
             ui: UiState::default(),
@@ -408,6 +414,12 @@ impl SheetApp {
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
             }
+            "ui.pane" => {
+                // `{name}` shows a task pane (comments, watch, selection, formatChart,
+                // pythonDiagnostics); no name closes it.
+                self.grid.pane = p.get("name").and_then(Json::as_str).filter(|n| !n.is_empty()).map(str::to_string);
+                Ok(json!({"pane": self.grid.pane}))
+            }
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
@@ -502,6 +514,8 @@ impl SheetApp {
     }
 
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
+    /// Editing a Python cell (rather than typing over it) happens in the formula bar, in Python
+    /// mode.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
@@ -510,6 +524,10 @@ impl SheetApp {
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        if text.is_none() && sh.cell(at).is_some_and(|c| c.py.is_some()) {
+            self.begin_python_edit();
+            return;
+        }
         // A picture has no editable scalar text. Selecting it, F2, or clicking
         // the formula bar must not turn its fallback value into a text edit.
         // Typing still starts an intentional replacement.
@@ -539,9 +557,137 @@ impl SheetApp {
         self.session.mode = if replace { gridcraft_engine::Mode::Enter } else { gridcraft_engine::Mode::Edit };
     }
 
+    /// Starts editing the active cell in Python mode, in the formula bar, with its code (empty
+    /// for a cell that isn't a Python cell yet). Nothing changes until the code is committed.
+    pub fn begin_python_edit(&mut self) {
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some(("Text Box".into(), clean_error(&e)));
+            return;
+        }
+        let Some(d) = self.session.active() else { return };
+        let Some(sh) = d.wb.active() else { return };
+        let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        let code = sh.cell(at).and_then(|c| c.py.as_ref()).map(|p| p.code.clone()).unwrap_or_default();
+        let mut ed = editor::EditState::python(d.wb.active_sheet, at, code);
+        ed.locale = self.ui.language.formula_locale();
+        self.editor = Some(ed);
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Formulas › Insert Python › Insert xl() Reference: turns on Python mode's pointing (as F2
+    /// does), starting a Python edit of the active cell if none is open, so the next click or drag
+    /// on the sheet inserts `xl("…")`.
+    pub fn point_python(&mut self) {
+        if !self.editor.as_ref().is_some_and(|e| e.python) {
+            if self.editor.is_some() {
+                self.toggle_python();
+            } else {
+                self.begin_python_edit();
+            }
+        }
+        if let Some(ed) = self.editor.as_mut().filter(|e| e.python) {
+            ed.py_point = true;
+            ed.point = None;
+            ed.point_cell = None;
+            ed.request_focus = true;
+            self.session.mode = gridcraft_engine::Mode::Point;
+            self.toast = Some(("Click or drag on the sheet to insert an xl() reference".into(), now_ms()));
+        }
+    }
+
+    /// Whether the cell is a Python cell.
+    pub fn is_python_cell(&self, sheet: usize, at: CellRef) -> bool {
+        self.session.active().and_then(|d| d.wb.sheet(sheet)).and_then(|sh| sh.cell(at)).is_some_and(|c| c.py.is_some())
+    }
+
+    /// Leaves Python mode (the PY badge, Ctrl+Alt+Shift+P, Backspace in an empty editor): Python
+    /// goes off and the input is cleared. Committing the empty input then turns a Python cell
+    /// back into a normal cell, which undo reverses; Esc keeps the cell as it was. Not editing, it
+    /// starts that edit on the active Python cell.
+    pub fn leave_python(&mut self) {
+        if self.editor.is_none() {
+            let Some(d) = self.session.active() else { return };
+            if !self.is_python_cell(d.wb.active_sheet, d.selection.active) {
+                return;
+            }
+            self.begin_python_edit();
+        }
+        let Some((sheet, cell)) = self.editor.as_ref().filter(|e| e.python).map(|e| (e.sheet, e.cell)) else { return };
+        let was = self.is_python_cell(sheet, cell);
+        if let Some(ed) = self.editor.as_mut() {
+            ed.leave_python(was);
+        }
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Ctrl+Alt+Shift+P: Python mode on or off. Not editing, it starts a Python edit of the
+    /// active cell; in a formula edit, the text becomes code.
+    pub fn toggle_python(&mut self) {
+        match self.editor.as_mut() {
+            Some(ed) if ed.python => self.leave_python(),
+            Some(ed) => {
+                ed.enter_python();
+                self.session.mode = gridcraft_engine::Mode::Edit;
+            }
+            None => self.begin_python_edit(),
+        }
+    }
+
+    /// Commits a Python-mode edit through `python.set`; the cell stays selected.
+    fn commit_python(&mut self, ed: editor::EditState) -> bool {
+        self.session.mode = gridcraft_engine::Mode::Ready;
+        let sheet = self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map(|s| s.name.clone());
+        let mut p = json!({"cell": ed.cell.a1(), "code": ed.text});
+        if let Some(sheet) = sheet {
+            p["sheet"] = json!(sheet);
+        }
+        match self.session.run("python.set", p) {
+            Ok(_) => {
+                self.after_engine();
+                true
+            }
+            Err(e) => {
+                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.editor = Some(ed);
+                self.session.mode = gridcraft_engine::Mode::Edit;
+                false
+            }
+        }
+    }
+
     /// Commits the edit; `then` moves the selection (dr, dc) afterwards.
     pub fn commit_edit(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
-        let Some(ed) = self.editor.take() else { return true };
+        let Some(mut ed) = self.editor.take() else { return true };
+        if ed.python {
+            return self.commit_python(ed);
+        }
+        // A bare `=PY` entered with Enter or Tab starts Python mode instead.
+        if ed.is_py_trigger() {
+            ed.enter_python();
+            self.editor = Some(ed);
+            self.session.mode = gridcraft_engine::Mode::Edit;
+            return false;
+        }
+        // Left Python mode and entered nothing: the Python cell becomes a normal cell.
+        if ed.py_left && ed.text.trim().is_empty() && self.is_python_cell(ed.sheet, ed.cell) {
+            self.session.mode = gridcraft_engine::Mode::Ready;
+            let sheet = self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map(|s| s.name.clone()).unwrap_or_default();
+            return match self.session.run("python.clear", json!({"cell": ed.cell.a1(), "sheet": sheet})) {
+                Ok(_) => {
+                    if dr != 0 || dc != 0 {
+                        self.move_after_enter(dr, dc);
+                    }
+                    self.after_engine();
+                    true
+                }
+                Err(e) => {
+                    self.message = Some(("GridCraft".into(), clean_error(&e)));
+                    self.editor = Some(ed);
+                    self.session.mode = gridcraft_engine::Mode::Edit;
+                    false
+                }
+            };
+        }
         self.session.mode = gridcraft_engine::Mode::Ready;
         let text = match &ed.completion {
             Some(full) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
@@ -634,6 +780,11 @@ impl SheetApp {
         self.effective_dark = ctx.theme() == egui::Theme::Dark;
         control::poll(self, ctx);
         self.drive_job(ctx);
+        // Python cells running in the background: take results, start the next cell.
+        if self.session.python_busy() {
+            self.session.step_python();
+            ctx.request_repaint_after(std::time::Duration::from_millis(15));
+        }
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
@@ -701,9 +852,11 @@ impl SheetApp {
         self.ribbon_keys(&ctx);
         ribbon::title_bar(self, ui);
         ribbon::show(self, ui);
-        if self.ui.formula_bar {
+        // Python code is edited in the formula bar, so it shows while that happens.
+        if self.ui.formula_bar || self.editor.as_ref().is_some_and(|e| e.python) {
             formula_bar::show(self, ui);
         }
+        python_ui::enable_bar(self, ui);
         if self.ui.status_bar {
             tabs::status_bar(self, ui);
         }

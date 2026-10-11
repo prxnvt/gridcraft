@@ -764,7 +764,7 @@ fn checkbox(s: &mut Session, p: &Json) -> Result<Json> {
                 let sh = cx.sheet_mut(si)?;
                 let v = sh.value(c);
                 let value = if matches!(v, Value::Bool(_)) { v } else { Value::Bool(false) };
-                sh.set_cell(c, Cell { value, formula: None, style: new });
+                sh.set_cell(c, Cell { value, formula: None, style: new, py: None });
                 cx.touch(si, c);
             }
         }
@@ -785,6 +785,7 @@ fn toggle_checkbox(s: &mut Session, p: &Json) -> Result<Json> {
             if let Some(cell) = sh.cells.get_mut(c)
                 && let Value::Bool(b) = cell.value
                 && cell.formula.is_none()
+                && cell.py.is_none()
             {
                 cell.value = Value::Bool(!b);
                 cx.changed.push((si, c));

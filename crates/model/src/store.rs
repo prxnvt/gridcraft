@@ -118,7 +118,7 @@ impl CellStore {
     }
     /// Last stored row in column `col` at or above `below_or_at` (for Ctrl+arrow navigation).
     pub fn has(&self, c: CellRef) -> bool {
-        self.get(c).is_some_and(|cell| !cell.value.is_empty() || cell.formula.is_some())
+        self.get(c).is_some_and(|cell| cell.has_content())
     }
     /// Positions whose cells differ between `self` and `other` (stored on one side only, or not
     /// equal). Bands both stores share are skipped, so comparing an edited copy with the store

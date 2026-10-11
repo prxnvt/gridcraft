@@ -25,6 +25,8 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
+    let name = tr(ui, tip);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -93,6 +95,8 @@ pub fn big_button_accent(ui: &mut Ui, icon: Icon, accent: Option<Color32>, label
     }
     icons::paint_accent(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text, accent);
     paint_big_label(ui, rect, &lines, dropdown);
+    let name = label.replace('\n', " ");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
     resp.on_hover_text(tr(ui, tip))
 }
 
