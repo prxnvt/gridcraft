@@ -57,7 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Diagnostics",
             ["Formulas", "Python"],
             None,
-            "{sheet?, errorsOnly?: bool} → {runs: [{seq, sheet, cell, status, ms, stdout, stderr, error?, line?}]}, the last 500 Python runs, oldest first",
+            "{sheet?, errorsOnly?: bool} → {backend: {kind, summary, path?, version?, pandas?, numpy?, rejected}, runs: [{seq, sheet, cell, status, ms, stdout, stderr, error?, line?}]}: which Python runs cells, and the last 500 runs, oldest first",
             has_doc,
             diagnostics
         ),
@@ -76,7 +76,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Options",
             [],
             None,
-            "{timeoutSeconds?: 0.1..3600} → {timeoutSeconds}: how long one Python cell may run (default 5)",
+            "{timeoutSeconds?: 0.1..3600, interpreter?: path (empty: look for one), detect?: bool} → {timeoutSeconds, interpreter, backend}: how long one Python cell may run (default 5), and the user's Python (3.11 or newer) that runs cells instead of the built-in one; `detect` looks for it again",
             always,
             options
         ),
@@ -200,6 +200,8 @@ fn reset(s: &mut Session, p: &Json) -> Result<Json> {
     if bool_param(p, "clearDiagnostics").unwrap_or(false) {
         s.doc_mut()?.py_log.clear();
     }
+    // The user may have installed Python or a package since: look again.
+    s.python_detect();
     s.python_reset()?;
     Ok(json!({"runs": s.doc()?.py_log.len()}))
 }
@@ -217,9 +219,10 @@ fn diagnostics(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let sheet_name = sheet.and_then(|i| d.wb.sheet(i)).map(|sh| sh.name.clone());
     let errors_only = bool_param(p, "errorsOnly").unwrap_or(false);
-    let runs: Vec<&crate::python::PyRunLog> =
-        d.py_log.iter().filter(|r| sheet_name.as_ref().is_none_or(|n| r.sheet == *n)).filter(|r| !errors_only || r.status != "ok").collect();
-    Ok(json!({"runs": runs}))
+    let runs: Vec<crate::python::PyRunLog> =
+        d.py_log.iter().filter(|r| sheet_name.as_ref().is_none_or(|n| r.sheet == *n)).filter(|r| !errors_only || r.status != "ok").cloned().collect();
+    let backend = s.python_backend();
+    Ok(json!({"backend": backend, "runs": runs}))
 }
 
 fn clear_diagnostics(s: &mut Session, _p: &Json) -> Result<Json> {
@@ -266,5 +269,19 @@ fn options(s: &mut Session, p: &Json) -> Result<Json> {
         }
         s.prefs.python_timeout_seconds = t;
     }
-    Ok(json!({"timeoutSeconds": s.prefs.python_timeout_seconds}))
+    let mut detect = bool_param(p, "detect").unwrap_or(false);
+    if let Some(path) = p.get("interpreter") {
+        let Some(path) = path.as_str() else { return Err(bad("python.options", "`interpreter` is a path, or empty to look for Python")) };
+        if path.len() > 4_096 || path.contains('\0') {
+            return Err(bad("python.options", "`interpreter` is not a usable path"));
+        }
+        let path = path.trim().to_string();
+        detect |= path != s.prefs.python_interpreter;
+        s.prefs.python_interpreter = path;
+    }
+    if detect {
+        s.python_detect();
+    }
+    let backend = s.python_backend();
+    Ok(json!({"timeoutSeconds": s.prefs.python_timeout_seconds, "interpreter": s.prefs.python_interpreter, "backend": backend}))
 }

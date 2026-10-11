@@ -179,6 +179,8 @@ fn main() -> eframe::Result<()> {
     }
     // Python cells run in this binary started again as the worker.
     gridcraft_python::client::set_default_launcher(gridcraft_python::client::Launcher::current_exe());
+    // The user's own Python (3.11 or newer) is preferred when there is one.
+    gridcraft_python::interp::enable_search();
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to

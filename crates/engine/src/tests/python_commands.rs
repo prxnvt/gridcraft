@@ -161,3 +161,42 @@ fn table_headers_refuse_python() {
     py(&mut s, "B2", "40 + 2");
     assert_eq!(v(&s, "B2"), Value::Number(42.0), "body cells take Python");
 }
+
+#[test]
+fn options_and_diagnostics_report_the_python_that_runs_cells() {
+    use gridcraft_python::interp::{Detection, Interpreter, Rejected};
+    let mut s = py_session();
+    // An explicit launcher (tests) never searches.
+    let o = s.execute("python.options", json!({})).unwrap();
+    assert_eq!(o["backend"]["kind"], "custom");
+    assert_eq!(o["interpreter"], "");
+    let rejected = vec![Rejected { path: "/usr/bin/python3".into(), reason: "it is Python 3.9.6; Python cells need 3.11 or newer".into() }];
+    s.set_python_detection(Detection { found: None, rejected: rejected.clone() });
+    let d = s.execute("python.diagnostics", json!({})).unwrap();
+    assert_eq!(d["backend"]["kind"], "builtin");
+    assert_eq!(d["backend"]["summary"], "Running on the built-in Python (Monty): install Python 3.11+ for packages");
+    assert_eq!(d["backend"]["rejected"][0]["reason"], "it is Python 3.9.6; Python cells need 3.11 or newer");
+    let found = Interpreter {
+        program: "/opt/homebrew/bin/python3".into(),
+        args: vec![],
+        version: "3.14.0".into(),
+        pandas: Some("2.2.3".into()),
+        numpy: None,
+        externally_managed: true,
+        source: "PATH".into(),
+    };
+    s.set_python_detection(Detection { found: Some(found), rejected });
+    let b = &s.execute("python.options", json!({})).unwrap()["backend"];
+    assert_eq!(b["kind"], "cpython");
+    assert_eq!(b["summary"], "Running on CPython 3.14 (/opt/homebrew/bin/python3), pandas 2.2.3");
+    assert_eq!((b["version"].as_str(), b["externallyManaged"].as_bool()), (Some("3.14.0"), Some(true)));
+    // The path is a preference; bad values are refused.
+    let o = s.execute("python.options", json!({"interpreter": "  /nowhere/python  "})).unwrap();
+    assert_eq!(o["interpreter"], "/nowhere/python");
+    assert_eq!(s.prefs.python_interpreter, "/nowhere/python");
+    assert!(s.execute("python.options", json!({"interpreter": 3})).is_err());
+    assert!(s.execute("python.options", json!({"interpreter": "a\u{0}b"})).is_err());
+    assert!(s.execute("python.options", json!({"interpreter": "x".repeat(5_000)})).is_err());
+    let o = s.execute("python.options", json!({"interpreter": "", "detect": true})).unwrap();
+    assert_eq!(o["interpreter"], "");
+}

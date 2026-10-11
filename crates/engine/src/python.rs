@@ -23,8 +23,10 @@ use gridcraft_core::{CellError, CellRef, Value};
 use gridcraft_formula::{BinOp, Expr};
 use gridcraft_model::{CalcMode, PyOutput, Sheet, Workbook};
 use gridcraft_python::client::{Event, Failure, FailureKind, Launcher, PyWorker, RunOutcome};
+use gridcraft_python::interp::{Detection, Detector};
 use gridcraft_python::{Limits, XlReply};
 use serde::Serialize;
+use serde_json::{Value as Json, json};
 
 use crate::{DocState, Prefs, Session};
 
@@ -63,6 +65,11 @@ pub struct PyRuntime {
     docs: HashMap<u64, DocPy>,
     /// The running command already refreshed its workbook's Python cells.
     pub(crate) refreshed: bool,
+    /// The search for the user's Python (started when first needed, and again when the options
+    /// change, on Reset Runtime and from Detect Again).
+    detector: Option<Detector>,
+    /// Whether to look for the user's Python; `None` follows the app (`interp::enable_search`).
+    search: Option<bool>,
 }
 
 #[derive(Default)]
@@ -416,6 +423,94 @@ fn write_outcome(d: &mut DocState, key: Key, o: &RunOutcome) -> HashMap<usize, C
     };
     push_log(d, entry);
     changed
+}
+
+/// How long a headless caller waits for the search for Python.
+const DETECT_WAIT: Duration = Duration::from_secs(30);
+
+impl Session {
+    /// Whether this session looks for the user's Python: the app turned the search on and no
+    /// launcher was set explicitly.
+    fn python_searches(&self) -> bool {
+        self.python.launcher.is_none() && self.python.search.unwrap_or_else(gridcraft_python::interp::search_enabled)
+    }
+
+    /// Starts looking for the user's Python again (the options changed, Reset Runtime, Detect
+    /// Again). Cells wait for the result.
+    pub fn python_detect(&mut self) {
+        if self.python_searches() {
+            self.python.detector = Some(Detector::start(self.prefs.python_interpreter.clone()));
+        }
+    }
+
+    /// Uses `detection` as the result of the search (tests, and hosts that search themselves).
+    pub fn set_python_detection(&mut self, detection: Detection) {
+        self.python.search = Some(true);
+        self.python.launcher = None;
+        self.python.detector = Some(Detector::ready(detection));
+    }
+
+    /// The search's result: `None` while it runs (headless sessions wait for it), or when this
+    /// session doesn't search.
+    pub fn python_detection(&mut self) -> Option<&Detection> {
+        if !self.python_searches() {
+            return None;
+        }
+        if self.python.detector.is_none() {
+            self.python.detector = Some(Detector::start(self.prefs.python_interpreter.clone()));
+        }
+        let wait = !self.python.background;
+        let det = self.python.detector.as_mut()?;
+        if wait { det.wait(DETECT_WAIT) } else { det.poll() }
+    }
+
+    /// Which Python runs cells, for Diagnostics, Python Options and agents:
+    /// `{kind: cpython|builtin|detecting|custom|unavailable, summary, path?, version?, pandas?,
+    /// numpy?, externallyManaged?, source?, rejected: [{path, reason}]}`.
+    pub fn python_backend(&mut self) -> Json {
+        if !gridcraft_python::AVAILABLE {
+            return json!({"kind": "unavailable", "summary": "Python isn't available in the web version", "rejected": []});
+        }
+        if !self.python_searches() {
+            if let Some(Launcher::Unavailable(why)) = &self.python.launcher {
+                return json!({"kind": "unavailable", "summary": why, "rejected": []});
+            }
+            let kind = if self.python.launcher.is_some() { "custom" } else { "builtin" };
+            return json!({"kind": kind, "summary": BUILTIN_SUMMARY, "rejected": []});
+        }
+        let Some(d) = self.python_detection() else {
+            return json!({"kind": "detecting", "summary": "Looking for Python…", "rejected": []});
+        };
+        backend_json(d)
+    }
+}
+
+/// The Diagnostics header when cells run on the built-in Python.
+pub const BUILTIN_SUMMARY: &str = "Running on the built-in Python (Monty): install Python 3.11+ for packages";
+
+fn backend_json(d: &Detection) -> Json {
+    let rejected: Vec<Json> = d.rejected.iter().map(|r| json!({"path": r.path, "reason": r.reason})).collect();
+    match &d.found {
+        None => json!({"kind": "builtin", "summary": BUILTIN_SUMMARY, "rejected": rejected}),
+        Some(i) => {
+            let path = i.program.display().to_string();
+            let pandas = match &i.pandas {
+                Some(v) => format!("pandas {v}"),
+                None => "no pandas".to_string(),
+            };
+            json!({
+                "kind": "cpython",
+                "summary": format!("Running on CPython {} ({path}), {pandas}", i.short_version()),
+                "path": path,
+                "version": i.version,
+                "pandas": i.pandas,
+                "numpy": i.numpy,
+                "externallyManaged": i.externally_managed,
+                "source": i.source,
+                "rejected": rejected,
+            })
+        }
+    }
 }
 
 impl Session {
