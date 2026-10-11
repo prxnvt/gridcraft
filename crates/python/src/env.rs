@@ -1150,5 +1150,7 @@ mod tests {
         assert_eq!(o.message, "The install was cancelled.");
     }
 
+    // Only the tests that run real programs (Unix) wait.
+    #[cfg(unix)]
     use std::time::Duration;
 }
