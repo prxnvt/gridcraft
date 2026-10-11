@@ -42,6 +42,9 @@ pub trait Transport: Send {
     }
 }
 
+/// The least time a worker gets to become ready (a cold start of pandas can take seconds).
+const INIT_ALLOWANCE: Duration = Duration::from_secs(30);
+
 /// How often the memory watchdog looks.
 const RSS_EVERY: Duration = Duration::from_millis(50);
 /// Time over the limit a run gets before the parent kills it: the worker's own time limit stops
@@ -200,7 +203,9 @@ impl PyWorker {
         let head = self.inflight.front()?;
         let started = head.started?;
         let limit = Duration::from_millis(self.limits.timeout_ms);
-        let init = if self.conn.as_ref().is_some_and(|c| c.ready) { Duration::ZERO } else { limit };
+        // Starting takes longer: the worker loads pandas and numpy (when installed) and runs the
+        // initialization code before it is ready.
+        let init = if self.conn.as_ref().is_some_and(|c| c.ready) { Duration::ZERO } else { limit.max(INIT_ALLOWANCE) };
         Some(started + limit + init + KILL_GRACE)
     }
 
@@ -240,6 +245,13 @@ impl PyWorker {
                 if let Some(c) = self.conn.as_mut() {
                     c.ready = true;
                 }
+                // The current run's time starts now: starting the worker (loading pandas, the
+                // initialization code) isn't the cell's time.
+                if let Some(head) = self.inflight.front_mut()
+                    && head.started.is_some()
+                {
+                    head.started = Some(now());
+                }
                 if let Some(e) = init_error {
                     events.push(Event::InitError(e));
                 }
@@ -261,7 +273,13 @@ impl PyWorker {
                 {
                     next.started = Some(now());
                 }
+                let restart = done.error.as_ref().is_some_and(|e| e.restart);
                 events.push(Event::Done(outcome(done, &self.limits)));
+                if restart {
+                    // The worker is stopped (runs behind this one fail as stopped); the next run
+                    // starts a fresh one.
+                    self.fail_all(FailureKind::Crashed, CRASH_MESSAGE.into(), events);
+                }
             }
         }
     }
@@ -797,6 +815,12 @@ mod cpython_tests {
                     .map(Value::from)
                     .unwrap_or_default(),
             ),
+            "D" => XlReply::Dated {
+                value: Array::new(3, 2, vec!["when".into(), "n".into(), 45292.0.into(), 1.0.into(), 45323.5.into(), 2.0.into()])
+                    .map(Value::from)
+                    .unwrap_or_default(),
+                dates: vec![2, 4],
+            },
             r => XlReply::Error(format!("`{r}` is not a reference (headers={headers})")),
         }
     }
@@ -854,6 +878,14 @@ mod cpython_tests {
             assert_eq!(value(&o), col(vec![1.0.into(), "#DIV/0!".into()]));
             assert_eq!(value(&w.run_blocking("len(xl('T'))", &mut cells)), Value::Number(3.0));
         }
+        // Cells formatted as dates come in as datetimes, and go back out as serials.
+        // (A frame with pandas, a list of rows without it.)
+        let o = w.run_blocking(
+            "d = xl('D')\nd = d.values.tolist() if hasattr(d, 'values') else d\n[d[1][0].isoformat(), d[2][0].isoformat(), d[1][1]]",
+            &mut cells,
+        );
+        assert_eq!(value(&o), col(vec!["2024-01-01T00:00:00".into(), "2024-02-01T12:00:00".into(), 1.0.into()]));
+        assert_eq!(value(&w.run_blocking("d[2][0]", &mut cells)), Value::Number(45323.5));
         // Errors carry their line; xl() errors are ValueErrors.
         let o = w.run_blocking("a = 1\nb = 2\n1 / 0", &mut cells);
         assert_eq!((failure(&o).line, failure(&o).kind), (Some(3), FailureKind::Error));
@@ -886,6 +918,15 @@ mod cpython_tests {
         let o = w.run_blocking("while True: pass", &mut cells);
         assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
         assert_eq!(value(&w.run_blocking("n", &mut cells)), Value::Number(5.0));
+        // A time limit that interrupts while modules are being loaded (here: one is added, then
+        // the loop) leaves the worker unfit: it is replaced.
+        let starts = w.starts();
+        let o = w.run_blocking("import sys, types\nsys.modules['gc_half'] = types.ModuleType('gc_half')\nwhile True: pass", &mut cells);
+        assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
+        assert!(!w.alive(), "stopped after the run");
+        assert_eq!(value(&w.run_blocking("import sys\n'gc_half' in sys.modules", &mut cells)), Value::Bool(false));
+        assert_eq!(w.starts(), starts + 1);
+        w.run_blocking("n = 5", &mut cells);
         // A long C call can't be interrupted: the parent kills the worker.
         let o = w.run_blocking("10 ** 10 ** 9", &mut cells);
         assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
@@ -966,6 +1007,27 @@ mod cpython_tests {
             Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).map(Value::from).unwrap_or_default()
         );
         assert_eq!(value(&w.run_blocking("pd.Timestamp('2024-01-01')", &mut cells)), Value::Number(45292.0));
+        // Dates make a datetime64 column that .dt works on, and Timestamps go back as serials.
+        let o =
+            w.run_blocking("dd = xl('D', headers=True)\n[str(dd['when'].dtype)[:10], dd['when'].dt.strftime('%Y-%m')[1], dd['n'].sum()]", &mut cells);
+        assert_eq!(value(&o), col(vec!["datetime64".into(), "2024-02".into(), 3.0.into()]));
+        assert_eq!(
+            value(&w.run_blocking("dd", &mut cells)),
+            Array::new(3, 2, vec!["when".into(), "n".into(), 45292.0.into(), 1.0.into(), 45323.5.into(), 2.0.into()])
+                .map(Value::from)
+                .unwrap_or_default()
+        );
+        // NaN in a frame is #NUM! (as a NaN float is); numpy scalars convert; NaT is empty.
+        let o = w.run_blocking("pd.DataFrame({'a': [1.0, float('nan')], 'b': [np.int64(2), np.float32(0.5)]})", &mut cells);
+        assert_eq!(
+            value(&o),
+            Array::new(3, 2, vec!["a".into(), "b".into(), 1.0.into(), 2.0.into(), Value::Error(CellError::Num), 0.5.into()])
+                .map(Value::from)
+                .unwrap_or_default()
+        );
+        assert_eq!(value(&w.run_blocking("pd.NaT", &mut cells)), Value::Empty);
+        assert_eq!(value(&w.run_blocking("np.bool_(True)", &mut cells)), Value::Bool(true));
+        assert_eq!(value(&w.run_blocking("np.float64('nan')", &mut cells)), Value::Error(CellError::Num));
         // Object-mode labels and tables.
         let out = |w: &mut PyWorker, code: &str| w.run_blocking(code, &mut cells).result.unwrap_or_default();
         let o = out(&mut w, "pd.DataFrame({'a': range(6), 'b': 1.5, 'c': 'x', 'd': True})");

@@ -340,7 +340,40 @@ fn resolve_xl(wb: &Workbook, si: usize, at: CellRef, reference: &str, max_cells:
     {
         return XlReply::Error(format!("xl(): `{reference}` has more than {max_cells} cells"));
     }
-    XlReply::Value(v)
+    let dates = date_cells(wb, si, &expr, &v);
+    if dates.is_empty() { XlReply::Value(v) } else { XlReply::Dated { value: v, dates } }
+}
+
+/// The positions in `v` (row-major) of numbers formatted as dates, when `expr` reads one area
+/// whose shape is `v`'s (a cell, a range, a name or table of one range).
+fn date_cells(wb: &Workbook, si: usize, expr: &Expr, v: &Value) -> Vec<u32> {
+    let (areas, _) = gridcraft_calc::precedents(wb, si, expr);
+    let [area] = areas.as_slice() else { return Vec::new() };
+    let Some(sh) = wb.sheet(area.sheet) else { return Vec::new() };
+    let (rows, cols) = match v {
+        Value::Array(a) => (a.rows, a.cols),
+        _ => (1, 1),
+    };
+    if area.range.height() as usize != rows || area.range.width() as usize != cols {
+        return Vec::new();
+    }
+    let mut formats: HashMap<gridcraft_model::StyleId, bool> = HashMap::new();
+    let mut out = Vec::new();
+    for (i, c) in area.range.iter().enumerate() {
+        let number = match v {
+            Value::Array(a) => a.data.get(i).is_some_and(Value::is_number),
+            v => v.is_number(),
+        };
+        if !number {
+            continue;
+        }
+        let id = sh.style_id(c);
+        let date = *formats.entry(id).or_insert_with(|| crate::display::number_format(wb.styles.get(id).num_fmt.as_str()).is_date());
+        if date && let Ok(i) = u32::try_from(i) {
+            out.push(i);
+        }
+    }
+    out
 }
 
 fn failure_error(kind: FailureKind) -> CellError {
@@ -1122,5 +1155,23 @@ mod tests {
             assert!(matches!(resolve_xl(&wb, 0, CellRef::new(5, 5), bad, max), XlReply::Error(_)), "{bad}");
         }
         assert!(matches!(resolve_xl(&wb, 0, CellRef::new(5, 5), "A1:B2", 3), XlReply::Error(_)));
+    }
+
+    #[test]
+    fn xl_marks_cells_formatted_as_dates() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1:B2", "values": [["When", "Units"], ["2024-01-01", 5]]})).unwrap();
+        let wb = s.doc().unwrap().wb.clone();
+        let max = 1_000_000;
+        match resolve_xl(&wb, 0, CellRef::new(5, 5), "A1:B2", max) {
+            XlReply::Dated { value: Value::Array(a), dates } => {
+                assert_eq!(dates, [2], "only the date: the header and the plain number aren't");
+                assert_eq!(a.get(1, 0), Some(&Value::Number(45292.0)));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(resolve_xl(&wb, 0, CellRef::new(5, 5), "A2", max), XlReply::Dated { dates, .. } if dates == [0]));
+        assert!(matches!(resolve_xl(&wb, 0, CellRef::new(5, 5), "B1:B2", max), XlReply::Value(_)));
     }
 }

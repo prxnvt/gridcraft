@@ -346,8 +346,30 @@ def _py(v):
     return None
 
 
-def _xl_value(value, headers):
+def _from_serial(x):
+    try:
+        return EPOCH + _dt.timedelta(days=float(x))
+    except (OverflowError, ValueError, TypeError):
+        return x
+
+
+def _with_dates(value, dates):
+    # Numbers formatted as dates arrive as datetimes (pandas makes datetime64 columns of them).
     v = _py(value)
+    if not dates:
+        return v
+    if not isinstance(v, list):
+        return _from_serial(v)
+    cols = len(v[0]) if v else 1
+    for i in dates:
+        r, c = divmod(int(i), max(cols, 1))
+        if 0 <= r < len(v) and 0 <= c < len(v[r]):
+            v[r][c] = _from_serial(v[r][c])
+    return v
+
+
+def _xl_value(value, headers, dates=None):
+    v = _with_dates(value, dates)
     if not isinstance(v, list):
         return v
     if _state["pandas"]:
@@ -387,6 +409,9 @@ def xl(reference, headers=False):
     reply = msg.get("reply") or {}
     if "error" in reply:
         raise ValueError(reply["error"])
+    if "dated" in reply:
+        dated = reply["dated"] or {}
+        return _xl_value(dated.get("value") or {"t": "Empty"}, headers, dated.get("dates") or [])
     return _xl_value(reply.get("value") or {"t": "Empty"}, headers)
 
 
@@ -444,6 +469,7 @@ def _run(token, code):
     saved = sys.stdout, sys.stderr
     timer = threading.Timer(_Limits.timeout, _fire, (token,))
     timer.daemon = True
+    modules = len(sys.modules)
     with _lock:
         _state["run"], _state["fired"], _state["xl_calls"] = token, False, 0
     try:
@@ -472,6 +498,10 @@ def _run(token, code):
         with _lock:
             _state["run"] = None
         sys.stdout, sys.stderr = saved
+    # A time limit that interrupted an import can leave a package half loaded, which breaks every
+    # later import of it: GridCraft starts a fresh worker.
+    if done["error"] and done["error"].get("timeout") and len(sys.modules) != modules:
+        done["error"]["restart"] = True
     done["stdout"], done["stderr"] = capture.text("out"), capture.text("err")
     done["elapsedMs"] = (time.perf_counter() - started) * 1000.0
     return done
@@ -508,6 +538,14 @@ def _main():
                     _state["pandas"] = importlib.util.find_spec("pandas") is not None
                 except Exception:
                     _state["pandas"] = False
+                # numpy and pandas load now, before any cell's time limit runs (a cold start
+                # of pandas can take seconds).
+                for name in ("numpy", "pandas"):
+                    try:
+                        if importlib.util.find_spec(name) is not None:
+                            __import__(name)
+                    except Exception:
+                        pass
                 init_code = msg.get("initCode") or ""
                 _restart(init_code)
             elif kind == "reset":

@@ -67,6 +67,9 @@ pub enum XlReply {
     Value(Value),
     /// The reference doesn't name cells (the message becomes a Python exception).
     Error(String),
+    /// Cells some of which are dates: `dates` are the positions (row-major, in the array; 0 for
+    /// a single cell) of numbers formatted as dates, which Python receives as `datetime`s.
+    Dated { value: Value, dates: Vec<u32> },
 }
 
 /// Worker to parent.
@@ -134,6 +137,9 @@ pub struct PyError {
     pub message: String,
     /// The worker's time limit stopped the code.
     pub timeout: bool,
+    /// The worker can't be trusted to run more code (its time limit interrupted an import,
+    /// which can leave a package half loaded): the parent starts a fresh one.
+    pub restart: bool,
 }
 
 /// One frame as a line (with [`FRAME_MARK`] and a newline).
@@ -195,6 +201,12 @@ mod tests {
         let run = ToWorker::Run { id: 3, code: "x = 1\n\"quoted\"".into() };
         assert_eq!(parse_to_worker(&to_worker_line(&run)), Some(run));
         let reply = ToWorker::XlValue { id: 3, reply: XlReply::Error("no such sheet".into()) };
+        assert_eq!(parse_to_worker(&to_worker_line(&reply)), Some(reply));
+        let reply = ToWorker::XlValue { id: 4, reply: XlReply::Dated { value: Value::Number(45292.0), dates: vec![0] } };
+        assert_eq!(
+            to_worker_line(&reply),
+            "{\"type\":\"xlValue\",\"id\":4,\"reply\":{\"dated\":{\"value\":{\"t\":\"Number\",\"v\":45292.0},\"dates\":[0]}}}\n"
+        );
         assert_eq!(parse_to_worker(&to_worker_line(&reply)), Some(reply));
         assert_eq!(parse_to_worker("garbage"), None);
     }

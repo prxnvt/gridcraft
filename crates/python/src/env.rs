@@ -430,7 +430,8 @@ pub struct InstallOutcome {
 
 /// Why a failed step failed, from what it printed.
 pub fn explain(kind: StepKind, output: &str, packages: &[String]) -> String {
-    let o = output.to_ascii_lowercase();
+    // Tools wrap long lines: compare with every run of white space as one space.
+    let o = output.to_ascii_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
     let has = |needles: &[&str]| needles.iter().any(|n| o.contains(n));
     if kind == StepKind::CreateEnv {
         if has(&["no module named venv", "ensurepip is not available", "no module named ensurepip"]) {
@@ -459,7 +460,7 @@ pub fn explain(kind: StepKind, output: &str, packages: &[String]) -> String {
         return "pip isn't installed in this Python environment. Install pip (python -m ensurepip) or uv, and try again.".into();
     }
     if has(&["no matching distribution found", "could not find a version that satisfies", "has no wheels", "no wheels with a matching", "no wheel"])
-        || has(&["not found in the package registry", "was not found in the package registry"])
+        || has(&["not found in the package registry", "no solution found when resolving"])
     {
         return format!(
             "No ready-made package (wheel) of {} is available for this computer and Python version, or the name is wrong. GridCraft installs only ready-made packages.",

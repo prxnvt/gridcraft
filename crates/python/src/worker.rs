@@ -183,7 +183,7 @@ impl<W: Write> Worker<W> {
         match result {
             Ok(value) => match to_output(&value.as_ref(), self.limits.output_cells) {
                 Ok(o) => done.output = Some(o),
-                Err(message) => done.error = Some(PyError { line: None, message, timeout: false }),
+                Err(message) => done.error = Some(PyError { line: None, message, timeout: false, restart: false }),
             },
             Err(e) => done.error = Some(e),
         }
@@ -242,7 +242,8 @@ impl<W: Write> Worker<W> {
             match parse_to_worker(&line) {
                 Some(ToWorker::XlValue { id: got, reply }) if got == id => {
                     return match reply {
-                        XlReply::Value(v) => ExtFunctionResult::Return(xl_object(&v, headers)),
+                        // The built-in Python gets dates as their serial numbers.
+                        XlReply::Value(v) | XlReply::Dated { value: v, .. } => ExtFunctionResult::Return(xl_object(&v, headers)),
                         XlReply::Error(msg) => ExtFunctionResult::Error(MontyException::new(ExcType::ValueError, Some(msg))),
                     };
                 }
@@ -257,13 +258,13 @@ impl<W: Write> Worker<W> {
 /// uses something Monty's compiler reports as unsupported. Nothing of such a cell runs.
 fn refusal(code: &str) -> Option<PyError> {
     if let Some((module, line)) = crate::imports::missing_module(code) {
-        return Some(PyError { line: Some(line), message: crate::imports::needs_cpython(&module), timeout: false });
+        return Some(PyError { line: Some(line), message: crate::imports::needs_cpython(&module), timeout: false, restart: false });
     }
     // Compiled on its own: other errors (syntax, names) come from the run itself, as usual.
     match monty::MontyRun::new(code.to_string(), "cell.py", vec!["xl".into()], CompileOptions::default()) {
         Err(e) if e.exc_type() == ExcType::NotImplementedError => {
             let line = e.traceback().last().map(|f| f.start.line);
-            Some(PyError { line, message: crate::imports::unsupported(e.message().unwrap_or("unsupported code")), timeout: false })
+            Some(PyError { line, message: crate::imports::unsupported(e.message().unwrap_or("unsupported code")), timeout: false, restart: false })
         }
         _ => None,
     }
@@ -276,7 +277,7 @@ fn py_error(e: &MontyException) -> PyError {
     // The innermost frame in the cell's own code (`cell.py`, or the REPL's per-snippet names).
     let line = e.traceback().iter().rev().find(|f| f.filename.contains("cell")).or_else(|| e.traceback().last()).map(|f| f.start.line);
     let timeout = e.exc_type() == ExcType::TimeoutError && e.message().is_some_and(|m| m.contains("time limit exceeded"));
-    PyError { line, message: e.summary(), timeout }
+    PyError { line, message: e.summary(), timeout, restart: false }
 }
 
 /// A Python value for cells `xl()` read: a scalar for one cell, a list of rows for a range, or a
