@@ -87,7 +87,8 @@ the footprint, without changing anything.
 
 `macro.debug {action, …}` with `start` (`name`, `inputs`, `breakpoints`), `step`, `continue`,
 `runTo` (`step`: a path), `stop` (`keep: true` keeps the changes) and `state`. The run stays one
-undo step; while it is open, other edits are refused with "Finish or stop the macro first". Each
+undo step; while it is open, edits of the workbooks it touched (its own, and any other its steps
+changed) are refused with "Finish or stop the macro first"; other workbooks stay editable. Each
 answer gives the next step with its parameters as they would run, the parameters of the step that
 just ran, and the cells changed so far.
 

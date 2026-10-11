@@ -365,8 +365,10 @@ impl Session {
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
-        // While a macro is being debugged its undo group is open: other edits wait.
-        if self.depth == 0 && self.macro_debug.is_some() && spec.undoable && id != "macro.debug" {
+        // While a macro is being debugged its undo group is open: other edits of the workbooks it
+        // touched wait. Other workbooks stay editable.
+        let locked = self.active().is_some_and(|d| self.macro_debug.as_ref().is_some_and(|m| m.locks(d.uid)));
+        if self.depth == 0 && spec.undoable && id != "macro.debug" && locked {
             return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
         }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));

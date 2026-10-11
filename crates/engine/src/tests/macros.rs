@@ -724,3 +724,33 @@ fn an_absolute_recording_keeps_its_references() {
     // Stopping when nothing records says so.
     assert_eq!(s.execute("macro.record", json!({"stop": true})).unwrap(), json!({"recording": false}));
 }
+
+#[test]
+fn only_the_workbooks_a_debugged_run_touched_wait() {
+    let mut s = s();
+    stepper(&mut s);
+    debug(&mut s, json!({"name": "Walk", "inputs": "B2:C5"}));
+    debug(&mut s, json!({"action": "step"}));
+    // Another workbook stays editable, macros included.
+    s.new_workbook();
+    set(&mut s, "A1", "elsewhere");
+    put(
+        &mut s,
+        json!({"name": "Here", "output": {"onConflict": "overwrite"}, "steps": [{"command": "cell.set", "params": {"cell": "A2", "input": "ran"}}]}),
+    );
+    s.execute("macro.run", json!({"name": "Here"})).unwrap();
+    assert_eq!(v(&s, "A2").display(), "ran");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(v(&s, "A2").is_empty());
+    // The debugged one waits.
+    s.set_active(0);
+    let r = s.execute("cell.set", json!({"cell": "A1", "input": "x"}));
+    assert!(matches!(&r, Err(EngineError::Disabled(_, why)) if why == "Finish or stop the macro first"), "{r:?}");
+    // The run carries on in its own workbook whichever one is in front.
+    s.set_active(1);
+    let st = debug(&mut s, json!({"action": "continue", "breakpoints": []}));
+    assert_eq!(st["state"], "paused");
+    assert_eq!(s.active_index(), 0);
+    debug(&mut s, json!({"action": "stop"}));
+    set(&mut s, "A1", "free");
+}

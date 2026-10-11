@@ -4,7 +4,8 @@
 //! breakpoint, runs to a chosen step, or stops. The run lives on the session between calls (one
 //! action per frame in the UI) inside an undo group that spans them, so a debugged run is still
 //! one undo step; Stop keeps the changes or rolls them back. While a macro is being debugged,
-//! other edits are refused ("Finish or stop the macro first").
+//! other edits of the workbooks it touched (its own, and any other its steps changed) are refused
+//! ("Finish or stop the macro first"); other workbooks stay editable.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -28,6 +29,30 @@ pub struct Debugger {
     start: Arc<Workbook>,
     /// Every step path in the macro, for checking `runTo` targets.
     paths: BTreeSet<String>,
+    /// The workbooks the run has touched (by uid): its own, and any other a step changed. Edits
+    /// of these wait until the run ends.
+    touched: BTreeSet<u64>,
+}
+
+impl Debugger {
+    /// Whether edits of the workbook with this uid wait for the run to end.
+    pub fn locks(&self, doc: u64) -> bool {
+        self.touched.contains(&doc)
+    }
+}
+
+/// Each open workbook's uid and its current version, to see which ones a step changes.
+fn versions(s: &Session) -> Vec<(u64, Arc<Workbook>)> {
+    s.docs.iter().map(|d| (d.uid, d.wb.clone())).collect()
+}
+
+/// Adds to the run's touched log the workbooks that changed since `before`.
+fn note_touched(s: &mut Session, before: &[(u64, Arc<Workbook>)]) {
+    let changed: Vec<u64> =
+        s.docs.iter().filter(|d| before.iter().any(|(uid, wb)| *uid == d.uid && !Arc::ptr_eq(wb, &d.wb))).map(|d| d.uid).collect();
+    if let Some(dbg) = s.macro_debug.as_mut() {
+        dbg.touched.extend(changed);
+    }
 }
 
 /// The message for edits refused while a macro is being debugged.
@@ -125,6 +150,7 @@ fn start(s: &mut Session, p: &Json) -> Result<Json> {
         breakpoints,
         start: start_wb,
         paths,
+        touched: BTreeSet::from([b.prepared.doc]),
     });
     if s.macro_debug.as_ref().and_then(|d| d.machine.as_ref()).is_some_and(Machine::is_done) {
         return finish(s, None);
@@ -155,6 +181,7 @@ fn advance(s: &mut Session, mode: Mode) -> Result<Json> {
     let breakpoints = d.breakpoints.clone();
     let mut machine = d.machine.take().ok_or_else(not_debugging)?;
     machine.restart_clock();
+    let before = versions(s);
     let mut first = true;
     let mut hit = false;
     let mut outcome = Ok(());
@@ -184,6 +211,7 @@ fn advance(s: &mut Session, mode: Mode) -> Result<Json> {
     if let Some(d) = s.macro_debug.as_mut() {
         d.machine = Some(machine);
     }
+    note_touched(s, &before);
     if let Err(e) = outcome {
         return finish(s, Some(e));
     }
@@ -318,6 +346,38 @@ mod tests {
         assert!(s.macro_debug.is_none());
         assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &start));
         assert!(!s.in_group(s.doc().unwrap().uid));
+        s.execute("cell.set", json!({"cell": "B1", "input": "free"})).unwrap();
+    }
+
+    #[test]
+    fn a_workbook_in_the_touched_log_waits_until_the_run_ends() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let m = crate::macros::parse_macro(&json!({"name": "M", "output": {"onConflict": "overwrite"}, "steps": [
+            {"command": "cell.set", "params": {"cell": "A1", "input": "x"}},
+            {"command": "cell.set", "params": {"cell": "A2", "input": "y"}}
+        ]}))
+        .unwrap();
+        let d = s.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        wb.macros.push(m);
+        d.wb = std::sync::Arc::new(wb);
+        s.new_workbook();
+        let other = s.doc().unwrap().uid;
+        s.set_active(0);
+        s.execute("macro.debug", json!({"name": "M"})).unwrap();
+        assert!(!s.macro_debug.as_ref().unwrap().locks(other));
+        // As if a step had changed the other workbook too.
+        let before = super::versions(&s);
+        let d = s.doc_by_uid_mut(other).unwrap();
+        let mut wb = (*d.wb).clone();
+        wb.props.title = "changed by the macro".into();
+        d.wb = std::sync::Arc::new(wb);
+        super::note_touched(&mut s, &before);
+        assert!(s.macro_debug.as_ref().unwrap().locks(other));
+        s.set_active(1);
+        assert!(s.execute("cell.set", json!({"cell": "B1", "input": "no"})).is_err());
+        s.execute("macro.debug", json!({"action": "stop", "keep": true})).unwrap();
         s.execute("cell.set", json!({"cell": "B1", "input": "free"})).unwrap();
     }
 }
