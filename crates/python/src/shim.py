@@ -49,17 +49,25 @@ def _read_input():
 threading.Thread(target=_read_input, daemon=True).start()
 
 
+_send_lock = threading.Lock()
+
+
 def _send(msg):
     try:
         text = json.dumps(msg, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError):
         text = "{}"
-    _frames.write(MARK + text + "\n")
-    _frames.flush()
+    # The watchdog thread sends too (its heartbeats while a module imports).
+    with _send_lock:
+        _frames.write(MARK + text + "\n")
+        _frames.flush()
 
 
 class _Limits:
     timeout = 5.0
+    # Time spent importing modules that weren't loaded yet doesn't count against the time limit,
+    # up to this much per run (a package's first import after an install can be slow).
+    imports = 60.0
     stdout_bytes = 1024 * 1024
     output_cells = 1_000_000
     xl_calls = 10_000
@@ -415,6 +423,40 @@ def xl(reference, headers=False):
     return _xl_value(reply.get("value") or {"t": "Empty"}, headers)
 
 
+# Imports: the time a run spends loading modules that weren't loaded yet, timed on the main
+# thread for the outermost import only (the modules it pulls in are inside its time).
+_imp = {"depth": 0, "start": 0.0, "total": 0.0, "module": None}
+_original_import = builtins.__import__
+
+
+def _timed_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if (
+        _imp["depth"]
+        or _state["run"] is None
+        or level != 0
+        or name in sys.modules
+        or threading.current_thread() is not threading.main_thread()
+    ):
+        return _original_import(name, globals, locals, fromlist, level)
+    _imp["depth"], _imp["start"], _imp["module"] = 1, time.perf_counter(), name.partition(".")[0]
+    try:
+        return _original_import(name, globals, locals, fromlist, level)
+    finally:
+        _imp["total"] += time.perf_counter() - _imp["start"]
+        _imp["depth"], _imp["module"] = 0, None
+
+
+builtins.__import__ = _timed_import
+
+
+def _import_seconds():
+    # The run's import time so far, with the import in progress.
+    total = _imp["total"]
+    if _imp["depth"]:
+        total += time.perf_counter() - _imp["start"]
+    return total
+
+
 # Running code.
 def _fire(token):
     with _lock:
@@ -462,16 +504,41 @@ def _fresh():
     _namespace = {"__name__": "__main__", "__builtins__": builtins, "xl": xl}
 
 
+def _watch(token, started, stop):
+    # The time limit: every 50 ms, the time the run has taken less what it spent importing (up to
+    # the allowance) is checked against the limit. While an import takes long, the parent hears
+    # how long, so its own deadline (the backstop) moves too.
+    sent = 0
+    while not stop.wait(0.05):
+        with _lock:
+            if _state["run"] != token or _state["fired"]:
+                return
+        imports = min(_import_seconds(), _Limits.imports)
+        if time.perf_counter() - started - imports >= _Limits.timeout:
+            _state["importing"] = _imp["module"]
+            _fire(token)
+            return
+        ms = int(imports * 1000)
+        if ms - sent >= 100 or (_imp["module"] is None and ms != sent):
+            sent = ms
+            _send({"type": "extend", "id": token, "ms": ms, "module": _imp["module"]})
+
+
+def _timeout_error():
+    return {"line": None, "message": "TimeoutError: time limit exceeded", "timeout": True, "importing": _state.get("importing")}
+
+
 def _run(token, code):
     capture = _Capture(_Limits.stdout_bytes)
     started = time.perf_counter()
     done = {"type": "done", "id": token, "output": None, "stdout": "", "stderr": "", "error": None, "elapsedMs": 0.0}
     saved = sys.stdout, sys.stderr
-    timer = threading.Timer(_Limits.timeout, _fire, (token,))
-    timer.daemon = True
+    stop = threading.Event()
+    timer = threading.Thread(target=_watch, args=(token, started, stop), daemon=True)
     modules = len(sys.modules)
+    _imp["total"], _imp["depth"], _imp["module"] = 0.0, 0, None
     with _lock:
-        _state["run"], _state["fired"], _state["xl_calls"] = token, False, 0
+        _state["run"], _state["fired"], _state["xl_calls"], _state["importing"] = token, False, 0, None
     try:
         sys.stdout, sys.stderr = _Stream(capture, "out"), _Stream(capture, "err")
         timer.start()
@@ -481,27 +548,28 @@ def _run(token, code):
             value = eval(last, _namespace) if last is not None else None
             with _lock:
                 _state["run"] = None
-            timer.cancel()
+            stop.set()
             sys.stdout, sys.stderr = saved
             try:
                 done["output"] = _output(value)
             except _TooBig as e:
                 done["error"] = {"line": None, "message": str(e), "timeout": False}
         except KeyboardInterrupt:
-            done["error"] = {"line": None, "message": "TimeoutError: time limit exceeded", "timeout": True}
+            done["error"] = _timeout_error()
         except BaseException as e:  # noqa: BLE001 - a cell's error, whatever it is, is its result
             done["error"] = {"line": _line(e), "message": _message(e), "timeout": False}
     except KeyboardInterrupt:
-        done["error"] = {"line": None, "message": "TimeoutError: time limit exceeded", "timeout": True}
+        done["error"] = _timeout_error()
     finally:
-        timer.cancel()
+        stop.set()
         with _lock:
             _state["run"] = None
         sys.stdout, sys.stderr = saved
     # A time limit that interrupted an import can leave a package half loaded, which breaks every
-    # later import of it: GridCraft starts a fresh worker.
-    if done["error"] and done["error"].get("timeout") and len(sys.modules) != modules:
-        done["error"]["restart"] = True
+    # later import of it: GridCraft starts a fresh worker (and may run the cell again on it).
+    err = done["error"]
+    if err and err.get("timeout") and (len(sys.modules) != modules or err.get("importing") is not None):
+        err["restart"] = True
     done["stdout"], done["stderr"] = capture.text("out"), capture.text("err")
     done["elapsedMs"] = (time.perf_counter() - started) * 1000.0
     return done
@@ -530,6 +598,7 @@ def _main():
                 _Limits.stdout_bytes = int(limits.get("stdoutBytes", _Limits.stdout_bytes))
                 _Limits.output_cells = int(limits.get("outputCells", _Limits.output_cells))
                 _Limits.xl_calls = int(limits.get("xlCalls", _Limits.xl_calls))
+                _Limits.imports = max(0.0, float(limits.get("importMs", 60000)) / 1000.0)
                 # Packages such as pandas call deeper than the built-in Python's limit allows.
                 sys.setrecursionlimit(max(1000, int(limits.get("recursion", 200)) + 100))
                 try:

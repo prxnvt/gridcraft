@@ -269,7 +269,7 @@ fn logged(needle: &str) -> Vec<String> {
 
 /// An install that already ended this way, followed as `python.install` follows its own.
 fn ended(s: &mut Session, packages: &[&str], ok: bool, output: &str, message: &str) -> serde_json::Value {
-    let outcome = gridcraft_python::env::InstallOutcome { ok, message: message.into(), output: output.into(), cancelled: false };
+    let outcome = gridcraft_python::env::InstallOutcome { ok, message: message.into(), output: output.into(), cancelled: false, warning: None };
     s.python_track_install(
         packages.iter().map(|p| p.to_string()).collect(),
         "/scratch/gc-env".into(),
@@ -282,6 +282,33 @@ fn ended(s: &mut Session, packages: &[&str], ok: bool, output: &str, message: &s
 
 fn runs(s: &mut Session, p: serde_json::Value) -> Vec<serde_json::Value> {
     s.execute("python.diagnostics", p).unwrap()["runs"].as_array().unwrap().clone()
+}
+
+/// An install that worked but whose warm-up (importing it once) failed: installed, with the
+/// warning in its row and in the status.
+#[test]
+fn a_warm_up_that_failed_is_a_warning_on_an_install_that_worked() {
+    let mut s = session();
+    let outcome = gridcraft_python::env::InstallOutcome {
+        ok: true,
+        message: "Installed lightgbm.".into(),
+        output: " + lightgbm==1.9.1\ncould not import lightgbm: ImportError: boom\n".into(),
+        cancelled: false,
+        warning: Some("Installed, but importing lightgbm: ImportError: boom".into()),
+    };
+    s.python_track_install(vec!["lightgbm".into()], "/scratch/gc-env-warm".into(), None, gridcraft_python::env::Install::finished(outcome));
+    s.finish_python();
+    let status = s.execute("python.installStatus", json!({})).unwrap();
+    assert_eq!(status["state"], "installed");
+    assert_eq!(status["summary"], "Installed lightgbm 1.9.1");
+    assert_eq!(status["warning"], "Installed, but importing lightgbm: ImportError: boom");
+    let row = runs(&mut s, json!({})).pop().unwrap();
+    assert_eq!(row["status"], "installed");
+    assert_eq!(row["error"], "Installed, but importing lightgbm: ImportError: boom");
+    // Without a warning, the row has no error.
+    let status = ended(&mut s, &["polars"], true, " + polars==1.0.0\n", "Installed polars.");
+    assert!(status["warning"].is_null());
+    assert!(runs(&mut s, json!({})).pop().unwrap()["error"].is_null());
 }
 
 #[test]
@@ -358,7 +385,8 @@ fn cells_run_again_after_an_install_and_the_row_stays_when_they_fail_otherwise()
 #[test]
 fn the_install_row_survives_its_workbook_closing() {
     let mut s = session();
-    let outcome = gridcraft_python::env::InstallOutcome { ok: true, message: "ok".into(), output: " + six==1.17.0\n".into(), cancelled: false };
+    let outcome =
+        gridcraft_python::env::InstallOutcome { ok: true, message: "ok".into(), output: " + six==1.17.0\n".into(), cancelled: false, warning: None };
     s.python_track_install(vec!["six".into()], "/scratch/gc-env".into(), None, gridcraft_python::env::Install::finished(outcome));
     s.new_workbook();
     s.close_document(0);

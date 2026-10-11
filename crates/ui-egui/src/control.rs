@@ -201,8 +201,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let wait = p.get("wait").and_then(Json::as_bool).unwrap_or(false);
             match r {
                 Ok(result) if wait && app.session.python_busy() => {
-                    // Default: the Python time limit, plus a second for the worker to start.
-                    let secs = p.get("waitSeconds").and_then(Json::as_f64).unwrap_or(app.session.prefs.python_timeout_seconds + 1.0);
+                    // Default: the Python time limit and the time imports may add, plus a second
+                    // for the worker to start.
+                    let prefs = &app.session.prefs;
+                    let secs =
+                        p.get("waitSeconds").and_then(Json::as_f64).unwrap_or(prefs.python_timeout_seconds + prefs.python_import_seconds + 1.0);
                     let secs = if secs.is_finite() { secs.clamp(0.0, 3_600.0) } else { 0.0 };
                     return Outcome::Wait { result, deadline: crate::now_ms() + secs * 1000.0 };
                 }

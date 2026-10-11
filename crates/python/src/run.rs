@@ -78,6 +78,9 @@ pub struct RunOutcome {
     pub stdout: String,
     pub stderr: String,
     pub elapsed_ms: f64,
+    /// The run was stopped while importing this module (empty: a module whose name isn't known),
+    /// which can be a slow first import rather than the code: a run on a fresh worker may work.
+    pub importing: Option<String>,
 }
 
 /// Something that happened while polling.
@@ -101,6 +104,14 @@ pub fn timeout_message(limits: &Limits) -> String {
     let secs = limits.timeout_ms as f64 / 1000.0;
     let secs = if secs.fract() == 0.0 { format!("{secs:.0}") } else { format!("{secs}") };
     format!("Stopped after {secs} s (an endless loop?)")
+}
+
+/// A run stopped at the time limit while importing `module`, `elapsed_ms` after it started.
+pub fn import_timeout_message(elapsed_ms: f64, module: &str) -> String {
+    let secs = if elapsed_ms.is_finite() { (elapsed_ms / 1000.0).max(0.0) } else { 0.0 };
+    let secs = if secs >= 10.0 { format!("{secs:.0}") } else { format!("{secs:.1}") };
+    let what = if module.is_empty() { "a module".to_string() } else { module.to_string() };
+    format!("Stopped after {secs} s while importing {what} (the first import after an install can be slow)")
 }
 
 /// A worker stopped over its memory cap.

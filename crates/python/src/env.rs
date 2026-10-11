@@ -25,6 +25,8 @@ pub const MAX_PACKAGES: usize = 32;
 pub const MAX_REQUIREMENT_CHARS: usize = 100;
 /// How long one install may run.
 pub const INSTALL_SECONDS: u64 = 600;
+/// How long the warm-up after an install (importing what was installed once) may run.
+pub const WARMUP_SECONDS: u64 = 120;
 /// Bytes of an install's output kept (the end of it).
 pub const OUTPUT_BYTES: usize = 64 * 1024;
 /// Packages listed from an environment's folder.
@@ -400,6 +402,46 @@ pub struct Plan {
 pub enum StepKind {
     CreateEnv,
     Install,
+    /// After the install: import what was installed once, in the environment's Python, so the
+    /// first import in a cell is fast (a fresh package's native libraries load slowly the first
+    /// time, which on macOS includes checking each one). A failure here is only a warning.
+    Warmup,
+}
+
+/// The script the warm-up runs: imports each module named in its arguments, saying how long each
+/// took, and exits with 1 when one failed.
+pub const WARMUP_SCRIPT: &str = "import importlib, sys, time
+failed = 0
+for name in sys.argv[1:]:
+    t = time.perf_counter()
+    try:
+        importlib.import_module(name)
+        print('imported %s in %.1f s' % (name, time.perf_counter() - t), flush=True)
+    except BaseException as e:
+        failed += 1
+        print('could not import %s: %s: %s' % (name, type(e).__name__, e), flush=True)
+sys.exit(1 if failed else 0)
+";
+
+/// The modules to import to warm up `packages` (requirements): the known import name of each
+/// (`sklearn` for scikit-learn), else its name with `-` and `.` as `_`, in lower case; only
+/// names that are Python identifiers.
+pub fn import_names(packages: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for req in packages {
+        let name = requirement_name(req);
+        let module = PIP_NAMES
+            .iter()
+            .find(|(_, pip)| normalize(pip) == normalize(name))
+            .map(|(m, _)| (*m).to_string())
+            .unwrap_or_else(|| name.replace(['-', '.'], "_").to_ascii_lowercase());
+        let ok = module.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && module.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if ok && !out.contains(&module) {
+            out.push(module);
+        }
+    }
+    out
 }
 
 /// A program to run, with its arguments.
@@ -416,7 +458,9 @@ impl Step {
         let mut s = self.program.display().to_string();
         for a in &self.args {
             s.push(' ');
-            s.push_str(&a.to_string_lossy());
+            // A script given with `-c` shows as a placeholder (the warm-up's).
+            let a = a.to_string_lossy();
+            s.push_str(if a.contains('\n') { "<script>" } else { &a });
         }
         s
     }
@@ -449,7 +493,10 @@ pub fn steps(plan: &Plan, create: bool) -> Vec<Step> {
     let conda = matches!(plan.target, Target::Own { conda: true, .. });
     let (program, mut args) = match (&plan.uv, conda) {
         (Some(uv), false) => {
-            (uv.clone(), vec![os("pip"), os("install"), os("--python"), python.clone().into_os_string(), os("--only-binary"), os(":all:")])
+            // `--compile-bytecode`: uv doesn't compile `.pyc` files by default (pip does), which
+            // makes the first import of a large package slower.
+            let python = python.clone().into_os_string();
+            (uv.clone(), vec![os("pip"), os("install"), os("--python"), python, os("--only-binary"), os(":all:"), os("--compile-bytecode")])
         }
         _ => {
             let mut a = vec![os("-m"), os("pip"), os("install"), os("--only-binary=:all:"), os("--disable-pip-version-check"), os("--no-input")];
@@ -462,11 +509,17 @@ pub fn steps(plan: &Plan, create: bool) -> Vec<Step> {
     };
     args.extend(plan.packages.iter().map(|p| os(p)));
     out.push(Step { kind: StepKind::Install, program, args });
+    let modules = import_names(&plan.packages);
+    if !modules.is_empty() {
+        let mut args = vec![os("-c"), os(WARMUP_SCRIPT)];
+        args.extend(modules.iter().map(|m| os(m)));
+        out.push(Step { kind: StepKind::Warmup, program: python, args });
+    }
     out
 }
 
 /// How an install ended.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct InstallOutcome {
     pub ok: bool,
     /// One line for the status bar: what happened, or why it failed.
@@ -474,6 +527,19 @@ pub struct InstallOutcome {
     /// What the programs printed (the end of it), with the command lines.
     pub output: String,
     pub cancelled: bool,
+    /// The install worked but something after it didn't (the warm-up's imports).
+    pub warning: Option<String>,
+}
+
+/// What the status bar says while `kind` runs for `packages`, when it isn't "Installing …".
+pub fn stage_label(kind: StepKind, packages: &[String]) -> Option<String> {
+    match kind {
+        StepKind::Warmup => {
+            let names = packages.iter().map(|p| requirement_name(p)).collect::<Vec<_>>().join(", ");
+            Some(format!("Preparing {names}\u{2026}"))
+        }
+        StepKind::CreateEnv | StepKind::Install => None,
+    }
 }
 
 /// Why a failed step failed, from what it printed.
@@ -481,6 +547,13 @@ pub fn explain(kind: StepKind, output: &str, packages: &[String]) -> String {
     // Tools wrap long lines: compare with every run of white space as one space.
     let o = output.to_ascii_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
     let has = |needles: &[&str]| needles.iter().any(|n| o.contains(n));
+    if kind == StepKind::Warmup {
+        let line = output.lines().rev().find(|l| l.starts_with("could not import ")).map(|l| l.trim_start_matches("could not import ").to_string());
+        return match line {
+            Some(l) => format!("Installed, but importing {l}"),
+            None => "Installed, but importing it once afterwards failed. Diagnostics has the details.".into(),
+        };
+    }
     if kind == StepKind::CreateEnv {
         if has(&["no module named venv", "ensurepip is not available", "no module named ensurepip"]) {
             return "This Python can't make virtual environments (its venv module is missing). Install the python3-venv package, or install uv, and try again.".into();
@@ -540,7 +613,7 @@ mod native {
 
     use process_wrap::std::{ChildWrapper, CommandWrap};
 
-    use super::{INSTALL_SECONDS, InstallOutcome, OUTPUT_BYTES, Plan, Step, explain, steps};
+    use super::{INSTALL_SECONDS, InstallOutcome, OUTPUT_BYTES, Plan, Step, StepKind, WARMUP_SECONDS, explain, stage_label, steps};
 
     #[allow(clippy::disallowed_methods)] // native only, where the clock works
     fn now() -> Instant {
@@ -554,8 +627,12 @@ mod native {
         std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
     }
 
+    /// What the install is doing now, when that isn't installing (see [`stage_label`]).
+    type Stage = Arc<Mutex<Option<String>>>;
+
     /// An install running on a thread of its own.
     pub struct Install {
+        stage: Stage,
         rx: Option<Receiver<InstallOutcome>>,
         result: Option<InstallOutcome>,
         cancel: Arc<AtomicBool>,
@@ -650,13 +727,36 @@ mod native {
         ended
     }
 
-    fn run_all(plan: &Plan, list: &[Step], out: &Output, cancel: &AtomicBool) -> InstallOutcome {
+    fn run_all(plan: &Plan, list: &[Step], out: &Output, cancel: &AtomicBool, stage: &Stage) -> InstallOutcome {
         let deadline = now() + Duration::from_secs(INSTALL_SECONDS);
+        let mut warning = None;
         for step in list {
+            if let Ok(mut s) = stage.lock() {
+                *s = stage_label(step.kind, &plan.packages);
+            }
+            if step.kind == StepKind::Warmup {
+                // Its own deadline; however it ends, the packages are installed.
+                warning = match run_step(step, out, cancel, now() + Duration::from_secs(WARMUP_SECONDS)) {
+                    Ended::Ok => None,
+                    Ended::Cancelled => Some("Installed; preparing it for its first import was stopped.".to_string()),
+                    Ended::Deadline => Some(format!("Installed; importing it once afterwards took longer than {WARMUP_SECONDS} s and was stopped.")),
+                    Ended::Failed(why) => {
+                        push(out, format!("\n{why}\n").as_bytes());
+                        Some(explain(step.kind, &text(out), &plan.packages))
+                    }
+                };
+                continue;
+            }
             match run_step(step, out, cancel, deadline) {
                 Ended::Ok => {}
                 Ended::Cancelled => {
-                    return InstallOutcome { ok: false, message: "The install was cancelled.".into(), output: text(out), cancelled: true };
+                    return InstallOutcome {
+                        ok: false,
+                        message: "The install was cancelled.".into(),
+                        output: text(out),
+                        cancelled: true,
+                        warning: None,
+                    };
                 }
                 Ended::Deadline => {
                     return InstallOutcome {
@@ -664,13 +764,14 @@ mod native {
                         message: format!("The install took longer than {} minutes and was stopped.", INSTALL_SECONDS / 60),
                         output: text(out),
                         cancelled: false,
+                        warning: None,
                     };
                 }
                 Ended::Failed(why) => {
                     push(out, format!("\n{why}\n").as_bytes());
                     let output = text(out);
                     let message = explain(step.kind, &output, &plan.packages);
-                    return InstallOutcome { ok: false, message, output, cancelled: false };
+                    return InstallOutcome { ok: false, message, output, cancelled: false, warning: None };
                 }
             }
         }
@@ -679,7 +780,7 @@ mod native {
         } else {
             format!("Installed {} into {}.", plan.packages.join(", "), plan.target.describe())
         };
-        InstallOutcome { ok: true, message, output: text(out), cancelled: false }
+        InstallOutcome { ok: true, message, output: text(out), cancelled: false, warning }
     }
 
     impl Install {
@@ -693,25 +794,41 @@ mod native {
         pub(crate) fn run(plan: Plan, list: Vec<Step>) -> Install {
             let cancel = Arc::new(AtomicBool::new(false));
             let output: Output = Arc::new(Mutex::new(VecDeque::new()));
+            let stage: Stage = Arc::new(Mutex::new(None));
             let (tx, rx) = mpsc::channel();
-            let (c, o) = (cancel.clone(), output.clone());
+            let (c, o, st) = (cancel.clone(), output.clone(), stage.clone());
             let spawned = std::thread::Builder::new().name("python-install".into()).spawn(move || {
-                let _ = tx.send(run_all(&plan, &list, &o, &c));
+                let _ = tx.send(run_all(&plan, &list, &o, &c, &st));
             });
             match spawned {
-                Ok(_) => Install { rx: Some(rx), result: None, cancel, output },
+                Ok(_) => Install { stage, rx: Some(rx), result: None, cancel, output },
                 Err(e) => Install::finished(InstallOutcome {
                     ok: false,
                     message: format!("GridCraft couldn't start the install: {e}"),
                     output: String::new(),
                     cancelled: false,
+                    warning: None,
                 }),
             }
         }
 
         /// An install that already ended (tests, and when it couldn't start).
         pub fn finished(outcome: InstallOutcome) -> Install {
-            Install { rx: None, result: Some(outcome), cancel: Arc::new(AtomicBool::new(false)), output: Arc::new(Mutex::new(VecDeque::new())) }
+            Install {
+                stage: Arc::new(Mutex::new(None)),
+                rx: None,
+                result: Some(outcome),
+                cancel: Arc::new(AtomicBool::new(false)),
+                output: Arc::new(Mutex::new(VecDeque::new())),
+            }
+        }
+
+        /// What it is doing now, when that isn't installing ("Preparing scikit-learn…").
+        pub fn stage(&self) -> Option<String> {
+            if self.result.is_some() {
+                return None;
+            }
+            self.stage.lock().ok().and_then(|s| s.clone())
         }
 
         /// Asks the running programs to stop; [`Install::poll`] then reports it cancelled.
@@ -738,6 +855,7 @@ mod native {
                             message: "The install stopped unexpectedly.".into(),
                             output: self.output(),
                             cancelled: false,
+                            warning: None,
                         })
                     }
                 }
@@ -781,12 +899,16 @@ mod web {
                 message: "Python isn't available in the web version".into(),
                 output: String::new(),
                 cancelled: false,
+                warning: None,
             })
         }
         pub fn finished(result: InstallOutcome) -> Install {
             Install { result }
         }
         pub fn cancel(&self) {}
+        pub fn stage(&self) -> Option<String> {
+            None
+        }
         pub fn output(&self) -> String {
             String::new()
         }
@@ -916,6 +1038,7 @@ mod tests {
             [
                 "/usr/bin/python3 -m venv /env",
                 "/env/bin/python -m pip install --only-binary=:all: --disable-pip-version-check --no-input --require-virtualenv pandas numpy>=2",
+                "/env/bin/python -c <script> pandas numpy",
             ]
         );
         let plan = Plan { uv: Some("/bin/uv".into()), ..plan };
@@ -923,17 +1046,72 @@ mod tests {
             steps(&plan, true).iter().map(Step::display).collect::<Vec<_>>(),
             [
                 "/bin/uv venv --seed --python /usr/bin/python3 /env",
-                "/bin/uv pip install --python /env/bin/python --only-binary :all: pandas numpy>=2",
+                "/bin/uv pip install --python /env/bin/python --only-binary :all: --compile-bytecode pandas numpy>=2",
+                "/env/bin/python -c <script> pandas numpy",
             ]
         );
-        assert_eq!(steps(&plan, false).len(), 1, "an environment that exists isn't made again");
+        assert_eq!(steps(&plan, false).len(), 2, "an environment that exists isn't made again");
         let created = Plan { packages: vec![], ..plan.clone() };
         assert_eq!(steps(&created, true).iter().map(|s| s.kind).collect::<Vec<_>>(), [StepKind::CreateEnv]);
         let conda = Plan { target: Target::Own { python: "/c/bin/python".into(), conda: true }, ..plan };
         assert_eq!(
             steps(&conda, true).iter().map(Step::display).collect::<Vec<_>>(),
-            ["/c/bin/python -m pip install --only-binary=:all: --disable-pip-version-check --no-input pandas numpy>=2",]
+            [
+                "/c/bin/python -m pip install --only-binary=:all: --disable-pip-version-check --no-input pandas numpy>=2",
+                "/c/bin/python -c <script> pandas numpy",
+            ]
         );
+    }
+
+    #[test]
+    fn the_warm_up_imports_each_package_by_its_module_name() {
+        let names = |l: &[&str]| import_names(&l.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(names(&["scikit-learn>=1.5", "Pillow", "PyYAML", "python-dateutil"]), ["sklearn", "PIL", "yaml", "dateutil"]);
+        assert_eq!(
+            names(&["pandas", "numpy==2.1", "pandas", "typing-extensions", "zope.interface"]),
+            ["pandas", "numpy", "typing_extensions", "zope_interface"]
+        );
+        assert!(names(&["9lives", ""]).is_empty(), "only identifiers");
+        assert_eq!(stage_label(StepKind::Warmup, &["scikit-learn>=1".into()]).as_deref(), Some("Preparing scikit-learn\u{2026}"));
+        assert_eq!(stage_label(StepKind::Install, &["pandas".into()]), None);
+        assert_eq!(
+            explain(StepKind::Warmup, "imported numpy in 0.2 s\ncould not import sklearn: ImportError: dlopen failed\n", &[]),
+            "Installed, but importing sklearn: ImportError: dlopen failed"
+        );
+    }
+
+    /// The warm-up after an install: its failure is a warning on an install that worked, and
+    /// while it runs the install says it is preparing the packages.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_warm_up_is_a_warning_not_a_failed_install() {
+        let plan =
+            Plan { target: Target::Own { python: "/bin/sh".into(), conda: false }, packages: vec!["scikit-learn".into()], uv: None, os: Os::Unix };
+        let ok = Step { kind: StepKind::Install, program: "/bin/sh".into(), args: vec!["-c".into(), "exit 0".into()] };
+        let warm = |script: &str| Step { kind: StepKind::Warmup, program: "/bin/sh".into(), args: vec!["-c".into(), script.into()] };
+        let mut i = Install::run(plan.clone(), vec![ok.clone(), warm("echo 'imported sklearn in 0.1 s'")]);
+        let o = i.wait(Duration::from_secs(20)).cloned().unwrap();
+        assert!(o.ok && o.warning.is_none(), "{o:?}");
+        assert!(o.output.contains("imported sklearn"), "{o:?}");
+        let mut i = Install::run(plan.clone(), vec![ok.clone(), warm("echo 'could not import sklearn: ImportError: boom'; exit 1")]);
+        let o = i.wait(Duration::from_secs(20)).cloned().unwrap();
+        assert!(o.ok && !o.cancelled, "the install still worked: {o:?}");
+        assert_eq!(o.warning.as_deref(), Some("Installed, but importing sklearn: ImportError: boom"));
+        // While it runs, it says so.
+        let mut i = Install::run(plan, vec![ok, warm("sleep 60")]);
+        let mut stage = None;
+        for _ in 0..200 {
+            stage = i.stage();
+            if stage.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(stage.as_deref(), Some("Preparing scikit-learn\u{2026}"));
+        i.cancel();
+        let o = i.wait(Duration::from_secs(20)).cloned().unwrap();
+        assert!(o.ok && o.warning.is_some(), "{o:?}");
+        assert_eq!(i.stage(), None, "over");
     }
 
     #[test]

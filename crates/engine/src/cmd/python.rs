@@ -85,7 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Options",
             [],
             None,
-            "{timeoutSeconds?: 0.1..3600, interpreter?: path (empty: look for one), environment?: folder (empty: the default), detect?: bool} → {timeoutSeconds, interpreter, environmentPath, environment, backend}: how long one Python cell may run (default 5), the user's Python (3.11 or newer) that runs cells instead of the built-in one, and where GridCraft keeps its own Python environment; `detect` looks for Python again",
+            "{timeoutSeconds?: 0.1..3600, importSeconds?: 1..600, interpreter?: path (empty: look for one), environment?: folder (empty: the default), detect?: bool} → {timeoutSeconds, importSeconds, interpreter, environmentPath, environment, backend}: how long one Python cell may run (default 5), how much of a run's time importing modules not loaded yet doesn't count against that, at most (default 60), the user's Python (3.11 or newer) that runs cells instead of the built-in one, and where GridCraft keeps its own Python environment; `detect` looks for Python again",
             always,
             options
         ),
@@ -430,6 +430,12 @@ fn options(s: &mut Session, p: &Json) -> Result<Json> {
         }
         s.prefs.python_timeout_seconds = t;
     }
+    if let Some(t) = f64_param(p, "importSeconds") {
+        if !(1.0..=600.0).contains(&t) {
+            return Err(bad("python.options", "`importSeconds` is between 1 and 600"));
+        }
+        s.prefs.python_import_seconds = t;
+    }
     let mut detect = bool_param(p, "detect").unwrap_or(false);
     if let Some(path) = p.get("interpreter") {
         let Some(path) = path.as_str() else { return Err(bad("python.options", "`interpreter` is a path, or empty to look for Python")) };
@@ -460,6 +466,7 @@ fn options(s: &mut Session, p: &Json) -> Result<Json> {
     let environment = s.python_environment();
     Ok(json!({
         "timeoutSeconds": s.prefs.python_timeout_seconds,
+        "importSeconds": s.prefs.python_import_seconds,
         "interpreter": s.prefs.python_interpreter,
         "environmentPath": s.prefs.python_environment,
         "environment": environment,

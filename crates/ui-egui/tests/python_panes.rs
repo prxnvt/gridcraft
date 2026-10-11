@@ -255,8 +255,12 @@ fn python_options_shows_the_backend_and_sets_the_interpreter_and_time_limit() {
     h.get_by_label("Not used (1)").click();
     h.run_steps(3);
     assert!(h.query_by_label("/usr/bin/python3: it is Python 3.9.6; Python cells need 3.11 or newer").is_some());
-    // OK sets the time limit and the interpreter (which starts a new search).
+    assert!(h.query_by_label("Time allowed for imports").is_some());
+    // OK sets the time limit, the time allowed for imports and the interpreter (which starts a
+    // new search).
     if let Some(d) = h.state_mut().dialog.as_mut() {
+        assert_eq!(d.values.get("importSeconds"), Some(&json!(60.0)));
+        d.values.insert("importSeconds".into(), json!(90.0));
         d.values.insert("timeoutSeconds".into(), json!(2.5));
         d.values.insert("interpreter".into(), json!("/nowhere/python3"));
     }
@@ -265,6 +269,7 @@ fn python_options_shows_the_backend_and_sets_the_interpreter_and_time_limit() {
     h.run_steps(3);
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().session.prefs.python_timeout_seconds, 2.5);
+    assert_eq!(h.state().session.prefs.python_import_seconds, 90.0);
     assert_eq!(h.state().session.prefs.python_interpreter, "/nowhere/python3");
     // The built-in Python's wording, and Detect Again.
     h.state_mut().session.set_python_detection(builtin());

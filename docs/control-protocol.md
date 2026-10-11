@@ -54,7 +54,7 @@ Python cells run in the background in the app, so `python.set` answers at once a
 starts show `#BUSY!` until they finish. `ui.inspect` reports `pythonBusy: true` while any are
 running or waiting; poll it (or `cell.get`) for the results, or pass `wait: true` to
 `engine.execute`: the reply then waits, without holding up the window, until Python is idle or
-`waitSeconds` pass (default: the Python time limit plus one second). A result with a `cell` and
+`waitSeconds` pass (default: the Python time limit, plus the time allowed for imports, plus one second). A result with a `cell` and
 its `value` (such as `python.set`'s) then carries the cell's final value, and the reply has
 `pythonBusy: false` (true when the wait ran out). `python.stop` (or `ui.key {key:
 "Escape"}` with no editor open) stops them. `python.run {cell?}` runs a Python cell again (the

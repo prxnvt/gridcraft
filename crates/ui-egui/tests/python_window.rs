@@ -220,6 +220,8 @@ fn the_toolbar_runs_stops_and_reruns() {
     h.get_by_label("Insert Python Here").click();
     h.run_steps(3);
     assert!(editor_text(&h).is_some(), "a new Python cell is being written");
+    // The new, empty cell runs once (the worker starting can take a moment under load).
+    wait_python(&mut h);
     text(&mut h, "6 * 7");
     h.get_by_label("Run").click();
     h.run_steps(2);

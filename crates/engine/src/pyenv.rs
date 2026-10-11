@@ -332,7 +332,11 @@ impl Session {
             "ms": ms,
             "output": outcome.output,
             "seq": self.python.install.ended,
+            "warning": outcome.warning,
         });
+        if let Some(w) = &outcome.warning {
+            log::warn!("python install warm-up: {w}");
+        }
         match status {
             "installed" => log::info!("python install finished: {summary} into {} in {:.1} s", job.target, ms / 1000.0),
             "cancelled" => log::info!("python install cancelled: {} into {} after {:.1} s", job.packages.join(", "), job.target, ms / 1000.0),
@@ -354,7 +358,8 @@ impl Session {
                     status,
                     ms,
                     stdout: outcome.output.clone(),
-                    error: (!outcome.ok).then(|| outcome.message.clone()),
+                    // A failure's reason; for an install that worked, a warning from after it.
+                    error: if outcome.ok { outcome.warning.clone() } else { Some(outcome.message.clone()) },
                     count: 1,
                     packages: std::mem::take(&mut job.packages),
                     target: Some(job.target.clone()),
@@ -382,10 +387,14 @@ impl Session {
     }
 
     /// The install's state: `{state: idle|running|installed|installFailed|cancelled, packages?,
-    /// target?, message?, summary?, versions?: [{name, version}], ms?, output?, seq?}`.
+    /// target?, message?, summary?, versions?: [{name, version}], ms?, output?, seq?, stage?,
+    /// warning?}` (`stage`: what it does now when that isn't installing, "Preparing
+    /// scikit-learn…"; `warning`: the install worked but importing it once afterwards didn't).
     pub fn python_install_status(&self) -> Json {
         match &self.python.install.job {
-            Some(j) => json!({"state": "running", "packages": j.packages, "target": j.target, "output": j.runner.output()}),
+            Some(j) => {
+                json!({"state": "running", "packages": j.packages, "target": j.target, "output": j.runner.output(), "stage": j.runner.stage()})
+            }
             None => self.python.install.last.clone().unwrap_or_else(|| json!({"state": "idle"})),
         }
     }

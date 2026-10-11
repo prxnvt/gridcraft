@@ -175,6 +175,7 @@ pub fn status_label<'a>(status: &'a str, t: &Tokens) -> (&'a str, egui::Color32)
         "blocked" => ("Turned off", t.text_dim),
         "cycle" => ("Cycle", t.danger),
         "refused" => ("Not run", t.danger),
+        "retried" => ("Retried", t.text_dim),
         "installed" => ("Installed", t.text_dim),
         "installFailed" => ("Install failed", t.danger),
         "cancelled" => ("Cancelled", t.text_dim),
@@ -195,6 +196,12 @@ fn install_row(ui: &mut Ui, t: &Tokens, r: &gridcraft_engine::python::PyRunLog, 
     ui.add(egui::Label::new(RichText::new(summary).color(color).font(theme::ui_bold(12.5))).wrap());
     if let Some(target) = &r.target {
         ui.add(egui::Label::new(RichText::new(format!("Into {target}")).color(t.text_dim).font(theme::ui_font(12.0))).wrap());
+    }
+    // An install that worked whose warm-up (importing it once) didn't.
+    if r.status == "installed"
+        && let Some(warning) = &r.error
+    {
+        ui.add(egui::Label::new(RichText::new(warning).color(t.text).font(theme::ui_font(12.0))).wrap());
     }
     if r.status == "installed" {
         // Cells that failed after it, for a reason other than a missing module: the install
@@ -374,8 +381,11 @@ pub fn status(app: &mut SheetApp, ui: &mut Ui) {
 /// Opens Python Options with the current settings.
 pub fn open_options(app: &mut SheetApp) -> Dialog {
     let p = &app.session.prefs;
-    let mut d =
-        Dialog::custom("pythonOptions", "Python Options", json!({"interpreter": p.python_interpreter, "timeoutSeconds": p.python_timeout_seconds}));
+    let mut d = Dialog::custom(
+        "pythonOptions",
+        "Python Options",
+        json!({"interpreter": p.python_interpreter, "timeoutSeconds": p.python_timeout_seconds, "importSeconds": p.python_import_seconds}),
+    );
     d.command = Some("python.options");
     d
 }
@@ -499,6 +509,14 @@ pub fn options(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, confirm: &mut bo
             d.values.insert("timeoutSeconds".into(), json!(secs));
         }
     });
+    let mut imports = d.values.get("importSeconds").and_then(Json::as_f64).unwrap_or(60.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Time allowed for imports").strong());
+        let edit = egui::DragValue::new(&mut imports).range(1.0..=600.0).speed(1.0).max_decimals(0).suffix(" s");
+        if ui.add(edit).on_hover_text("Loading a package that isn't loaded yet doesn't count against the time limit, up to this much per cell (the first import after an install can be slow)").changed() {
+            d.values.insert("importSeconds".into(), json!(imports));
+        }
+    });
     ui.add_space(8.0);
     ui.allocate_ui_with_layout(vec2(ui.available_width(), 26.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui.add(egui::Button::new(RichText::new("   OK   ").color(t.on_accent)).fill(t.accent)).clicked() {
@@ -510,7 +528,7 @@ pub fn options(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, confirm: &mut bo
     });
     if *confirm {
         *confirm = false;
-        let mut result = app.run("python.options", json!({"interpreter": path, "timeoutSeconds": secs}));
+        let mut result = app.run("python.options", json!({"interpreter": path, "timeoutSeconds": secs, "importSeconds": imports}));
         // The workbook's packages, when they changed.
         if result.is_ok()
             && let Some(text) = d.values.get("packages").and_then(Json::as_str)
@@ -542,7 +560,12 @@ pub fn busy_status(app: &mut SheetApp, ui: &mut Ui) {
         let installing = state == "running";
         let (text, tip) = if installing {
             let p = packages();
-            let text = if p.is_empty() { "Making the Python environment…".to_string() } else { format!("Installing {p}…") };
+            let text = match install["stage"].as_str() {
+                // After the install: "Preparing scikit-learn…" (importing it once).
+                Some(stage) => stage.to_string(),
+                None if p.is_empty() => "Making the Python environment…".to_string(),
+                None => format!("Installing {p}…"),
+            };
             (text, "Cancel the install (Esc)")
         } else {
             (app.ui.language.tr("Running Python…").to_string(), app.ui.language.tr("Stop the Python cells that are running (Esc)"))

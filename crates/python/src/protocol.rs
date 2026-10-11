@@ -27,6 +27,10 @@ pub struct Limits {
     pub output_cells: usize,
     /// `xl()` calls per cell.
     pub xl_calls: usize,
+    /// Time spent importing modules that weren't loaded yet that doesn't count against
+    /// `timeout_ms`, at most, in milliseconds (a package's first import after an install can
+    /// take many seconds).
+    pub import_ms: u64,
 }
 
 impl Default for Limits {
@@ -38,6 +42,7 @@ impl Default for Limits {
             stdout_bytes: 1024 * 1024,
             output_cells: 1_000_000,
             xl_calls: 10_000,
+            import_ms: 60_000,
         }
     }
 }
@@ -81,6 +86,15 @@ pub enum FromWorker {
     Ready { init_error: Option<PyError> },
     /// Run `id` reads cells: answer with [`ToWorker::XlValue`].
     Xl { id: u64, reference: String, headers: bool },
+    /// Run `id` has spent `ms` milliseconds so far importing modules (capped at
+    /// [`Limits::import_ms`]); `module` is the one being imported now, if any. The parent extends
+    /// the run's deadline by `ms`. Sent while a slow import runs (CPython only).
+    Extend {
+        id: u64,
+        ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        module: Option<String>,
+    },
     /// Run `id` finished.
     Done(Done),
 }
@@ -140,6 +154,9 @@ pub struct PyError {
     /// The worker can't be trusted to run more code (its time limit interrupted an import,
     /// which can leave a package half loaded): the parent starts a fresh one.
     pub restart: bool,
+    /// The module being imported when the time limit stopped the code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub importing: Option<String>,
 }
 
 /// One frame as a line (with [`FRAME_MARK`] and a newline).
@@ -209,5 +226,16 @@ mod tests {
         );
         assert_eq!(parse_to_worker(&to_worker_line(&reply)), Some(reply));
         assert_eq!(parse_to_worker("garbage"), None);
+        // The shim's heartbeat while it imports, with and without a module.
+        let extend = FromWorker::Extend { id: 9, ms: 1_250, module: Some("sklearn".into()) };
+        assert_eq!(parse_from_worker(&frame_line(&extend)), Some(extend));
+        assert_eq!(
+            parse_from_worker(&format!("{FRAME_MARK}{{\"type\":\"extend\",\"id\":2,\"ms\":40}}")),
+            Some(FromWorker::Extend { id: 2, ms: 40, module: None })
+        );
+        let timeout = PyError { timeout: true, restart: true, importing: Some("sklearn".into()), ..PyError::default() };
+        let line = frame_line(&FromWorker::Done(Done { id: 3, error: Some(timeout.clone()), ..Done::default() }));
+        assert!(line.contains("\"importing\":\"sklearn\""));
+        assert_eq!(parse_from_worker(&line), Some(FromWorker::Done(Done { id: 3, error: Some(timeout), ..Done::default() })));
     }
 }

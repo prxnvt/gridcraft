@@ -148,6 +148,21 @@ fn the_time_limit_is_a_setting() {
     assert!(s.execute("python.options", json!({"timeoutSeconds": f64::MAX})).is_err());
     py(&mut s, "A1", "while True: pass");
     assert_eq!(v(&s, "A1"), Value::Error(CellError::Timeout));
+    // The time imports may take beyond it, 1..600 s (60 by default), kept in the preferences.
+    assert_eq!(s.execute("python.options", json!({})).unwrap()["importSeconds"], 60.0);
+    assert_eq!(s.execute("python.options", json!({"importSeconds": 120})).unwrap()["importSeconds"], 120.0);
+    assert_eq!(s.prefs.python_import_seconds, 120.0);
+    for bad in [json!(0), json!(0.5), json!(601), json!(-3), json!(f64::MAX)] {
+        assert!(s.execute("python.options", json!({"importSeconds": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(s.prefs.python_import_seconds, 120.0, "unchanged by bad values");
+    let saved = serde_json::to_value(&s.prefs).unwrap();
+    assert_eq!(saved["pythonImportSeconds"], 120.0);
+    let back: crate::Prefs = serde_json::from_value(saved).unwrap();
+    assert_eq!(back.python_import_seconds, 120.0);
+    // Older preferences without it get the default.
+    let old: crate::Prefs = serde_json::from_value(json!({"pythonTimeoutSeconds": 5.0})).unwrap();
+    assert_eq!(old.python_import_seconds, 60.0);
 }
 
 #[test]

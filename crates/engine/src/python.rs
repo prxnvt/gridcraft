@@ -47,7 +47,9 @@ pub struct PyRunLog {
     /// The cell (`A1`), or empty for the initialization code.
     pub cell: String,
     /// `ok`, `error`, `timeout`, `memory`, `stopped` (the worker stopped), `blocked`, `cycle` or
-    /// `refused` (the cell stopped the worker last time and hasn't changed since); for a package
+    /// `refused` (the cell stopped the worker last time and hasn't changed since), `retried` (the
+    /// time limit stopped it mid-import or on its first run on a new worker: it runs once more);
+    /// for a package
     /// install (no sheet or cell), `installed`, `installFailed` or `cancelled`.
     pub status: &'static str,
     pub ms: f64,
@@ -108,6 +110,12 @@ struct DocPy {
     /// Cells that stopped the worker when they last ran, with a fingerprint of their code and
     /// inputs then. They don't run again (and can't stop it again) until that changes, or Reset.
     refused: HashMap<Key, u64>,
+    /// Cells that have run on the current worker (cleared when a worker starts).
+    seen: HashSet<Key>,
+    /// Cells rerun once on a fresh worker after a time limit stopped it (mid-import, or on their
+    /// first run after a worker start or an install), with the fingerprint they had then: a second
+    /// such stop is refused.
+    retried: HashMap<Key, u64>,
 }
 
 /// A refresh in progress.
@@ -129,6 +137,8 @@ struct Inflight {
     id: u64,
     key: Key,
     replay: bool,
+    /// The cell's first run on this worker (a worker start, or an install, came before it).
+    first: bool,
 }
 
 /// A Python cell and what it reads.
@@ -158,7 +168,8 @@ impl Changes {
 
 fn limits(prefs: &Prefs) -> Limits {
     let secs = if prefs.python_timeout_seconds.is_finite() { prefs.python_timeout_seconds.clamp(0.1, 3_600.0) } else { 5.0 };
-    Limits { timeout_ms: (secs * 1000.0) as u64, ..Limits::default() }
+    let imports = if prefs.python_import_seconds.is_finite() { prefs.python_import_seconds.clamp(1.0, 600.0) } else { 60.0 };
+    Limits { timeout_ms: (secs * 1000.0) as u64, import_ms: (imports * 1000.0) as u64, ..Limits::default() }
 }
 
 fn init_code(wb: &Workbook) -> String {
@@ -862,6 +873,7 @@ impl Session {
         let (uid, wb) = (d.uid, d.wb.clone());
         let dp = self.python.docs.entry(uid).or_default();
         dp.refused.remove(&key);
+        dp.retried.remove(&key);
         let cells = dp.cells(&wb);
         let Some(first) = cells.iter().position(|pc| pc.key == key) else {
             return Err(crate::EngineError::Other(format!("{} is not a Python cell", key.1.a1())));
@@ -895,6 +907,7 @@ impl Session {
         dp.dirty = false;
         // Reset Runtime asks for every cell to run, including ones that stopped Python before.
         dp.refused.clear();
+        dp.retried.clear();
         self.schedule_python(uid, Some(0), &HashSet::new(), true);
         self.finish_unless_background(uid);
     }
@@ -1097,16 +1110,21 @@ impl Session {
                     dp.refused.remove(&key);
                 }
                 let init = init_code(&d.wb);
+                // A worker starts for this run (the first, or after a restart or an install).
+                if !dp.worker.as_ref().is_some_and(|w| w.alive()) {
+                    dp.seen.clear();
+                }
+                let first = dp.seen.insert(key);
                 let worker = dp.worker(&launcher, &limits, init);
                 match worker.submit(&code) {
                     Ok(id) => {
                         if let Some(job) = dp.job.as_mut() {
-                            job.inflight = Some(Inflight { id, key, replay });
+                            job.inflight = Some(Inflight { id, key, replay, first });
                         }
                     }
                     Err(f) => {
-                        let o = RunOutcome { id: 0, result: Err(f), stdout: String::new(), stderr: String::new(), elapsed_ms: 0.0 };
-                        finish_run(d, dp, key, replay, &o);
+                        let o = RunOutcome { id: 0, result: Err(f), stdout: String::new(), stderr: String::new(), elapsed_ms: 0.0, importing: None };
+                        finish_run(d, dp, key, replay, false, &o);
                     }
                 }
                 continue;
@@ -1143,7 +1161,7 @@ impl Session {
                         }
                         let Some(inflight) = job.inflight.take_if(|i| i.id == o.id) else { continue };
                         progressed = true;
-                        finish_run(d, dp, inflight.key, inflight.replay, &o);
+                        finish_run(d, dp, inflight.key, inflight.replay, inflight.first, &o);
                     }
                 }
             }
@@ -1159,12 +1177,54 @@ fn is_stale(wb: &Workbook, (si, c): Key) -> bool {
     wb.sheet(si).and_then(|s| s.cell(c)).and_then(|x| x.py.as_ref()).is_some_and(|p| p.stale)
 }
 
+/// Whether a run the time limit stopped, losing the worker, runs once more on a fresh worker
+/// rather than being refused: it was stopped mid-import, or it was the cell's first run after a
+/// worker start or an install (a cold first import can be slow), and it wasn't retried already
+/// with the same code and inputs.
+fn should_retry(d: &DocState, dp: &DocPy, key: Key, first: bool, worker_lost: bool, o: &RunOutcome) -> Option<u64> {
+    let timed_out = matches!(&o.result, Err(Failure { kind: FailureKind::Timeout, .. }));
+    if !(worker_lost && timed_out && (o.importing.is_some() || first)) {
+        return None;
+    }
+    let fp = fingerprint(d, key)?;
+    (dp.retried.get(&key) != Some(&fp)).then_some(fp)
+}
+
 /// Records a finished run: writes its result, checks for a cycle through earlier cells, and after
-/// a worker restart reruns the earlier cells once before the queue continues.
-fn finish_run(d: &mut DocState, dp: &mut DocPy, key: Key, replay: bool, o: &RunOutcome) {
-    let changed = write_outcome(d, key, o);
+/// a worker restart reruns the earlier cells once before the queue continues. A run stopped at the
+/// time limit while importing (or on its first run on a new worker) runs once more instead.
+fn finish_run(d: &mut DocState, dp: &mut DocPy, key: Key, replay: bool, first: bool, o: &RunOutcome) {
     let worker_lost = matches!(&o.result, Err(Failure { kind: FailureKind::Timeout | FailureKind::Memory | FailureKind::Crashed, .. }))
         && dp.worker.as_ref().is_some_and(|w| !w.alive());
+    if let Some(fp) = should_retry(d, dp, key, first, worker_lost, o)
+        && dp.job.is_some()
+    {
+        dp.retried.insert(key, fp);
+        let message = o.result.as_ref().err().map(|f| f.message.clone()).unwrap_or_default();
+        let mut e = log_entry(&d.wb, key, "retried");
+        e.ms = o.elapsed_ms;
+        e.stdout = o.stdout.clone();
+        e.stderr = o.stderr.clone();
+        e.error = Some(format!("{message}. Running it once more, on a fresh Python."));
+        push_log(d, e);
+        log::info!("python cell {} stopped at its time limit ({message}); running it once more", key.1.a1());
+        if let Some(job) = dp.job.as_mut() {
+            if replay {
+                job.replay.push_front(key);
+            } else {
+                job.queue.push_front(key);
+                // The namespace went with the worker: the cells before this one run again first.
+                // (This doesn't use up the job's one replay: a retry happens once per cell, and
+                // when it fails too, the cells before it must run again once more.)
+                job.replay = job.ran.iter().copied().filter(|k| *k != key).collect();
+            }
+        }
+        return;
+    }
+    if !worker_lost {
+        dp.retried.remove(&key);
+    }
+    let changed = write_outcome(d, key, o);
     // The crash-loop guard: this cell stopped the worker, so it doesn't run again until its code
     // or inputs change.
     if worker_lost && let Some(fp) = fingerprint(d, key) {

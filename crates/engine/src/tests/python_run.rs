@@ -263,9 +263,10 @@ fn a_killed_worker_is_replaced_and_earlier_cells_run_again() {
     assert_eq!(v(&s, "A1"), Value::Number(7.0));
     assert_eq!(v(&s, "A2"), err(CellError::Timeout));
     assert_eq!(v(&s, "A3"), Value::Number(8.0), "A1 ran again in the new worker before A3");
-    // A1's two runs (before A2, then again in the new worker) share a row with a count.
+    // A2 stopped the worker on its first run on it, so it ran once more on a fresh one (after A1
+    // again) before it counted as stopped; A1's three runs share a row with a count.
     let cells: Vec<String> = s.doc().unwrap().py_log.iter().map(|e| format!("{}:{}x{}", e.cell, e.status, e.count)).collect();
-    assert_eq!(cells, ["A2:timeoutx1", "A1:okx2", "A3:okx1"]);
+    assert_eq!(cells, ["A2:retriedx1", "A2:timeoutx1", "A1:okx3", "A3:okx1"]);
 }
 
 #[test]
@@ -372,6 +373,57 @@ fn cells_run_on_the_users_python_when_the_search_finds_one() {
     assert_eq!(v(&s, "D3"), Value::Number(50.0));
     let log = s.execute("python.diagnostics", json!({})).unwrap();
     assert!(log["runs"].as_array().unwrap().iter().all(|r| r["status"] == "ok"), "{log}");
+}
+
+/// A cell the time limit stops in the middle of a slow import runs once more on a fresh Python
+/// (a first import after an install is slow once); stopped again, it is refused as usual.
+#[test]
+fn a_cell_stopped_mid_import_runs_once_more_then_is_refused() {
+    let detection = gridcraft_python::interp::detect(&std::env::var("GRIDCRAFT_TEST_PYTHON").unwrap_or_default(), None);
+    if detection.found.is_none() {
+        eprintln!("skipped: no Python 3.11 or newer here ({:?})", detection.rejected);
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("gridcraft-engine-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Slow the first time only (as a cold first import is), and slow every time.
+    let once = "import os, time\nmark = os.path.join(os.path.dirname(__file__), 'warm')\nif not os.path.exists(mark):\n    open(mark, 'w').close()\n    time.sleep(30)\nVALUE = 42\n";
+    std::fs::write(dir.join("gc_once.py"), once).unwrap();
+    std::fs::write(dir.join("gc_always.py"), "import time\ntime.sleep(30)\n").unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.set_python_detection(detection);
+    s.prefs.python_timeout_seconds = 0.5;
+    s.prefs.python_import_seconds = 1.0;
+    let path = serde_json::to_string(&dir.display().to_string()).unwrap();
+    s.execute("python.initialization", json!({"code": format!("import sys\nsys.path.insert(0, {path})")})).unwrap();
+    s.execute("python.set", json!({"cell": "A1", "code": "import gc_once\ngc_once.VALUE"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0), "it worked the second time");
+    let rows = |s: &mut Session, cell: &str| -> Vec<(String, String)> {
+        let log = s.execute("python.diagnostics", json!({})).unwrap();
+        log["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["cell"] == cell)
+            .map(|r| (r["status"].as_str().unwrap_or_default().to_string(), r["error"].as_str().unwrap_or_default().to_string()))
+            .collect()
+    };
+    let a1 = rows(&mut s, "A1");
+    assert_eq!(a1.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["retried", "ok"], "{a1:?}");
+    assert!(a1[0].1.contains("while importing gc_once (the first import after an install can be slow)"), "{a1:?}");
+    // Slow every time: tried twice, then it counts as stopping Python.
+    s.execute("python.set", json!({"cell": "A2", "code": "import gc_always\n1"})).unwrap();
+    assert_eq!(v(&s, "A2"), err(CellError::Timeout));
+    let a2 = rows(&mut s, "A2");
+    assert_eq!(a2.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["retried", "timeout"], "{a2:?}");
+    assert!(a2[1].1.contains("while importing gc_always"), "{a2:?}");
+    // A1 (before it) changed: A2 isn't run again, it is refused.
+    s.execute("python.set", json!({"cell": "A1", "code": "import gc_once\ngc_once.VALUE + 1"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(43.0));
+    assert_eq!(rows(&mut s, "A2").last().map(|r| r.0.clone()).as_deref(), Some("refused"));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The crash-loop guard: a cell that stopped the worker doesn't run again (and can't stop it

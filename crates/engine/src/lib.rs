@@ -240,6 +240,9 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// Seconds one Python cell may run.
     pub python_timeout_seconds: f64,
+    /// Seconds of a run spent importing modules not loaded yet that don't count against
+    /// `python_timeout_seconds`, at most (a package's first import after an install is slow).
+    pub python_import_seconds: f64,
     /// The user's Python for Python cells (a path, or a name on PATH); empty to look for one.
     pub python_interpreter: String,
     /// Where GridCraft's own Python environment lives; empty for `GRIDCRAFT_PYTHON_ENV`, else the
@@ -259,6 +262,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             python_timeout_seconds: 5.0,
+            python_import_seconds: 60.0,
             python_interpreter: String::new(),
             python_environment: String::new(),
         }

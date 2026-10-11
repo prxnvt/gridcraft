@@ -181,7 +181,8 @@ fn python_options_shows_gridcrafts_environment_and_the_workbooks_packages() {
 
 /// An install that already ended this way, followed by the app as it follows its own.
 fn ended(h: &mut Harness, ok: bool, output: &str, message: &str) {
-    let outcome = gridcraft_engine::pyenv::env::InstallOutcome { ok, message: message.into(), output: output.into(), cancelled: false };
+    let outcome =
+        gridcraft_engine::pyenv::env::InstallOutcome { ok, message: message.into(), output: output.into(), cancelled: false, warning: None };
     h.state_mut().session.python_track_install(
         vec!["scikit-learn".into()],
         "/scratch/gc-env".into(),
@@ -293,4 +294,41 @@ fn the_status_bar_shows_a_running_install_with_cancel() {
     assert!(h.query_all_by_label_contains("Cancelled installing scikit-learn").next().is_some());
     let _ = std::fs::remove_dir_all(&env);
     let _ = std::fs::remove_dir_all(&tools);
+}
+
+/// After the install, the warm-up (importing the package once) shows as "Preparing …"; stopped
+/// or failed, the install still worked, with the warning in its Diagnostics row.
+#[cfg(unix)]
+#[test]
+fn the_status_bar_shows_the_warm_up_and_its_warning_stays_in_diagnostics() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = scratch("warm");
+    // GridCraft's environment "exists": its python installs at once and imports slowly.
+    std::fs::create_dir_all(env.join("bin")).unwrap();
+    std::fs::write(env.join("pyvenv.cfg"), "home = /nowhere\n").unwrap();
+    let python = env.join("bin").join("python");
+    std::fs::write(&python, "#!/bin/sh\ncase \"$1\" in\n  -c) sleep 30 ;;\n  *) echo ' + scikit-learn==1.9.1' ;;\nesac\n").unwrap();
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut h = harness_with(&env, "/nonexistent/gc/python3");
+    h.state_mut().run("python.install", json!({"packages": ["scikit-learn"], "approve": true})).unwrap();
+    let mut seen = false;
+    for _ in 0..300 {
+        h.run_steps(1);
+        if h.query_by_label("Preparing scikit-learn\u{2026}").is_some() {
+            seen = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(seen, "the warm-up shows in the status bar");
+    h.get_all_by_label("Cancel").last().unwrap().click();
+    h.run_steps(3);
+    wait_idle(&mut h);
+    let status = h.state().session.python_install_status();
+    assert_eq!(status["state"], "installed", "{status}");
+    assert!(status["warning"].as_str().is_some_and(|w| w.contains("was stopped")), "{status}");
+    h.state_mut().grid.pane = Some(gridcraft_ui_egui::python_ui::PANE.into());
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("preparing it for its first import was stopped").is_some(), "the warning in the row");
+    let _ = std::fs::remove_dir_all(&env);
 }
