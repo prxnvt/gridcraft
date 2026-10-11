@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ControlKind, FormControl, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -307,10 +307,11 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
         }
     }
     // Form controls sit above every other object.
+    let hover = p.ctx().input(|i| i.pointer.hover_pos()).filter(|h| geo.cells.contains(*h));
     for c in &sh.controls {
         let r = anchor_rect(geo, sh, &c.anchor);
-        if r.intersects(p.clip_rect()) {
-            paint_control_stub(p, r, c, geo.z);
+        if r.expand(24.0).intersects(p.clip_rect()) {
+            crate::form_controls::paint(p, r, c, geo.z, crate::form_controls::look(app, c, r, geo.z, hover));
         }
     }
     // The selected object's frame and handles go over everything.
@@ -338,49 +339,6 @@ fn paint_equation_stub(p: &Painter, r: Rect, latex: &str, z: f32) {
     let font = FontId::new(14.0 * z, egui::FontFamily::Name(theme::CELL.into()));
     let g = p.layout(text.to_string(), font, t.cell_text, (r.width() - 8.0).max(1.0));
     p.with_clip_rect(r.intersect(p.clip_rect())).galley(r.center() - g.size() / 2.0, g, t.cell_text);
-}
-
-/// Stand-in drawing of a form control in the sheet's control colours. The form-controls work
-/// replaces it with live, linked controls.
-fn paint_control_stub(p: &Painter, r: Rect, c: &FormControl, z: f32) {
-    let t = Tokens::get(p.ctx());
-    let stroke = Stroke::new(1.0, t.sheet_control_border);
-    match c.kind {
-        ControlKind::Button => {
-            p.rect_filled(r, 3.0 * z, t.sheet_control_bg);
-            p.rect_stroke(r, 3.0 * z, stroke, StrokeKind::Inside);
-            let text = if c.text.is_empty() { format!("Button {}", c.id) } else { c.text.clone() };
-            let g = p.layout(text, theme::ui_font(12.0 * z), t.sheet_control_text, (r.width() - 6.0).max(1.0));
-            p.with_clip_rect(r.intersect(p.clip_rect())).galley(r.center() - g.size() / 2.0, g, t.sheet_control_text);
-        }
-        ControlKind::Slider => {
-            p.rect_filled(r, 2.0 * z, t.sheet_control_bg);
-            p.rect_stroke(r, 2.0 * z, stroke, StrokeKind::Inside);
-            let horizontal = r.width() >= r.height();
-            let (track, thumb) = if horizontal {
-                let tr = Rect::from_center_size(r.center(), vec2((r.width() - 12.0 * z).max(1.0), 4.0 * z));
-                (tr, Rect::from_center_size(tr.left_center() + vec2(5.0 * z, 0.0), vec2(10.0 * z, (r.height() - 6.0 * z).max(4.0))))
-            } else {
-                let tr = Rect::from_center_size(r.center(), vec2(4.0 * z, (r.height() - 12.0 * z).max(1.0)));
-                (tr, Rect::from_center_size(tr.center_top() + vec2(0.0, 5.0 * z), vec2((r.width() - 6.0 * z).max(4.0), 10.0 * z)))
-            };
-            p.rect_filled(track, 2.0 * z, t.sheet_track);
-            p.rect_filled(thumb, 2.0 * z, t.sheet_thumb);
-        }
-        ControlKind::Spin => {
-            p.rect_filled(r, 2.0 * z, t.sheet_control_bg);
-            p.rect_stroke(r, 2.0 * z, stroke, StrokeKind::Inside);
-            let (up, down) = r.split_top_bottom_at_fraction(0.5);
-            p.line_segment([down.left_top(), down.right_top()], stroke);
-            for (half, dir) in [(up, -1.0f32), (down, 1.0)] {
-                let s = (half.width().min(half.height()) * 0.3).max(1.0);
-                let c = half.center();
-                let tip = pos2(c.x, c.y + dir * s * 0.6);
-                let base = c.y - dir * s * 0.6;
-                p.add(PathShape::convex_polygon(vec![tip, pos2(c.x - s, base), pos2(c.x + s, base)], t.sheet_control_text, Stroke::NONE));
-            }
-        }
-    }
 }
 
 /// Where object `o` sits on screen, when it exists on `sh`.

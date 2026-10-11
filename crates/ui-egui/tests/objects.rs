@@ -116,32 +116,47 @@ fn exists(h: &Harness, o: ObjRef) -> bool {
 }
 
 fn pointer(h: &mut Harness, p: Pos2, pressed: bool) {
+    pointer_with(h, p, pressed, Modifiers::NONE);
+}
+
+fn pointer_with(h: &mut Harness, p: Pos2, pressed: bool, modifiers: Modifiers) {
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
     h.input_mut().events.push(Event::PointerMoved(p));
-    h.input_mut().events.push(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers });
     h.step();
 }
 
 fn click(h: &mut Harness, p: Pos2) {
-    pointer(h, p, true);
-    pointer(h, p, false);
+    click_with(h, p, Modifiers::NONE);
+}
+
+fn click_with(h: &mut Harness, p: Pos2, modifiers: Modifiers) {
+    pointer_with(h, p, true, modifiers);
+    pointer_with(h, p, false, modifiers);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(2);
 }
 
-fn double_click(h: &mut Harness, p: Pos2) {
+/// A click that selects `o`: form controls work on a plain click, so they take Cmd+click.
+fn selecting(o: ObjRef) -> Modifiers {
+    if o.kind == ObjKind::Control { Modifiers::COMMAND } else { Modifiers::NONE }
+}
+
+fn double_click(h: &mut Harness, p: Pos2, modifiers: Modifiers) {
     // Separate the gesture from earlier clicks (egui's triple-click window).
     h.run_steps(45);
-    click(h, p);
-    click(h, p);
+    click_with(h, p, modifiers);
+    click_with(h, p, modifiers);
 }
 
 fn click_on(h: &mut Harness, o: ObjRef) {
     let p = rect(h, o).center();
-    click(h, p);
+    click_with(h, p, selecting(o));
 }
 
 fn double_click_on(h: &mut Harness, o: ObjRef) {
     let p = rect(h, o).center();
-    double_click(h, p);
+    double_click(h, p, selecting(o));
 }
 
 fn drag(h: &mut Harness, from: Pos2, to: Pos2) {
@@ -172,7 +187,7 @@ fn a_click_selects_every_kind_and_controls_win_over_charts() {
         let r = rect(&h, obj);
         // Clear of the slider that lies over the chart.
         let p = if obj == o.chart { r.left_bottom() + vec2(12.0, -12.0) } else { r.center() };
-        click(&mut h, p);
+        click_with(&mut h, p, selecting(obj));
         assert_eq!(h.state().selected_object, Some(obj), "{obj:?}");
     }
     click_on(&mut h, o.slider);
@@ -211,7 +226,7 @@ fn every_handle_resizes_only_its_own_edges() {
     assert!(after.width() > 1.0 && (after.left() - before.left()).abs() < 1.0);
     // Dragging the body moves the object without resizing it.
     let before = rect(&h, o.button);
-    click(&mut h, before.center());
+    click_with(&mut h, before.center(), Modifiers::COMMAND);
     drag(&mut h, before.center(), before.center() + vec2(30.0, 25.0));
     let after = rect(&h, o.button);
     assert!((after.min - before.min - vec2(30.0, 25.0)).length() < 1.0 && (after.size() - before.size()).length() < 0.5);
@@ -272,7 +287,7 @@ fn double_clicks_route_by_kind() {
     assert!(h.state().text_box_editor.is_none());
 
     let r = rect(&h, o.chart);
-    double_click(&mut h, r.left_bottom() + vec2(12.0, -12.0));
+    double_click(&mut h, r.left_bottom() + vec2(12.0, -12.0), Modifiers::NONE);
     assert_eq!(h.state().grid.pane.as_deref(), Some("formatChart"));
     assert_eq!(h.state().selected_object, Some(o.chart));
 

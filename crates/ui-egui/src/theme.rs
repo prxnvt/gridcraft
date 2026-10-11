@@ -80,6 +80,13 @@ pub struct Tokens {
     pub sheet_control_text: Color32,
     pub sheet_track: Color32,
     pub sheet_thumb: Color32,
+    /// A sheet button under the pointer, and pressed.
+    pub sheet_control_hover: Color32,
+    pub sheet_control_pressed: Color32,
+    /// The filled part of a slider's track (from the minimum to the thumb).
+    pub sheet_fill: Color32,
+    /// The ring around the form control that takes the arrow keys.
+    pub sheet_focus: Color32,
     /// Macro overlays on the sheet (Check and debugging): the inputs, the cells the macro writes,
     /// the cells it would write over, and the current step's target. Sheet colours.
     pub sheet_macro_input: Color32,
@@ -135,6 +142,10 @@ const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
 const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
 const SHEET_TRACK: Color32 = rgb(0xD6D6D6);
 const SHEET_THUMB: Color32 = rgb(0x6B6B6B);
+const SHEET_CONTROL_HOVER: Color32 = rgb(0xE4E4E4);
+const SHEET_CONTROL_PRESSED: Color32 = rgb(0xCFCFCF);
+const SHEET_FILL: Color32 = rgb(0x107C41);
+const SHEET_FOCUS: Color32 = rgb(0x107C41);
 const STALE_TEXT: Color32 = rgb(0x767676);
 
 impl Tokens {
@@ -194,6 +205,10 @@ impl Tokens {
             sheet_control_text: SHEET_CONTROL_TEXT,
             sheet_track: SHEET_TRACK,
             sheet_thumb: SHEET_THUMB,
+            sheet_control_hover: SHEET_CONTROL_HOVER,
+            sheet_control_pressed: SHEET_CONTROL_PRESSED,
+            sheet_fill: SHEET_FILL,
+            sheet_focus: SHEET_FOCUS,
             sheet_macro_input: SHEET_MACRO_INPUT,
             sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
             sheet_macro_conflict: SHEET_MACRO_CONFLICT,
@@ -257,6 +272,10 @@ impl Tokens {
             sheet_control_text: SHEET_CONTROL_TEXT,
             sheet_track: SHEET_TRACK,
             sheet_thumb: SHEET_THUMB,
+            sheet_control_hover: SHEET_CONTROL_HOVER,
+            sheet_control_pressed: SHEET_CONTROL_PRESSED,
+            sheet_fill: SHEET_FILL,
+            sheet_focus: SHEET_FOCUS,
             sheet_macro_input: SHEET_MACRO_INPUT,
             sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
             sheet_macro_conflict: SHEET_MACRO_CONFLICT,
@@ -791,6 +810,12 @@ mod contrast_tests {
         add("sheet control text", t.sheet_control_text, t.sheet_control_bg, TEXT);
         add("sheet control border on sheet", t.sheet_control_border, t.grid_bg, GLYPH);
         add("sheet thumb on track", t.sheet_thumb, t.sheet_track, GLYPH);
+        add("sheet control text on hover", t.sheet_control_text, t.sheet_control_hover, TEXT);
+        add("sheet control text when pressed", t.sheet_control_text, t.sheet_control_pressed, TEXT);
+        add("slider fill on sheet", t.sheet_fill, t.grid_bg, GLYPH);
+        add("slider fill on track", t.sheet_fill, t.sheet_track, GLYPH);
+        add("sheet control arrows when pressed", t.sheet_control_text, t.sheet_control_pressed, GLYPH);
+        add("control focus ring on sheet", t.sheet_focus, t.grid_bg, GLYPH);
         for (name, c) in [
             ("macro input", t.sheet_macro_input),
             ("macro footprint", t.sheet_macro_footprint),
@@ -839,6 +864,10 @@ mod contrast_tests {
         assert_eq!(
             (l.sheet_control_bg, l.sheet_control_border, l.sheet_control_text, l.sheet_track, l.sheet_thumb),
             (d.sheet_control_bg, d.sheet_control_border, d.sheet_control_text, d.sheet_track, d.sheet_thumb)
+        );
+        assert_eq!(
+            (l.sheet_control_hover, l.sheet_control_pressed, l.sheet_fill, l.sheet_focus),
+            (d.sheet_control_hover, d.sheet_control_pressed, d.sheet_fill, d.sheet_focus)
         );
         assert_eq!(
             (l.sheet_macro_input, l.sheet_macro_footprint, l.sheet_macro_conflict, l.sheet_macro_target),

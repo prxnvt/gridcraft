@@ -89,6 +89,10 @@ pub struct GridState {
     pub header_menu: Option<(Pos2, bool)>,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+    /// A form control being worked with the pointer.
+    pub control: Option<crate::form_controls::Gesture>,
+    /// The form control that takes the arrow keys (the one last worked).
+    pub focused_control: Option<u32>,
 }
 
 impl GridState {
@@ -1100,6 +1104,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let in_col_header = pos.is_some_and(|p| p.y < geo.cells.top() && p.y >= geo.rect.top() && p.x >= geo.cells.left());
     let in_row_header = pos.is_some_and(|p| p.x < geo.cells.left() && p.x >= geo.rect.left() && p.y >= geo.cells.top());
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && geo.rect.contains(p));
+    // A click works a form control (Ctrl or Cmd+click selects it instead).
+    if app.editor.is_none() && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
+        keyboard(app, &ctx, resp, geo, sh);
+        return;
+    }
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
@@ -1133,8 +1142,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 && let Some(hd) = crate::objects::handle_at(r, p)
             {
                 ctx.set_cursor_icon(hd.cursor());
-            } else if crate::chartview::hit(geo, sh, p).is_some() {
-                ctx.set_cursor_icon(CursorIcon::Move);
+            } else if let Some((o, _)) = crate::chartview::hit(geo, sh, p) {
+                // A control works on click unless it is selected (or Ctrl/Cmd is held).
+                let works = o.kind == ObjKind::Control && app.selected_object != Some(o) && !mods.command && !mods.ctrl;
+                ctx.set_cursor_icon(if works { CursorIcon::PointingHand } else { CursorIcon::Move });
             }
         }
     }
@@ -1503,7 +1514,16 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
     }
 
-    // Right-click: context menu.
+    // Right-click: context menu. On a form control it selects the control without running it.
+    if resp.secondary_clicked()
+        && let Some(p) = pos
+        && let Some((o, _)) = crate::chartview::hit(geo, sh, p).filter(|(o, _)| o.kind == ObjKind::Control)
+    {
+        app.selected_object = Some(o);
+        app.grid.focused_control = None;
+        resp.request_focus();
+        return;
+    }
     if resp.secondary_clicked()
         && let Some(p) = pos
     {
@@ -1731,6 +1751,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             }
             egui::Event::Key { key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                if !m.command && !m.alt && crate::form_controls::key(app, sh, key) {
+                    continue;
+                }
                 let cmd = m.command;
                 let shift = m.shift;
                 let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
