@@ -1633,6 +1633,7 @@ version = "0.4.0"
 dependencies = [
  "gridcraft-core",
  "gridcraft-formula",
+ "gridcraft-math",
  "gridcraft-model",
  "quick-xml 0.38.4",
  "thiserror 2.0.21",

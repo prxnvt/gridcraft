@@ -2,6 +2,7 @@
 
 mod array_export;
 mod csv_tests;
+mod equation_tests;
 mod fixtures;
 mod malformed;
 mod ods_tests;

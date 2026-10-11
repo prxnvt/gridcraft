@@ -202,7 +202,8 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
             ui.ctx().data_mut(|m| m.remove::<bool>(focus_once));
             *open = false;
         }
-        ui.label(egui::RichText::new("\u{2318}/Ctrl+Enter to insert").small().color(t.text_dim));
+        let verb = if d.command == Some("equation.edit") { "apply" } else { "insert" };
+        ui.label(egui::RichText::new(format!("\u{2318}/Ctrl+Enter to {verb}")).small().color(t.text_dim));
     });
 }
 

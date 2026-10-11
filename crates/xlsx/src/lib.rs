@@ -18,6 +18,7 @@ mod csv;
 mod drawing;
 mod fmla;
 mod ods;
+mod omml;
 mod package;
 mod pivot;
 mod read;

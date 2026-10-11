@@ -133,3 +133,149 @@ fn edit_equation(s: &mut Session, p: &Json) -> Result<Json> {
         Ok(json!({"equation": id}))
     })
 }
+
+// ---------------------------------------------------------------- PDF
+
+/// The PDF face for a glyph: Symbol for Greek letters and operators, else the Times (or
+/// Helvetica, Courier) face for its style. `None` when no standard font can show `c`.
+fn pdf_font(c: char, face: gridcraft_math::Face) -> Option<gridcraft_pdf::Font> {
+    use gridcraft_math::Face;
+    use gridcraft_pdf::Font;
+    let text = match face {
+        Face::Italic => Font::TimesItalic,
+        Face::Bold => Font::TimesBold,
+        Face::BoldItalic => Font::TimesBoldItalic,
+        Face::Sans => Font::Helvetica,
+        Face::SansBold => Font::HelveticaBold,
+        Face::SansItalic => Font::HelveticaOblique,
+        Face::Mono => Font::Courier,
+        Face::Roman | Face::Large(_) => Font::TimesRoman,
+    };
+    // Letters and digits stay in the text face; everything Symbol has goes to Symbol, whose
+    // operators (minus, equals, plus) match the maths better than the text faces'.
+    if c.is_ascii_alphanumeric() {
+        return Some(text);
+    }
+    if Font::Symbol.can_encode(c) {
+        return Some(Font::Symbol);
+    }
+    text.can_encode(c).then_some(text)
+}
+
+/// Draws an equation's layout into the box `(x, y, w, h)` (page points) of a PDF page, with
+/// `pad` points of padding. Glyphs no standard font has are drawn as `[?]` boxes.
+pub(crate) fn draw_pdf(pg: &mut gridcraft_pdf::Page, list: &MathList, rect: (f32, f32, f32, f32), pad: f32, ink: gridcraft_pdf::Rgb) {
+    use gridcraft_math::{Face, Item, PathCmd};
+    let (x, y, w, h) = rect;
+    let (cw, ch) = (list.width.max(0.01), list.total_height().max(0.01));
+    let s = ((w - 2.0 * pad) / cw).min((h - 2.0 * pad) / ch);
+    if !(s.is_finite() && s > 0.01) {
+        return;
+    }
+    let s = s.min(4000.0);
+    let (ox, oy) = (x + (w - cw * s) / 2.0, y + (h - ch * s) / 2.0);
+    let col = |c: Option<[u8; 3]>| c.unwrap_or(ink);
+    for item in list.items.iter().take(gridcraft_math::MAX_ITEMS) {
+        match item {
+            Item::Glyph(g) => {
+                let color = col(g.color);
+                let (gx, base) = (ox + g.x * s, oy + g.y * s);
+                // The radical sign: Symbol's glyph (AFM bounding box -147 to 917 high, right edge
+                // at 558, in 1/1000 em) fitted to the TeX box, so its top meets the vinculum.
+                if g.ch == '\u{221A}' {
+                    let size = (g.height + g.depth) * s / 1.064;
+                    if size.is_finite() && size >= 0.5 {
+                        let top = base - g.height * s;
+                        pg.text(gx + g.width * s - 0.558 * size, top + 0.917 * size, size, gridcraft_pdf::Font::Symbol, color, "\u{221A}");
+                    }
+                    continue;
+                }
+                let large = matches!(g.face, Face::Large(_));
+                let size = if large { (g.height + g.depth) * s } else { g.size * s };
+                if !(size.is_finite() && size >= 0.5) {
+                    continue;
+                }
+                let pick = pdf_font(g.ch, g.face).map(|f| (g.ch, f)).or_else(|| g.alt.and_then(|a| pdf_font(a, g.face).map(|f| (a, f))));
+                match pick {
+                    Some((c, font)) => {
+                        let text = c.to_string();
+                        if large {
+                            // Centred on the glyph's box, like the screen.
+                            let mid = oy + (g.y - (g.height - g.depth) / 2.0) * s;
+                            let tw = gridcraft_pdf::text_width(font, size, &text);
+                            pg.text(gx + (g.width * s - tw) / 2.0, mid + 0.25 * size, size, font, color, &text);
+                        } else {
+                            pg.text(gx, base, size, font, color, &text);
+                        }
+                    }
+                    None => {
+                        // [?]: the glyph's box with a question mark.
+                        let (bw, bh) = ((g.width.max(0.3)) * s, (g.height + g.depth) * s);
+                        pg.rect_stroke(gx, base - g.height * s, bw, bh, (0.05 * s).clamp(0.2, 1.0), color);
+                        let qs = (bh * 0.6).min(bw * 1.2).max(1.0);
+                        let qw = gridcraft_pdf::text_width(gridcraft_pdf::Font::Helvetica, qs, "?");
+                        pg.text(gx + (bw - qw) / 2.0, base - g.height * s + (bh + qs * 0.7) / 2.0, qs, gridcraft_pdf::Font::Helvetica, color, "?");
+                    }
+                }
+            }
+            Item::Rule(r) => {
+                if r.width > 0.0 && r.height > 0.0 {
+                    pg.fill_rect(ox + r.x * s, oy + r.y * s, r.width * s, (r.height * s).max(0.25), col(r.color));
+                }
+            }
+            Item::Path(p) => {
+                let (px, py) = (ox + p.x * s, oy + p.y * s);
+                let mut subs: Vec<Vec<[f32; 2]>> = vec![];
+                let mut cur: Vec<[f32; 2]> = vec![];
+                let at = |a: f32, b: f32| [px + a * s, py + b * s];
+                for c in &p.commands {
+                    match *c {
+                        PathCmd::MoveTo(a, b) => {
+                            if cur.len() > 1 {
+                                subs.push(std::mem::take(&mut cur));
+                            }
+                            cur = vec![at(a, b)];
+                        }
+                        PathCmd::LineTo(a, b) => cur.push(at(a, b)),
+                        PathCmd::QuadTo(x1, y1, a, b) => {
+                            let p0 = cur.last().copied().unwrap_or(at(x1, y1));
+                            let (c1, p1) = (at(x1, y1), at(a, b));
+                            for k in 1..=8 {
+                                let t = k as f32 / 8.0;
+                                let u = 1.0 - t;
+                                cur.push([u * u * p0[0] + 2.0 * u * t * c1[0] + t * t * p1[0], u * u * p0[1] + 2.0 * u * t * c1[1] + t * t * p1[1]]);
+                            }
+                        }
+                        PathCmd::CubicTo(x1, y1, x2, y2, a, b) => {
+                            let p0 = cur.last().copied().unwrap_or(at(x1, y1));
+                            let (c1, c2, p1) = (at(x1, y1), at(x2, y2), at(a, b));
+                            for k in 1..=10 {
+                                let t = k as f32 / 10.0;
+                                let u = 1.0 - t;
+                                let (a3, b3, c3, d3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                                cur.push([a3 * p0[0] + b3 * c1[0] + c3 * c2[0] + d3 * p1[0], a3 * p0[1] + b3 * c1[1] + c3 * c2[1] + d3 * p1[1]]);
+                            }
+                        }
+                        PathCmd::Close => {
+                            if cur.len() > 1 {
+                                subs.push(std::mem::take(&mut cur));
+                            }
+                        }
+                    }
+                }
+                if cur.len() > 1 {
+                    subs.push(cur);
+                }
+                let color = col(p.color);
+                for sub in subs.iter().filter(|v| v.len() <= 4000) {
+                    if p.fill && sub.len() >= 3 {
+                        // The PDF fill rule handles concave outlines itself.
+                        pg.polygon(sub, Some(color), None);
+                    } else {
+                        pg.polyline(sub, (0.05 * s).clamp(0.2, 1.0), color, &[]);
+                    }
+                }
+            }
+        }
+    }
+}
