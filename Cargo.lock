@@ -1520,6 +1520,7 @@ dependencies = [
  "gridcraft-core",
  "gridcraft-formula",
  "gridcraft-functions",
+ "gridcraft-math",
  "gridcraft-model",
  "gridcraft-numfmt",
  "gridcraft-pdf",
@@ -1575,6 +1576,7 @@ version = "0.4.0"
 dependencies = [
  "gridcraft-core",
  "gridcraft-formula",
+ "gridcraft-math",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

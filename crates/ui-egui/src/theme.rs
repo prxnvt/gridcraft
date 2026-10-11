@@ -285,6 +285,11 @@ pub const CELL_ITALIC: &str = "cell-italic";
 pub const CELL_BOLD_ITALIC: &str = "cell-bold-italic";
 pub const SERIF: &str = "serif";
 pub const MONO: &str = "mono";
+/// Equation faces: a maths font (upright letters, operators, Greek, double-struck and script
+/// letters), its italic for variables, and a bold. System fonts only; nothing is bundled.
+pub const MATH: &str = "math";
+pub const MATH_ITALIC: &str = "math-italic";
+pub const MATH_BOLD: &str = "math-bold";
 
 pub fn ui_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(UI.into()))
@@ -426,6 +431,40 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
                 add(format!("{d}/dejavu/DejaVuSerif.ttf"), 0);
             }
         }
+        "math" => {
+            add(format!("{mac_sup}/STIXTwoMath.otf"), 0);
+            add(format!("{win}\\cambria.ttc"), 1);
+            for d in lin {
+                add(format!("{d}/opentype/stix/STIXTwoMath-Regular.otf"), 0);
+                add(format!("{d}/stix/STIXTwoMath-Regular.otf"), 0);
+                add(format!("{d}/opentype/lmodern/latinmodern-math.otf"), 0);
+                add(format!("{d}/dejavu/DejaVuSerif.ttf"), 0);
+                add(format!("{d}/liberation/LiberationSerif-Regular.ttf"), 0);
+            }
+            add(format!("{mac_sup}/Times New Roman.ttf"), 0);
+            add(format!("{win}\\times.ttf"), 0);
+        }
+        "math-italic" => {
+            add(format!("{mac_sup}/STIXTwoText-Italic.ttf"), 0);
+            add(format!("{mac_sup}/Times New Roman Italic.ttf"), 0);
+            add(format!("{win}\\cambriai.ttf"), 0);
+            add(format!("{win}\\timesi.ttf"), 0);
+            for d in lin {
+                add(format!("{d}/opentype/stix/STIXTwoText-Italic.otf"), 0);
+                add(format!("{d}/liberation/LiberationSerif-Italic.ttf"), 0);
+                add(format!("{d}/dejavu/DejaVuSerif-Italic.ttf"), 0);
+            }
+        }
+        "math-bold" => {
+            add(format!("{mac_sup}/Times New Roman Bold.ttf"), 0);
+            add(format!("{win}\\cambriab.ttf"), 0);
+            add(format!("{win}\\timesbd.ttf"), 0);
+            for d in lin {
+                add(format!("{d}/opentype/stix/STIXTwoText-Bold.otf"), 0);
+                add(format!("{d}/liberation/LiberationSerif-Bold.ttf"), 0);
+                add(format!("{d}/dejavu/DejaVuSerif-Bold.ttf"), 0);
+            }
+        }
         "mono" => {
             add(format!("{mac_sys}/SFNSMono.ttf"), 0);
             add(format!("{mac_sys}/Menlo.ttc"), 0);
@@ -470,7 +509,7 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
     // The non-Latin fallback faces have to sit at the end of each chain: a Latin font owns Latin,
     // and epaint picks the first face that has the glyph, so they only catch their own scripts.
     let fallback = load_fallback(&mut fonts, HanOrder::of(language));
-    for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+    for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
         let mut chain: Vec<String> = Vec::new();
@@ -482,6 +521,14 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
             chain.push(format!("sys-{UI}"));
         } else if role.starts_with("cell-") {
             chain.push(format!("sys-{CELL}"));
+        }
+        // Equation faces fall back to the maths font (for the symbols a text face lacks), then
+        // to the serif face.
+        if role == MATH_ITALIC || role == MATH_BOLD {
+            chain.push(format!("sys-{MATH}"));
+        }
+        if role.starts_with("math") {
+            chain.push(format!("sys-{SERIF}"));
         }
         chain.extend(if role == MONO { base_mono.clone() } else { base_prop.clone() });
         chain.extend(fallback.iter().cloned());
@@ -831,7 +878,7 @@ mod tests {
             if fb_keys.is_empty() {
                 return; // no fallback face on this machine (minimal Linux)
             }
-            for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+            for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO, MATH, MATH_ITALIC, MATH_BOLD] {
                 let chain = fonts.families.get(&FontFamily::Name(role.into())).map(Vec::as_slice).unwrap_or_default();
                 assert!(chain.len() >= fb_keys.len(), "{role} chain too short for its fallback");
                 let tail = &chain[chain.len() - fb_keys.len()..];

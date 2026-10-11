@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod data;
 pub mod draw;
 pub mod edit;
+pub mod equation;
 pub mod extra;
 pub mod file;
 pub mod format;
@@ -113,6 +114,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(format::specs());
         v.extend(sheet::specs());
         v.extend(insert::specs());
+        v.extend(equation::specs());
         v.extend(data::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
@@ -268,6 +270,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
     let r = f(&mut ctx)?;
     let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    // Equations whose source changed (or that arrived without a layout, as from a paste) are
+    // laid out here, so painting only ever reads the cache.
+    wb.refresh_equations();
     if !protection_checked {
         check_protection(&d.wb, &wb)?;
     }

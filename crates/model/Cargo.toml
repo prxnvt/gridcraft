@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 gridcraft-core = { workspace = true }
 gridcraft-formula = { workspace = true }
+gridcraft-math = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

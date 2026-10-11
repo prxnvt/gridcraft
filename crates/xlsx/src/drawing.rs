@@ -217,7 +217,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
             tb.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n")
         })
         .unwrap_or_default();
-    Some(Shape { id: 0, kind, anchor, fill, line, text })
+    Some(Shape { math: Default::default(), id: 0, kind, anchor, fill, line, text })
 }
 
 // ---------------------------------------------------------------- writing

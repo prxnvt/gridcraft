@@ -48,6 +48,7 @@ fn fixture() -> (Harness, Objects) {
     let equation = wb.next_object_id();
     let anchor = |cell: &str, width: f32, height: f32| Anchor { cell: at(cell), width, height, ..Default::default() };
     wb.sheet_mut(0).unwrap().shapes.push(Shape {
+        math: Default::default(),
         id: equation,
         kind: ShapeKind::Equation,
         anchor: anchor("C14", 120.0, 50.0),

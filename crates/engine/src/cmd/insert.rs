@@ -881,6 +881,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         Color::Theme(4, -250)
     });
     let shape = Shape {
+        math: Default::default(),
         id,
         kind,
         anchor: Anchor {
@@ -1301,6 +1302,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param(p, "at").unwrap_or(d.selection.active);
     let color = super::format::color_param(p.get("color")).unwrap_or(Color::Theme(1, 0));
     let shape = Shape {
+        math: Default::default(),
         id,
         kind: ShapeKind::Icon,
         anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },
