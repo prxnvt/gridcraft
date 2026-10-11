@@ -27,3 +27,37 @@ fn the_binary_serves_python_and_survives_hostile_code() {
     let o = w.run_blocking("greeting.upper()", &mut cells);
     assert_eq!(o.result.as_ref().map(|o| o.value.clone()), Ok(Value::text("HELLO")), "{o:?}");
 }
+
+/// The whole path a headless caller takes: commands through the CLI, Python in a real worker
+/// process (this binary with --python-worker), results in the cells.
+#[test]
+fn cli_commands_run_python_cells_and_contain_hostile_code() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"))
+        .args([
+            "run",
+            "--cmd",
+            r#"cell.set={"cell":"A1","input":"21"}"#,
+            "--cmd",
+            r#"python.set={"cell":"B1","code":"xl('A1') * 2"}"#,
+            "--cmd",
+            r#"python.options={"timeoutSeconds":1}"#,
+            "--cmd",
+            r#"python.set={"cell":"B2","code":"while True: pass"}"#,
+            "--cmd",
+            r#"python.set={"cell":"B3","code":"'x' * 10**12"}"#,
+            "--cmd",
+            r#"python.set={"cell":"B4","code":"'still running'"}"#,
+            "--print",
+            "B1:B4",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    let tail = lines.get(lines.len().saturating_sub(4)..).unwrap_or_default().join("|");
+    assert!(tail.contains("42"), "{stdout}");
+    assert!(tail.contains("#TIMEOUT!"), "{stdout}");
+    assert!(tail.contains("#PYTHON!"), "{stdout}");
+    assert!(tail.contains("still running"), "{stdout}");
+}

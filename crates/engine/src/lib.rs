@@ -374,6 +374,9 @@ impl Session {
         });
         // What Python cells see as the edit: the workbook before a top-level command.
         let python_before = if self.depth == 0 { before.as_ref().map(|(uid, wb, _)| (*uid, wb.clone())) } else { None };
+        if self.depth == 0 {
+            self.python.refreshed = false;
+        }
         self.depth = self.depth.saturating_add(1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         self.depth = self.depth.saturating_sub(1);
@@ -427,7 +430,7 @@ impl Session {
             d.redo.clear();
             d.revision += 1;
         }
-        if result.is_ok() {
+        if python_before.is_some() && !std::mem::take(&mut self.python.refreshed) && result.is_ok() {
             self.python_after_command(id, python_before);
         }
         result

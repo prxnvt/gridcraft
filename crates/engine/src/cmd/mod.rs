@@ -13,6 +13,7 @@ pub mod insert;
 pub mod inspect;
 pub mod pivot;
 pub mod print;
+pub mod python;
 pub mod review;
 pub mod sheet;
 pub mod solver;
@@ -135,6 +136,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(solver_report::specs());
         v.extend(crate::job::specs());
         v.extend(print::specs());
+        v.extend(python::specs());
         v
     })
 }

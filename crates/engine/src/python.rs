@@ -61,6 +61,8 @@ pub struct PyRuntime {
     /// Run in the background (stepped by the host) rather than inside commands.
     background: bool,
     docs: HashMap<u64, DocPy>,
+    /// The running command already refreshed its workbook's Python cells.
+    pub(crate) refreshed: bool,
 }
 
 #[derive(Default)]
@@ -492,6 +494,20 @@ impl Session {
         if !self.python.background {
             self.drive_python(uid, true);
         }
+    }
+
+    /// Refreshes the Python cells for a change a command made since `before` (the active
+    /// workbook as it was), so the command can report results; the refresh after the command is
+    /// then skipped. Only for top-level commands.
+    pub(crate) fn python_refresh_now(&mut self, id: &str, before: Arc<Workbook>) -> crate::Result<()> {
+        // Inside another command, that command's refresh covers everything it changed.
+        if self.depth != 1 {
+            return Ok(());
+        }
+        let uid = self.doc()?.uid;
+        self.python_after_command(id, Some((uid, before)));
+        self.python.refreshed = true;
+        Ok(())
     }
 
     /// After a top-level command: finds the Python cells the change affects and runs them.
