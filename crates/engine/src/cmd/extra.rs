@@ -817,16 +817,19 @@ fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("automate.runScript", "missing `name`"))?;
     let all = stash_get(&s.doc()?.wb, SCRIPTS_NAME);
     let steps = all.get(name).and_then(Json::as_array).cloned().ok_or_else(|| bad("automate.runScript", "no such script"))?;
-    let mut n = 0;
-    for st in steps.iter().take(100_000) {
-        let id = st["command"].as_str().unwrap_or("");
-        if id.starts_with("automate.") {
-            continue;
+    // One undo step for the whole run; a failing step rolls back the steps before it.
+    s.grouped(&format!("Run Script: {name}"), |s| {
+        let mut n = 0;
+        for (i, st) in steps.iter().take(100_000).enumerate() {
+            let id = st["command"].as_str().unwrap_or("");
+            if id.starts_with("automate.") {
+                continue;
+            }
+            s.execute(id, st["params"].clone()).map_err(|e| EngineError::Other(format!("step {} ({id}): {e}", i + 1)))?;
+            n += 1;
         }
-        s.execute(id, st["params"].clone())?;
-        n += 1;
-    }
-    Ok(json!({"ran": n}))
+        Ok(json!({"ran": n}))
+    })
 }
 
 fn delete_script(s: &mut Session, p: &Json) -> Result<Json> {
