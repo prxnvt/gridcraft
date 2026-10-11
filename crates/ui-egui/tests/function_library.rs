@@ -220,7 +220,9 @@ fn insert_function_has_its_title_and_a_working_category_list() {
     let mut h = formulas_tab(1440.0, false);
     h.state_mut().run("cell.set", json!({"cell": "A1", "input": "=NPV(0.1,1,2)"})).unwrap();
     h.run_steps(2);
-    click(&mut h, "Insert Function");
+    // The ribbon button and the formula bar's fx button share the name; both open the dialog.
+    h.get_all_by_label("Insert Function").next().expect("an Insert Function button").click();
+    h.run_steps(3);
     let d = h.state().dialog.as_ref().expect("Insert Function opens");
     assert_eq!(d.title, "Insert Function");
     // Most Recently Used comes first, newest first.

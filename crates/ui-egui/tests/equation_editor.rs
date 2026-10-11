@@ -82,7 +82,8 @@ fn errors_show_their_position_and_block_ok() {
     cmd_enter(&mut h);
     assert!(h.state().dialog.is_some(), "an equation with an error can't be inserted");
     assert!(equations(&h).is_empty());
-    h.get_by_label("Cancel").click();
+    // The formula bar's cancel button shares the label; the dialog's comes last.
+    h.get_all_by_label("Cancel").last().expect("the dialog's Cancel").click();
     h.run_steps(3);
     assert!(h.state().dialog.is_none());
     assert!(equations(&h).is_empty());

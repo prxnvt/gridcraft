@@ -130,11 +130,11 @@ fn a_narrow_window_folds_calculation_then_python_into_one_button_each() {
     };
     let wide = at(1700.0);
     assert!(wide.query_by_label("Calculate Now").is_some() && wide.query_by_label("Reset").is_some(), "nothing folds when it fits");
-    let mid = at(1440.0);
+    let mid = at(1366.0);
     assert!(mid.query_by_label("Calculate Now").is_none(), "Calculation folds first");
     assert!(mid.query_by_label("Reset").is_some());
-    // 1366 px is the Formulas tab's budget until the Function Library's small buttons (M14.10).
-    let mut narrow = at(1366.0);
+    // With the Function Library's small buttons (M14.10), the folded tab fits 1280 px.
+    let mut narrow = at(1280.0);
     assert!(narrow.query_by_label("Reset").is_none(), "then Python");
     let o = gridcraft_ui_egui::ribbon::RibbonOverflow::get(&narrow.ctx);
     assert!(!o.overflows(), "folded, the tab fits: {} in {}", o.content, o.visible);

@@ -4,13 +4,13 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 265 / 294 commands implemented (90.1%).**
+**Overall: 270 / 298 commands implemented (90.6%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
 | File | 10 | 11 | 91% |
 | Home | 94 | 94 | 100% |
-| Insert | 18 | 28 | 64% |
+| Insert | 19 | 28 | 68% |
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 27 | 27 | 100% |
@@ -142,7 +142,7 @@ Implemented:
 - `edit.goToSpecial` Go To Special (Editing)
 - `home.addIns` Add-ins (Add-ins)
 
-## Insert (18 / 28, 64%)
+## Insert (19 / 28, 68%)
 
 Implemented:
 
@@ -159,6 +159,7 @@ Implemented:
 - `review.newComment` Comment (Comments)
 - `insert.textBox` Text Box (Text)
 - `pageLayout.headerFooter` Header & Footer (Text)
+- `insert.equation` Equation (Symbols)
 - `insert.symbol` Symbol (Symbols)
 - `insert.checkbox` Checkbox (Cell Controls)
 - `insert.button` Button (Controls)
@@ -176,7 +177,6 @@ Missing:
 - `insert.wordArt` WordArt (Text)
 - `insert.signatureLine` Signature Line (Text)
 - `insert.object` Object (Text)
-- `insert.equation` Equation (Symbols)
 
 ## Draw (4 / 4, 100%)
 
