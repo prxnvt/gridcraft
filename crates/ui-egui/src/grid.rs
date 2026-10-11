@@ -93,6 +93,11 @@ pub struct GridState {
     pub control: Option<crate::form_controls::Gesture>,
     /// The form control that takes the arrow keys (the one last worked).
     pub focused_control: Option<u32>,
+    /// Insert › Controls: the kind a click or drag on the grid places, and where the drag began.
+    pub placing: Option<gridcraft_engine::model::ControlKind>,
+    pub place_start: Option<Pos2>,
+    /// A form control's context menu: (control id, where).
+    pub control_menu: Option<(u32, Pos2)>,
 }
 
 impl GridState {
@@ -436,6 +441,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
+    crate::control_ui::menu(app, ui);
     vertical_scrollbar(app, ui, sh, &geo, available.right(), max_y, &t);
     if app.session.clipboard.is_some() {
         app.grid.marching_phase = (app.grid.marching_phase + 0.5) % 8.0;
@@ -1105,6 +1111,9 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let in_row_header = pos.is_some_and(|p| p.x < geo.cells.left() && p.x >= geo.rect.left() && p.y >= geo.cells.top());
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && geo.rect.contains(p));
     // A click works a form control (Ctrl or Cmd+click selects it instead).
+    if app.editor.is_none() && crate::control_ui::place(app, ui, resp, geo, sh) {
+        return;
+    }
     if app.editor.is_none() && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
         keyboard(app, &ctx, resp, geo, sh);
         return;
@@ -1521,6 +1530,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     {
         app.selected_object = Some(o);
         app.grid.focused_control = None;
+        app.grid.control_menu = Some((o.id, p));
         resp.request_focus();
         return;
     }

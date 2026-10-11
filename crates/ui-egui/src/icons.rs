@@ -166,6 +166,8 @@ pub enum Icon {
     Slider,
     /// A form spin button.
     Spin,
+    /// A checkbox in a cell.
+    Checkbox,
     /// Use Relative References: a cell and an arrow to a cell offset from it.
     Relative,
     /// Run (the debugger's Run): a play triangle.
@@ -276,7 +278,7 @@ impl Palette {
 /// Whether an icon has a part of its own for the accent colour (otherwise the accent recolours
 /// the whole icon).
 fn has_accent_part(icon: Icon) -> bool {
-    matches!(icon, Icon::FnBook(_) | Icon::Python | Icon::Diagnostics | Icon::Macro | Icon::Equation | Icon::Slider)
+    matches!(icon, Icon::FnBook(_) | Icon::Python | Icon::Diagnostics | Icon::Macro | Icon::Equation | Icon::Slider | Icon::Checkbox)
 }
 
 /// Draws `icon` into `rect` (square-ish), in colour `c`, with the current theme's palette.
@@ -853,6 +855,10 @@ pub fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette
             g.stroke(&[(4.0, 8.0), (12.0, 8.0)], c);
             g.poly(&[(8.0, 3.2), (10.5, 6.3), (5.5, 6.3)], c);
             g.poly(&[(5.5, 9.7), (10.5, 9.7), (8.0, 12.8)], c);
+        }
+        Icon::Checkbox => {
+            g.rect(2.5, 2.5, 11.0, 11.0, Some(paper), Some(c));
+            g.line(&[(4.8, 8.2), (7.0, 10.6), (11.4, 5.2)], pal.accent.unwrap_or(green), 1.6);
         }
         Icon::Relative => {
             g.rect(1.5, 1.5, 5.5, 5.0, Some(paper), Some(c));

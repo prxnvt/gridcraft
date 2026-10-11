@@ -251,3 +251,173 @@ fn a_button_from_a_file_asks_before_it_runs() {
     assert!(confirm.text.contains("came with a workbook you opened"), "{}", confirm.text);
     assert_eq!(confirm.choices.first().map(|c| c.0.as_str()), Some("Run"));
 }
+
+// ---------------------------------------------------------------- ribbon, menus and dialogs
+
+fn insert_tab() -> Harness {
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut app = SheetApp::new(s, Default::default());
+    app.ui.ribbon_tab = "Insert".into();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(1400.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
+        .with_os(egui::os::OperatingSystem::Mac)
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    h.run_steps(4);
+    h
+}
+
+fn controls(h: &Harness) -> Vec<FormControl> {
+    h.state().session.doc().unwrap().wb.active().unwrap().controls.clone()
+}
+
+fn cells_rect(h: &Harness) -> Rect {
+    h.state().grid.cells_rect.unwrap()
+}
+
+#[test]
+fn the_controls_group_places_by_click_or_drag() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = insert_tab();
+    // A click places a slider at its default size.
+    h.get_by_label("Slider").click();
+    h.run_steps(2);
+    assert_eq!(h.state().grid.placing, Some(gridcraft_engine::model::ControlKind::Slider));
+    let at = cells_rect(&h).min + vec2(300.0, 120.0);
+    click(&mut h, at);
+    let list = controls(&h);
+    assert_eq!(list.len(), 1);
+    assert_eq!((list[0].anchor.width, list[0].anchor.height, list[0].horizontal), (144.0, 18.0, true));
+    assert_eq!(h.state().grid.placing, None, "placing is one-shot");
+    assert_eq!(h.state().selected_object, Some(ObjRef::new(ObjKind::Control, list[0].id)), "the new control is selected");
+    // A tall drag draws a vertical slider of that size.
+    h.get_by_label("Slider").click();
+    h.run_steps(2);
+    let from = cells_rect(&h).min + vec2(600.0, 100.0);
+    h.run_steps(30);
+    button(&mut h, from, true, PointerButton::Primary, Modifiers::NONE);
+    h.input_mut().events.push(Event::PointerMoved(from + vec2(10.0, 60.0)));
+    h.step();
+    button(&mut h, from + vec2(20.0, 150.0), false, PointerButton::Primary, Modifiers::NONE);
+    h.run_steps(2);
+    let s = controls(&h).pop().unwrap();
+    // The drawn size is in sheet points (screen pixels over the zoom).
+    let drawn = rect(&h, s.id);
+    assert!(!s.horizontal && (drawn.width() - 20.0).abs() < 1.5 && (drawn.height() - 150.0).abs() < 1.5, "{drawn:?}");
+    // Escape disarms.
+    h.get_by_label("Spin Button").click();
+    h.run_steps(2);
+    key(&mut h, Key::Escape);
+    assert_eq!(h.state().grid.placing, None);
+    // A button asks what to run.
+    h.get_by_label("Button").click();
+    h.run_steps(2);
+    let spot = cells_rect(&h).min + vec2(100.0, 300.0);
+    click(&mut h, spot);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("assignAction"));
+    // Checkbox turns the selection into checkboxes.
+    h.state_mut().dialog = None;
+    h.state_mut().run("selection.set", json!({"range": "A1:A2"})).unwrap();
+    h.get_by_label("Checkbox").click();
+    h.run_steps(2);
+    let wb = &h.state().session.doc().unwrap().wb;
+    assert_eq!(wb.active().unwrap().value(CellRef::parse("A1").unwrap()), Value::Bool(false));
+}
+
+#[test]
+fn assign_action_and_format_control_dialogs() {
+    use egui_kittest::kittest::Queryable as _;
+    let (mut h, ids) = fixture();
+    // Right-click opens the control's menu; Assign Action picks a command.
+    let r = rect(&h, ids.button);
+    h.run_steps(30);
+    button(&mut h, r.center(), true, PointerButton::Secondary, Modifiers::NONE);
+    button(&mut h, r.center(), false, PointerButton::Secondary, Modifiers::NONE);
+    h.run_steps(2);
+    for item in ["Edit Text", "Assign Action…", "Format Control…"] {
+        assert!(h.query_by_label(item).is_some(), "{item}");
+    }
+    h.get_by_label("Assign Action…").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("assignAction"));
+    h.get_by_label("Run a command").click();
+    h.run_steps(2);
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("command".into(), json!("cell.set"));
+        d.values.insert("params".into(), json!("{\"cell\": \"H2\", \"input\": \"cmd\"}"));
+    }
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    h.state_mut().selected_object = None;
+    click(&mut h, r.center());
+    assert_eq!(cell(&h, "H2"), Value::text("cmd"));
+
+    // Format Control: refuses broken limits, then applies good ones and writes the link.
+    h.state_mut().open_dialog("formatControl", json!({"id": ids.spin}));
+    h.run_steps(2);
+    assert!(h.query_by_label("Incremental change:").is_some());
+    assert!(h.query_by_label("Page change:").is_none(), "a spin button has no page change");
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("max".into(), json!("0"));
+    }
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("must be greater than Minimum").is_some());
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("max".into(), json!("40"));
+        d.values.insert("value".into(), json!("30"));
+        d.values.insert("link".into(), json!("$D$1"));
+    }
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    let c = control(&h, ids.spin);
+    assert_eq!((c.max, c.value, c.link.as_deref()), (40, 30, Some("$D$1")));
+    assert_eq!(cell(&h, "D1"), Value::Number(30.0));
+
+    // Double-clicking a selected button edits its text.
+    h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Control, ids.button));
+    h.state_mut().open_object(ObjRef::new(ObjKind::Control, ids.button));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.title.as_str()), Some("Edit Text"));
+}
+
+#[test]
+fn assign_action_new_and_record_make_the_macro() {
+    use egui_kittest::kittest::Queryable as _;
+    let (mut h, ids) = fixture();
+    h.state_mut().open_dialog("assignAction", json!({"id": ids.button}));
+    h.run_steps(2);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("macro".into(), json!("Fresh"));
+    h.run_steps(2);
+    h.get_by_label("Record…").click();
+    h.run_steps(3);
+    assert!(h.state().session.is_recording());
+    h.state_mut().run("cell.set", json!({"cell": "J1", "input": "x"})).unwrap();
+    gridcraft_ui_egui::macro_ui::toggle_recording(h.state_mut());
+    h.run_steps(2);
+    let wb = &h.state().session.doc().unwrap().wb;
+    assert!(wb.macros.iter().any(|m| m.name == "Fresh"), "the recording is saved under the button's name");
+    assert!(matches!(control(&h, ids.button).action, Some(gridcraft_engine::model::ControlAction::Macro { ref name, .. }) if name == "Fresh"));
+    // New opens the step editor on a macro of that name.
+    h.state_mut().open_dialog("assignAction", json!({"id": ids.button}));
+    h.run_steps(2);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("macro".into(), json!("Written"));
+    h.run_steps(2);
+    h.get_by_label("New…").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("macroEditor"));
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.name.as_str()), Some("Written"));
+}

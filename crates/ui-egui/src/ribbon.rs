@@ -1366,6 +1366,29 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
+    sep(ui);
+    // Controls: draw a button, slider or spin button on the sheet (or click for the default size);
+    // Checkbox turns the selected cells into checkboxes.
+    use gridcraft_engine::model::ControlKind;
+    let placing = app.grid.placing;
+    ui.vertical(|ui| {
+        for (icon, kind, label, tip, key) in [
+            (Icon::Button, ControlKind::Button, "Button", "Draw a button that runs a macro or a command", "NQ"),
+            (Icon::Slider, ControlKind::Slider, "Slider", "Draw a slider that sets a whole number in a linked cell", "NJ"),
+            (Icon::Spin, ControlKind::Spin, "Spin Button", "Draw a spin button that steps a whole number in a linked cell", "NW"),
+        ] {
+            let r = small_toggle_button(ui, icon, None, label, tip, placing == Some(kind));
+            if kt(app, r, key).clicked() {
+                app.grid.placing = if placing == Some(kind) { None } else { Some(kind) };
+                app.selected_object = None;
+            }
+        }
+    });
+    ui.vertical(|ui| {
+        if kt(app, small_button(ui, Icon::Checkbox, "Checkbox", "Turn the selected cells into checkboxes", false), "NZ").clicked() {
+            act(app, "insert.checkbox", json!({}));
+        }
+    });
 }
 
 fn draw(app: &mut SheetApp, ui: &mut Ui) {

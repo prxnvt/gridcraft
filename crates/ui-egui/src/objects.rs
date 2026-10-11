@@ -151,9 +151,9 @@ impl SheetApp {
         let _ = id;
     }
 
-    /// Hook: opens a form control's editor. Controls have no editor yet; the object stays selected.
+    /// Opens a form control's editor: a button's text, else Format Control.
     pub fn edit_control(&mut self, id: u32) {
-        let _ = id;
+        crate::control_ui::edit(self, id);
     }
 
     /// The selected object's id when it is a chart.

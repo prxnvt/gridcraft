@@ -25,11 +25,13 @@ pub struct MacroUi {
     pub editor: Option<crate::macro_editor::Editor>,
     /// A debugger result from a prompt's button, for the editor to take in.
     pub debug_result: Option<Json>,
+    /// The name the recording is saved under when it stops (Record from Assign Action).
+    pub record_name: Option<String>,
 }
 
 impl Default for MacroUi {
     fn default() -> Self {
-        MacroUi { relative: true, recent: vec![], editor: None, debug_result: None }
+        MacroUi { relative: true, recent: vec![], editor: None, debug_result: None, record_name: None }
     }
 }
 
@@ -58,7 +60,11 @@ pub fn recorded_steps(app: &SheetApp) -> Option<usize> {
 /// References says), or stops and saves what was recorded as a macro.
 pub fn toggle_recording(app: &mut SheetApp) {
     if app.session.is_recording() {
-        match app.run("macro.record", json!({"stop": true})) {
+        let mut stop = json!({"stop": true});
+        if let Some(name) = app.macros.record_name.take() {
+            stop["name"] = json!(name);
+        }
+        match app.run("macro.record", stop) {
             Ok(v) => match v["saved"].as_str() {
                 Some(name) => {
                     let steps = v["steps"].as_u64().unwrap_or(0);
@@ -71,6 +77,16 @@ pub fn toggle_recording(app: &mut SheetApp) {
         }
     } else {
         app.run_or_alert("macro.record", json!({"relative": app.macros.relative}));
+    }
+}
+
+/// Starts recording a macro that is saved as `name` when recording stops.
+pub fn record_named(app: &mut SheetApp, name: &str) {
+    if app.session.is_recording() {
+        return;
+    }
+    if app.run("macro.record", json!({"relative": app.macros.relative})).is_ok() {
+        app.macros.record_name = Some(name.to_string());
     }
 }
 
@@ -107,7 +123,7 @@ pub fn approve_text(e: &str) -> Option<String> {
 /// whose output would land on data; OK (`overwrite: true`) for anything else. False when `e`
 /// isn't a question.
 pub fn ask(app: &mut SheetApp, title: &str, id: &str, params: &Json, e: &str) -> bool {
-    let is_macro = matches!(id, "macro.run" | "macro.debug" | "automate.runScript");
+    let is_macro = matches!(id, "macro.run" | "macro.debug" | "automate.runScript" | "control.press");
     let (text, choices) = if let Some(q) = approve_text(e) {
         (q, vec![("Run".to_string(), json!({"approve": true}))])
     } else if let Some(q) = crate::confirm_text(e) {

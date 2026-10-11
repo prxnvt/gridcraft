@@ -21,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Button",
             ["Insert", "Controls"],
             None,
-            "{at?: \"B2\" (or cell), width?, height?, text?, macro?: name, input?: \"selection\" | \"B2:D9\", output?: \"F2\", command?: id, params?: {..}} places a button; pressing it runs the macro or the command → {control: id}",
+            "{at?: \"B2\" (or cell), dx?, dy?, width?, height?, text?, macro?: name, input?: \"selection\" | \"B2:D9\", output?: \"F2\", command?: id, params?: {..}} places a button; pressing it runs the macro or the command → {control: id}",
             has_doc,
             insert_button
         ),
@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Slider",
             ["Insert", "Controls"],
             None,
-            "{at?: \"B2\" (or cell), width?, height?, link?: \"$B$1\" | \"Sheet2!$B$1\", min?: 0, max?: 100, step?: 1, page?: 10, value?, horizontal?: true} whole numbers, 0 ≤ min < max ≤ 30000, 1 ≤ step ≤ max − min, page ≥ step → {control: id}",
+            "{at?: \"B2\" (or cell), dx?, dy?, width?, height?, link?: \"$B$1\" | \"Sheet2!$B$1\", min?: 0, max?: 100, step?: 1, page?: 10, value?, horizontal?: true} whole numbers, 0 ≤ min < max ≤ 30000, 1 ≤ step ≤ max − min, page ≥ step → {control: id}",
             has_doc,
             |s, p| insert_number_control(s, p, ControlKind::Slider)
         ),
@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Spin Button",
             ["Insert", "Controls"],
             None,
-            "{at?: \"B2\" (or cell), width?, height?, link?: \"$B$1\", min?: 0, max?: 100, step?: 1, value?} whole numbers, 0 ≤ min < max ≤ 30000, 1 ≤ step ≤ max − min → {control: id}",
+            "{at?: \"B2\" (or cell), dx?, dy?, width?, height?, link?: \"$B$1\", min?: 0, max?: 100, step?: 1, value?} whole numbers, 0 ≤ min < max ≤ 30000, 1 ≤ step ≤ max − min → {control: id}",
             has_doc,
             |s, p| insert_number_control(s, p, ControlKind::Spin)
         ),
@@ -188,10 +188,11 @@ fn new_anchor(s: &Session, p: &Json, size: (f32, f32)) -> Result<Anchor> {
     let d = s.doc()?;
     let cell = cell_param(p, "at").or_else(|| cell_param(p, "cell")).unwrap_or(d.selection.active);
     let dim = |k: &str, v: f32| f64_param(p, k).filter(|x| x.is_finite()).map_or(v, |x| x.clamp(4.0, 10_000.0) as f32);
+    let off = |k: &str| f64_param(p, k).filter(|x| x.is_finite()).map_or(0.0, |x| x.clamp(-10_000.0, 10_000.0) as f32);
     Ok(Anchor {
         cell,
-        dx: 0.0,
-        dy: 0.0,
+        dx: off("dx"),
+        dy: off("dy"),
         width: dim("width", size.0),
         height: dim("height", size.1),
         mode: anchor_mode_param(p).unwrap_or(AnchorMode::MoveOnly),
