@@ -360,7 +360,7 @@ fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::C
         (Some(a), Some(b)) => match (&a.formula, &b.formula) {
             (Some(x), Some(y)) => x.text == y.text && x.array == y.array,
             (None, None) => match (&a.py, &b.py) {
-                (Some(x), Some(y)) => x.code == y.code && x.object == y.object,
+                (Some(x), Some(y)) => x.code == y.code && x.object == y.object && x.lines == y.lines,
                 (None, None) => a.value == b.value,
                 _ => false,
             },

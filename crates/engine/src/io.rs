@@ -40,6 +40,7 @@ impl FileKind {
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let (mut wb, mut warnings) = read_bytes(name, bytes)?;
     adopt_python(&mut wb);
+    crate::python::load_line_names(&mut wb);
     warnings.extend(enforce_limits(&mut wb, &LOAD_LIMITS));
     warnings.extend(crate::macros::load(&mut wb));
     crate::cmd::controls::load_action_names(&mut wb);
@@ -79,7 +80,7 @@ pub fn adopt_python(wb: &mut Workbook) {
             let Some(array) = gridcraft_core::Array::new(range.height() as usize, range.width() as usize, data) else { continue };
             if let Some(py) = sh.cells.get_mut(anchor).and_then(|x| x.py.as_mut()) {
                 std::sync::Arc::make_mut(py).output =
-                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), preview: String::new(), convertible: true });
+                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), convertible: true, ..Default::default() });
             }
         }
     }
@@ -122,7 +123,7 @@ pub fn enforce_limits(wb: &mut Workbook, limits: &LoadLimits) -> Vec<String> {
                 if py.code.chars().nth(limits.python_code).is_some() {
                     python.push(format!("{}!{}", sh.name, c.a1()));
                     over.push(c);
-                } else if py.output.as_ref().is_some_and(|o| !sane_output(&o.value)) {
+                } else if py.output.as_ref().is_some_and(|o| !sane_output(&o.value) || o.table.as_ref().is_some_and(|t| !sane_output(t))) {
                     bad_output.push(c);
                 }
             }
@@ -355,6 +356,11 @@ pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
             // Macros, and button actions xlsx has no place for, travel in hidden names.
             let named = crate::macros::with_names(wb)?;
             let named = match crate::cmd::controls::with_action_names(named.as_ref().unwrap_or(wb))? {
+                Some(w) => Some(w),
+                None => named,
+            };
+            // So do Python cells' one-line-per-row choices.
+            let named = match crate::python::with_line_names(named.as_ref().unwrap_or(wb))? {
                 Some(w) => Some(w),
                 None => named,
             };

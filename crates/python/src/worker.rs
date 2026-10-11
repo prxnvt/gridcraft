@@ -322,7 +322,39 @@ pub fn to_output(o: &ObjectRef<'_>, max_cells: usize) -> Result<Output, String> 
             None => (Value::text(preview.as_str()), false),
         },
     };
-    Ok(Output { value, type_name, preview, convertible })
+    let array = matches!(value, Value::Array(_));
+    let count = |n: usize, one: &str, many: &str| format!("{type_name} {n}{}", if n == 1 { one } else { many });
+    let (label, tabular, headers, table) = match type_name.as_str() {
+        "list" | "tuple" => (count(o.items().map(|i| i.len()).unwrap_or(0), "", ""), array, false, None),
+        "set" | "frozenset" => (count(o.items().map(|i| i.len()).unwrap_or(0), "", ""), false, false, None),
+        "dict" => {
+            let pairs = o.pairs().unwrap_or_default();
+            let columns = dict_columns(&pairs, max_cells);
+            (count(pairs.len(), " key", " keys"), array, columns.is_some(), columns)
+        }
+        "str" => {
+            let lines = o.as_str().map(|t| t.split('\n').count()).unwrap_or(1);
+            (if lines > 1 { format!("str {lines} lines") } else { type_name.clone() }, false, false, None)
+        }
+        _ => (type_name.clone(), false, false, None),
+    };
+    Ok(Output { value, type_name, preview, convertible, label, tabular, headers, table })
+}
+
+/// A dict whose values are lists (or tuples) of one length as a table: a header row of the keys,
+/// then one column per key. `None` for any other dict, or one over `max_cells`.
+fn dict_columns(pairs: &[(ObjectRef<'_>, ObjectRef<'_>)], max_cells: usize) -> Option<Value> {
+    let cols: Vec<Vec<ObjectRef<'_>>> =
+        pairs.iter().map(|(_, v)| if matches!(v.type_name(), "list" | "tuple") { v.items() } else { None }).collect::<Option<_>>()?;
+    let rows = cols.first()?.len();
+    if rows == 0 || cols.iter().any(|c| c.len() != rows) || (rows + 1).checked_mul(cols.len()).is_none_or(|n| n > max_cells) {
+        return None;
+    }
+    let mut data: Vec<Value> = pairs.iter().map(|(k, _)| element(k)).collect();
+    for r in 0..rows {
+        data.extend(cols.iter().map(|c| c.get(r).map(element).unwrap_or(Value::Error(CellError::NA))));
+    }
+    Array::new(rows + 1, cols.len(), data).map(Value::from)
 }
 
 fn cut(s: &str, max: usize) -> String {
@@ -438,6 +470,36 @@ mod tests {
         assert!(o.convertible);
         let o = out("'x' * 1000").unwrap();
         assert_eq!(o.preview.chars().count(), PREVIEW_CHARS + 3);
+    }
+
+    #[test]
+    fn labels_say_the_size_and_tables_come_with_the_result() {
+        let o = out("list(range(12))").unwrap();
+        assert_eq!((o.label.as_str(), o.tabular, o.headers), ("list 12", true, false));
+        assert_eq!(out("(1,)").unwrap().label, "tuple 1");
+        assert_eq!(out("[[1, 2], [3, 4], [5, 6]]").unwrap().label, "list 3");
+        assert_eq!(out("{'a': 1}").unwrap().label, "dict 1 key");
+        let o = out("{'a': [1, 2], 'b': ['x', 'y']}").unwrap();
+        assert_eq!((o.label.as_str(), o.tabular, o.headers), ("dict 2 keys", true, true));
+        assert_eq!(
+            o.table,
+            Array::new(3, 2, vec!["a".into(), "b".into(), 1.0.into(), "x".into(), 2.0.into(), "y".into()]).map(Value::from),
+            "one column per key, under it"
+        );
+        assert_eq!(out("{'a': [1, 2], 'b': [3]}").unwrap().table, None, "unequal lengths: key/value pairs only");
+        let o = out("'a\\nb\\nc\\nd\\ne'").unwrap();
+        assert_eq!((o.label.as_str(), o.tabular), ("str 5 lines", false));
+        assert_eq!(out("'one line'").unwrap().label, "str");
+        assert_eq!(out("{1, 2, 3}").unwrap().label, "set 3");
+        assert_eq!(out("3").unwrap().label, "int");
+        assert!(!out("[]").unwrap().tabular, "an empty list is #CALC!, not a table");
+        // A dict of columns over the cap keeps its pairs but no table.
+        let (tx_in, rx_in) = mpsc::channel::<String>();
+        drop(tx_in);
+        let mut w =
+            Worker { repl: None, limits: Limits { output_cells: 5, ..Limits::default() }, init_code: String::new(), out: Vec::new(), input: rx_in };
+        let d = w.run(1, "{'a': [1, 2], 'b': [3, 4]}");
+        assert_eq!(d.output.map(|o| o.table), Some(None));
     }
 
     #[test]

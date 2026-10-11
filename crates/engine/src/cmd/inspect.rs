@@ -142,6 +142,9 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
             "output": if py.object { "object" } else { "value" },
             "typeName": py.output.as_ref().map(|o| o.type_name.as_str()),
             "preview": py.output.as_ref().map(|o| o.preview.as_str()),
+            "label": py.output.as_ref().map(|o| o.label.as_str()),
+            "tabular": py.output.as_ref().is_some_and(|o| o.tabular),
+            "lines": if py.lines { "rows" } else { "cell" },
             "stale": py.stale,
         })),
     }))

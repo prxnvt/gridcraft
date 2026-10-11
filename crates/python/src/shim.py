@@ -247,6 +247,59 @@ def _table(v):
     return None
 
 
+TIMES = "\u00d7"
+
+
+def _label(v):
+    # The type with its size, for object-mode cells.
+    name = type(v).__name__
+    pd = sys.modules.get("pandas")
+    np = sys.modules.get("numpy")
+    try:
+        if pd is not None and isinstance(v, pd.DataFrame):
+            return "%s %d%s%d" % (name, v.shape[0], TIMES, v.shape[1])
+        if pd is not None and isinstance(v, pd.Series):
+            return "%s %d" % (name, len(v))
+        if np is not None and isinstance(v, np.ndarray):
+            return name + " " + TIMES.join(str(d) for d in v.shape) if v.ndim > 0 else name
+        if isinstance(v, (list, tuple, set, frozenset)):
+            return "%s %d" % (name, len(v))
+        if isinstance(v, dict):
+            return "%s %d key%s" % (name, len(v), "" if len(v) == 1 else "s")
+        if isinstance(v, str):
+            lines = v.count("\n") + 1
+            return "str %d lines" % lines if lines > 1 else "str"
+    except Exception:
+        pass
+    return name
+
+
+def _is_tabular(v):
+    pd = sys.modules.get("pandas")
+    np = sys.modules.get("numpy")
+    if pd is not None and isinstance(v, (pd.DataFrame, pd.Series)):
+        return True
+    if np is not None and isinstance(v, np.ndarray):
+        return v.ndim in (1, 2)
+    return isinstance(v, (list, tuple, dict))
+
+
+def _dict_columns(v):
+    # A dict of equal-length lists: a header row of the keys, then one column per key.
+    if not isinstance(v, dict) or not v:
+        return None
+    cols = list(v.values())
+    if not all(isinstance(c, (list, tuple)) for c in cols):
+        return None
+    rows = len(cols[0])
+    if rows == 0 or any(len(c) != rows for c in cols):
+        return None
+    try:
+        return _grid([list(v.keys())] + [[c[i] for c in cols] for i in range(rows)])
+    except _TooBig:
+        return None
+
+
 def _output(v):
     preview = _repr(v)
     value = _scalar(v)
@@ -259,7 +312,20 @@ def _output(v):
     convertible = value is not None
     if value is None:
         value = {"t": "Text", "v": preview}
-    return {"value": value, "typeName": type(v).__name__, "preview": preview, "convertible": convertible}
+    pd = sys.modules.get("pandas")
+    table = _dict_columns(v)
+    tabular = value.get("t") == "Array" and _is_tabular(v)
+    headers = bool(tabular and ((pd is not None and isinstance(v, pd.DataFrame)) or table is not None))
+    return {
+        "value": value,
+        "typeName": type(v).__name__,
+        "preview": preview,
+        "convertible": convertible,
+        "label": _label(v),
+        "tabular": tabular,
+        "headers": headers,
+        "table": table,
+    }
 
 
 # Cells to Python values.

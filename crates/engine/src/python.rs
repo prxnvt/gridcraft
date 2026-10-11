@@ -234,7 +234,7 @@ fn edit_changes(old: &Workbook, new: &Workbook) -> EditChanges {
         for &c in &cells {
             let (a, b) = (before.cell(c).and_then(|x| x.py.as_deref()), sh.cell(c).and_then(|x| x.py.as_deref()));
             match (a, b) {
-                (Some(a), Some(b)) if a.code == b.code && a.object == b.object => {}
+                (Some(a), Some(b)) if a.code == b.code && a.object == b.object && a.lines == b.lines => {}
                 (_, Some(_)) => {
                     ch.code.insert((si, c));
                 }
@@ -437,6 +437,10 @@ fn write_outcome(d: &mut DocState, key: Key, o: &RunOutcome) -> HashMap<usize, C
                 type_name: out.type_name.clone(),
                 preview: out.preview.clone(),
                 convertible: out.convertible,
+                label: out.label.clone(),
+                tabular: out.tabular,
+                headers: out.headers,
+                table: out.table.clone(),
             });
             py.stale = false;
         }),
@@ -452,6 +456,98 @@ fn write_outcome(d: &mut DocState, key: Key, o: &RunOutcome) -> HashMap<usize, C
     };
     push_log(d, entry);
     changed
+}
+
+/// The hidden-data key listing the Python cells whose multi-line text spills one line per row
+/// (xlsx's `PY()` has no place for it).
+pub const LINES_KEY: &str = "py_lines";
+/// Cells a file's list may name.
+const MAX_LINE_CELLS: usize = 100_000;
+
+/// `wb` with the list of one-line-per-row Python cells in its hidden names, for xlsx (`None`
+/// when there is nothing to add or remove).
+pub fn with_line_names(wb: &Workbook) -> crate::Result<Option<Workbook>> {
+    let mut cells = Vec::new();
+    for sh in &wb.sheets {
+        for (c, cell) in sh.cells.iter() {
+            if cell.py.as_ref().is_some_and(|p| p.lines) {
+                cells.push(json!([sh.name, c.a1()]));
+            }
+        }
+    }
+    if cells.is_empty() && crate::cmd::stash::get(wb, LINES_KEY).is_none() {
+        return Ok(None);
+    }
+    let mut w = wb.clone();
+    if cells.is_empty() {
+        crate::cmd::stash::remove(&mut w, LINES_KEY);
+    } else {
+        crate::cmd::stash::set_json(&mut w, LINES_KEY, &json!(cells))?;
+    }
+    Ok(Some(w))
+}
+
+/// Applies a file's list of one-line-per-row Python cells, then drops it (the cells carry it).
+pub fn load_line_names(wb: &mut Workbook) {
+    let items = match crate::cmd::stash::get_json(wb, LINES_KEY) {
+        Some(Json::Array(items)) => items,
+        Some(_) => Vec::new(),
+        None => return,
+    };
+    crate::cmd::stash::remove(wb, LINES_KEY);
+    for item in items.iter().take(MAX_LINE_CELLS) {
+        let (Some(name), Some(cell)) = (item.get(0).and_then(Json::as_str), item.get(1).and_then(Json::as_str).and_then(CellRef::parse)) else {
+            continue;
+        };
+        let Some(si) = wb.sheet_index(name) else { continue };
+        if let Some(py) = wb.sheet_mut(si).and_then(|sh| sh.cells.get_mut(cell)).and_then(|c| c.py.as_mut()) {
+            Arc::make_mut(py).lines = true;
+        }
+    }
+}
+
+/// The text of a table's cells, row by row (numbers as the cell would show them unformatted).
+pub fn table_text(a: &gridcraft_core::Array) -> Vec<Vec<String>> {
+    (0..a.rows).map(|r| (0..a.cols).map(|c| a.get(r, c).map(Value::display).unwrap_or_default()).collect()).collect()
+}
+
+/// A table as CSV (RFC 4180): fields with a comma, quote or line break are quoted, quotes
+/// doubled; lines end with CRLF.
+pub fn to_csv(rows: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    for row in rows {
+        let fields: Vec<String> =
+            row.iter().map(|f| if f.contains([',', '"', '\n', '\r']) { format!("\"{}\"", f.replace('"', "\"\"")) } else { f.clone() }).collect();
+        out.push_str(&fields.join(","));
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// A table as a Markdown pipe table. With `headers` the first row is the header; otherwise the
+/// columns are numbered from 0 (as pandas numbers them). Pipes and backslashes are escaped and
+/// line breaks become `<br>`.
+pub fn to_markdown(rows: &[Vec<String>], headers: bool) -> String {
+    let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if cols == 0 {
+        return String::new();
+    }
+    let esc = |f: &str| f.replace('\\', "\\\\").replace('|', "\\|").replace("\r\n", "<br>").replace(['\n', '\r'], "<br>");
+    let line = |row: &[String]| {
+        let cells: Vec<String> = (0..cols).map(|c| esc(row.get(c).map(String::as_str).unwrap_or(""))).collect();
+        format!("| {} |\n", cells.join(" | "))
+    };
+    let numbered: Vec<String> = (0..cols).map(|c| c.to_string()).collect();
+    let (head, body) = match rows.split_first() {
+        Some((h, rest)) if headers => (h.clone(), rest),
+        _ => (numbered, rows),
+    };
+    let mut out = line(&head);
+    out.push_str(&format!("|{}\n", " --- |".repeat(cols)));
+    for row in body {
+        out.push_str(&line(row));
+    }
+    out
 }
 
 /// How long a headless caller waits for the search for Python.

@@ -662,7 +662,9 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
         let pad = 2.5 * z;
         let rotated = st.align.rotation != 0 && st.align.rotation != 255;
         // Rotated text wraps along its own direction (below), not across the column width.
-        if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
+        // A Python cell's multi-line text wraps in the cell (unless it spills one line per row).
+        let py_lines = py.is_some() && text.contains('\n');
+        if !rotated && (st.align.wrap || st.align.h == HAlign::Justify || py_lines) {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
             let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
             job.halign = match halign {
@@ -676,7 +678,9 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
                 HAlign::Right => rect.right() - pad,
                 _ => text_left + pad + indent,
             };
-            let y = match st.align.v {
+            // A Python cell's lines start at the top, so its first line shows in a short row.
+            let v = if py_lines && !st.align.wrap { VAlign::Top } else { st.align.v };
+            let y = match v {
                 VAlign::Top => rect.top() + 1.0,
                 VAlign::Center => rect.center().y - galley.size().y / 2.0,
                 _ => rect.bottom() - galley.size().y - 1.0,
@@ -1796,6 +1800,11 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
         app.toggle_python();
         return;
     }
+    // Ctrl+Alt+Shift+M: the active Python cell's output, object or values.
+    if ctx.input_mut(crate::formula_bar::take_output_shortcut) {
+        app.toggle_python_output();
+        return;
+    }
     // The grid owns arrows, Tab and Escape (egui would otherwise move focus between widgets).
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
@@ -2052,7 +2061,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             ui.set_min_width(200.0);
             if let Some((si, c, object, error)) = python {
                 let item = |ui: &mut egui::Ui, label: &str| ui.add(egui::Button::new(label).frame(false).min_size(vec2(190.0, 20.0))).clicked();
-                for (label, mode, on) in [("Output as Python Object", "object", object), ("Output as Cell Values", "value", !object)] {
+                for (label, mode, on) in [("Output as Python Object", "object", object), ("Output as Excel Values", "value", !object)] {
                     if item(ui, &format!("{}{label}", if on { "• " } else { "   " })) && !on {
                         close = true;
                         app.run_or_alert("python.output", json!({"cell": c.a1(), "mode": mode}));
@@ -2177,6 +2186,7 @@ fn py_card(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_ope
         _ => None,
     };
     let mut install: Option<serde_json::Value> = None;
+    let mut action: Option<&str> = None;
     let t = Tokens::get(ui.ctx());
     let cell_rect = geo.cell_rect(sh, c);
     let mut close = false;
@@ -2184,11 +2194,12 @@ fn py_card(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_ope
     let area = egui::Area::new(egui::Id::new("py_card")).fixed_pos(cell_rect.left_bottom() + vec2(0.0, 2.0)).order(egui::Order::Foreground);
     let resp = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(8.0).show(ui, |ui| {
-            ui.set_max_width(360.0);
+            ui.set_max_width(if py.table().is_some() { 560.0 } else { 360.0 });
             ui.horizontal(|ui| {
                 let (tag, _) = ui.allocate_exact_size(vec2(22.0, 14.0), Sense::hover());
                 paint_py_tag(ui.painter(), tag, 1.25, &t);
                 let title = match (&py.output, &value) {
+                    (Some(o), _) if !o.label.is_empty() => o.label.clone(),
                     (Some(o), _) if !o.type_name.is_empty() => o.type_name.clone(),
                     (_, Value::Error(e)) => e.as_str().to_string(),
                     _ => "No result yet".into(),
@@ -2201,15 +2212,36 @@ fn py_card(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_ope
                 });
             });
             ui.add_space(4.0);
-            let body = match (&error, &py.output) {
-                (Some(e), _) => e.clone(),
-                (None, Some(o)) if !o.preview.is_empty() => o.preview.clone(),
-                (None, _) => gridcraft_engine::display::cell_text(&d.wb, sh, c),
-            };
-            egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                let color = if error.is_some() { t.danger } else { t.text };
-                ui.add(egui::Label::new(egui::RichText::new(body).font(crate::code_editor::font()).color(color)).wrap());
-            });
+            // A table shows as a small grid, with ways to take it out; anything else as its repr.
+            let table = if error.is_none() { py.table().map(|(a, h)| (gridcraft_engine::python::table_text(a), h)) } else { None };
+            if let Some((rows, headers)) = &table {
+                crate::python_ui::table_view(ui, rows, *headers);
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Copy as CSV").clicked() {
+                        action = Some("csv");
+                    }
+                    if ui.button("Copy as Markdown").clicked() {
+                        action = Some("markdown");
+                    }
+                    if ui.button("Save as .csv…").clicked() {
+                        action = Some("save");
+                    }
+                    if py.object && ui.button("Spill Here").on_hover_text("Show the result as Excel values, spilling from this cell").clicked() {
+                        action = Some("spill");
+                    }
+                });
+            } else {
+                let body = match (&error, &py.output) {
+                    (Some(e), _) => e.clone(),
+                    (None, Some(o)) if !o.preview.is_empty() => o.preview.clone(),
+                    (None, _) => gridcraft_engine::display::cell_text(&d.wb, sh, c),
+                };
+                egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                    let color = if error.is_some() { t.danger } else { t.text };
+                    ui.add(egui::Label::new(egui::RichText::new(body).font(crate::code_editor::font()).color(color)).wrap());
+                });
+            }
             if matches!(value, Value::Error(_)) {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
@@ -2225,6 +2257,25 @@ fn py_card(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_ope
             }
         });
     });
+    if let Some(a) = action {
+        let cell = c.a1();
+        match a {
+            "csv" | "markdown" => {
+                if let Some((rows, headers)) = crate::python_ui::cell_table(app, Some(&cell)) {
+                    let text =
+                        if a == "csv" { gridcraft_engine::python::to_csv(&rows) } else { gridcraft_engine::python::to_markdown(&rows, headers) };
+                    ui.ctx().copy_text(text);
+                    let what = if a == "csv" { "CSV" } else { "Markdown" };
+                    app.toast = Some((format!("Copied {} rows as {what}", rows.len()), crate::now_ms()));
+                }
+            }
+            "save" => app.run_or_alert("python.saveCsv", json!({"cell": cell})),
+            _ => {
+                app.run_or_alert("python.output", json!({"cell": cell, "mode": "value"}));
+                app.grid.py_card = None;
+            }
+        }
+    }
     if let Some(params) = install {
         app.grid.py_card = None;
         app.open_dialog("pythonInstall", params);

@@ -395,7 +395,7 @@ fn stale_python_cells_and_object_cards() {
     let mut h = harness();
     h.state_mut().run("python.set", json!({"cell": "A1", "code": "{2, 1} | {3}", "output": "object"})).unwrap();
     wait_python(&mut h);
-    assert_eq!(value(&h, "A1"), Value::text("set"), "an object shows its type");
+    assert_eq!(value(&h, "A1"), Value::text("set 3"), "an object shows its type and size");
     // Ctrl+Shift+F5 opens the preview card.
     select(&mut h, "A1");
     key_with(&mut h, Key::F5, Modifiers { shift: true, ..CTRL });

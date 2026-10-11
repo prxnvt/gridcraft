@@ -435,6 +435,7 @@ impl SheetApp {
                 self.message = None;
                 Ok(Json::Null)
             }
+            "python.saveCsv" => python_ui::save_csv(self, p),
             _ => return None,
         };
         Some(r)
@@ -642,6 +643,18 @@ impl SheetApp {
             }
             None => self.begin_python_edit(),
         }
+    }
+
+    /// Switches the active Python cell between a Python object and Excel values
+    /// (Ctrl+Alt+Shift+M, the PY badge menu, Insert Python's menu, the cell menu).
+    pub fn toggle_python_output(&mut self) {
+        let Some(d) = self.session.active() else { return };
+        let at = d.selection.active;
+        let Some(object) = d.wb.active().and_then(|sh| sh.cell(at)).and_then(|c| c.py.as_ref()).map(|p| p.object) else {
+            self.toast = Some(("Select a Python cell to change its output".into(), now_ms()));
+            return;
+        };
+        self.run_or_alert("python.output", json!({"cell": at.a1(), "mode": if object { "value" } else { "object" }}));
     }
 
     /// Commits a Python-mode edit through `python.set`; the cell stays selected.

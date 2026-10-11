@@ -640,3 +640,86 @@ fn environment_section(app: &mut SheetApp, ui: &mut Ui, open: &mut bool) {
         });
     }
 }
+
+/// The Python cell `cell` (A1 on the active sheet; the active cell when `None`) as a table of
+/// texts with whether its first row is a header, when its result is tabular.
+pub fn cell_table(app: &SheetApp, cell: Option<&str>) -> Option<(Vec<Vec<String>>, bool)> {
+    let d = app.session.active()?;
+    let at = match cell {
+        Some(c) => gridcraft_engine::core::CellRef::parse(c)?,
+        None => d.selection.active,
+    };
+    let py = d.wb.active()?.cell(at)?.py.clone()?;
+    let (table, headers) = py.table()?;
+    Some((gridcraft_engine::python::table_text(table), headers))
+}
+
+/// `python.saveCsv {cell?, path?}`: saves a Python cell's tabular result as CSV, to `path`, or
+/// where the save dialog says (a download on the web).
+pub fn save_csv(app: &mut SheetApp, p: &Json) -> Result<Json, String> {
+    let cell = p.get("cell").and_then(Json::as_str);
+    let (rows, _) = cell_table(app, cell).ok_or("The cell isn't a Python cell with a table result")?;
+    let csv = gridcraft_engine::python::to_csv(&rows);
+    let path = match p.get("path").and_then(Json::as_str) {
+        Some(path) => Some(path.to_string()),
+        None => match &app.services.pick_save {
+            Some(pick) => match pick("python-result.csv") {
+                Some(path) => Some(path),
+                None => return Ok(json!({"saved": false})),
+            },
+            None => None,
+        },
+    };
+    match path {
+        Some(path) => {
+            let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.csv") } else { path };
+            #[cfg(not(target_arch = "wasm32"))]
+            std::fs::write(&path, csv.as_bytes()).map_err(|e| format!("Couldn't save {path}: {e}"))?;
+            Ok(json!({"saved": true, "path": path, "rows": rows.len()}))
+        }
+        None => match &app.services.download {
+            Some(download) => {
+                download("python-result.csv", csv.as_bytes());
+                Ok(json!({"saved": true, "rows": rows.len()}))
+            }
+            None => Err("Saving needs a file dialog, which this host doesn't have; pass `path`".into()),
+        },
+    }
+}
+
+/// The tabular result in the preview card: a small scrollable grid with headers (a numbered
+/// header when the table has none).
+pub fn table_view(ui: &mut Ui, rows: &[Vec<String>], headers: bool) {
+    const MAX_ROWS: usize = 200;
+    const MAX_COLS: usize = 30;
+    let t = Tokens::get(ui.ctx());
+    let cols = rows.iter().map(Vec::len).max().unwrap_or(0).min(MAX_COLS);
+    let numbered: Vec<String> = (0..cols).map(|c| c.to_string()).collect();
+    let (head, body) = match rows.split_first() {
+        Some((h, rest)) if headers => (h.as_slice(), rest),
+        _ => (numbered.as_slice(), rows),
+    };
+    let cut = |s: &str| if s.chars().count() > 40 { format!("{}…", s.chars().take(40).collect::<String>()) } else { s.to_string() };
+    egui::ScrollArea::both().id_salt("py_card.table").max_height(220.0).max_width(520.0).auto_shrink([true, true]).show(ui, |ui| {
+        egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.separator)).show(ui, |ui| {
+            egui::Grid::new("py_card.table.grid").striped(true).spacing(vec2(12.0, 3.0)).show(ui, |ui| {
+                for h in head.iter().take(cols) {
+                    ui.label(RichText::new(cut(h)).font(theme::ui_bold(12.0)).color(t.text));
+                }
+                ui.end_row();
+                for row in body.iter().take(MAX_ROWS) {
+                    for c in 0..cols {
+                        ui.label(RichText::new(cut(row.get(c).map(String::as_str).unwrap_or(""))).font(theme::ui_font(12.0)).color(t.text));
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+    });
+    let more_rows = body.len() > MAX_ROWS;
+    let more_cols = rows.iter().map(Vec::len).max().unwrap_or(0) > MAX_COLS;
+    if more_rows || more_cols {
+        let text = format!("Showing {} of {} rows; Copy and Save have them all.", body.len().min(MAX_ROWS), body.len());
+        ui.label(RichText::new(text).color(t.text_dim).font(theme::ui_font(11.5)));
+    }
+}
