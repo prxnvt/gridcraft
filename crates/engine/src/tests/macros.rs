@@ -414,3 +414,140 @@ fn macros_from_a_file_ask_before_running() {
     // Approved once per macro content: the second run doesn't ask.
     s.execute("macro.run", json!({"name": "Theirs"})).unwrap();
 }
+
+// ---------------------------------------------------------------- debugger
+
+fn debug(s: &mut Session, p: Json) -> Json {
+    s.execute("macro.debug", p).unwrap()
+}
+
+/// Four steps: two plain ones, a Repeat over the data rows (with a breakpoint on its body), and
+/// a final one.
+fn stepper(s: &mut Session) {
+    data(s);
+    put(
+        s,
+        json!({"name": "Walk", "inputs": [{"name": "Input", "header": true}], "output": {"onConflict": "overwrite"}, "steps": [
+            {"command": "cell.set", "params": {"cell": "E1", "input": "start"}},
+            {"command": "cell.set", "params": {"cell": "Input.right.cell(1,1)", "input": "flag"}},
+            {"type": "repeat", "over": "Input.data", "body": [
+                {"command": "cell.set", "params": {"cell": "Row.right", "input": "seen"}, "breakpoint": true}
+            ]},
+            {"command": "cell.set", "params": {"cell": "E9", "input": "end"}}
+        ]}),
+    );
+}
+
+#[test]
+fn the_debugger_steps_continues_and_runs_to_a_step_as_one_undo_step() {
+    let mut s = s();
+    stepper(&mut s);
+    let undo = undo_labels(&s);
+    let st = debug(&mut s, json!({"name": "Walk", "inputs": "B2:C5", "action": "start"}));
+    assert_eq!(st["state"], "paused");
+    assert_eq!(
+        st["current"],
+        json!({"step": "1", "kind": "command", "command": "cell.set", "params": {"cell": "E1", "input": "start"}, "breakpoint": false})
+    );
+    assert_eq!(st["executed"], 0);
+
+    let st = debug(&mut s, json!({"action": "step"}));
+    assert_eq!(st["current"]["step"], "2");
+    assert_eq!(st["current"]["params"]["cell"], "D2", "tokens resolve for the next step");
+    assert_eq!(st["lastParams"], json!({"cell": "E1", "input": "start"}));
+    assert_eq!(st["changed"], json!(["Sheet1!E1"]));
+    assert_eq!(v(&s, "E1").display(), "start");
+
+    // Other edits wait; selecting cells and queries don't.
+    let r = s.execute("cell.set", json!({"cell": "A1", "input": "x"}));
+    assert!(matches!(&r, Err(EngineError::Disabled(_, why)) if why == "Finish or stop the macro first"), "{r:?}");
+    assert!(s.execute("macro.run", json!({"name": "Walk"})).is_err());
+    assert!(s.execute("edit.undo", json!({})).is_err());
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("macro.debug", json!({"name": "Walk", "action": "start"})).unwrap_err().to_string().contains("is being debugged"));
+
+    // Continue stops at the breakpoint inside the Repeat, once per row.
+    let st = debug(&mut s, json!({"action": "continue"}));
+    assert_eq!((st["current"]["step"].as_str(), st["atBreakpoint"].as_bool()), (Some("3.1"), Some(true)));
+    assert_eq!(st["current"]["iteration"], json!({"at": 1, "of": 3}));
+    assert_eq!(st["current"]["params"]["cell"], "D3");
+    let st = debug(&mut s, json!({"action": "continue"}));
+    assert_eq!(st["current"]["iteration"], json!({"at": 2, "of": 3}));
+    // Run To stops at a breakpoint on the way, then at its step.
+    let st = debug(&mut s, json!({"action": "runTo", "step": "4", "breakpoints": []}));
+    assert_eq!((st["current"]["step"].as_str(), st["atBreakpoint"].as_bool()), (Some("3.1"), Some(true)));
+    assert_eq!(st["current"]["iteration"], json!({"at": 3, "of": 3}));
+    let st = debug(&mut s, json!({"action": "runTo", "step": "4"}));
+    assert_eq!((st["current"]["step"].as_str(), st["atBreakpoint"].as_bool()), (Some("4"), Some(false)));
+    assert_eq!((v(&s, "D4").display(), v(&s, "D5").display()), ("seen".into(), "seen".into()));
+    // Breakpoints from the call: none left before the end.
+    let st = debug(&mut s, json!({"action": "continue"}));
+    assert_eq!(st["state"], "finished");
+    assert_eq!(st["executed"], 7);
+    assert!(st["changed"].as_array().unwrap().contains(&json!("Sheet1!E9")));
+    assert_eq!(v(&s, "E9").display(), "end");
+    let after = undo_labels(&s);
+    assert_eq!(after.len(), undo.len() + 1, "{after:?}");
+    assert_eq!(after.last().unwrap(), "Run Macro: Walk");
+    // Edits work again; one undo takes the whole run back.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(v(&s, "E1").is_empty() && v(&s, "D3").is_empty() && v(&s, "E9").is_empty());
+    set(&mut s, "A1", "free");
+}
+
+#[test]
+fn stopping_the_debugger_keeps_or_rolls_back() {
+    for keep in [false, true] {
+        let mut s = s();
+        stepper(&mut s);
+        let (start, undo) = (s.doc().unwrap().wb.clone(), undo_labels(&s));
+        debug(&mut s, json!({"name": "Walk", "inputs": "B2:C5", "breakpoints": ["2"]}));
+        let st = debug(&mut s, json!({"action": "continue"}));
+        assert_eq!((st["current"]["step"].as_str(), st["atBreakpoint"].as_bool()), (Some("2"), Some(true)));
+        let st = debug(&mut s, json!({"action": "stop", "keep": keep}));
+        assert_eq!((st["state"].as_str(), st["kept"].as_bool()), (Some("stopped"), Some(keep)));
+        if keep {
+            assert_eq!(v(&s, "E1").display(), "start");
+            assert_eq!(undo_labels(&s).len(), undo.len() + 1);
+            assert_eq!(st["changed"], json!(["Sheet1!E1"]));
+        } else {
+            assert!(Arc::ptr_eq(&s.doc().unwrap().wb, &start));
+            assert_eq!(undo_labels(&s), undo);
+        }
+        set(&mut s, "A1", "free");
+        assert!(s.execute("macro.debug", json!({"action": "step"})).unwrap_err().to_string().contains("No macro is being debugged"));
+    }
+}
+
+#[test]
+fn a_failing_step_ends_the_debugged_run_and_rolls_it_back() {
+    let mut s = s();
+    data(&mut s);
+    put(
+        &mut s,
+        json!({"name": "Breaks", "output": {"onConflict": "overwrite"}, "steps": [
+            {"command": "cell.set", "params": {"cell": "A1", "input": "one"}},
+            {"command": "cell.set", "params": {"cell": "Nowhere!A2", "input": "two"}},
+            {"type": "stop", "message": "never"}
+        ]}),
+    );
+    let start = s.doc().unwrap().wb.clone();
+    debug(&mut s, json!({"name": "Breaks"}));
+    assert!(s.execute("macro.debug", json!({"action": "runTo", "step": "9"})).unwrap_err().to_string().contains("has no step 9"));
+    assert!(s.execute("macro.debug", json!({"action": "leap"})).is_err());
+    debug(&mut s, json!({"action": "step"}));
+    let st = debug(&mut s, json!({"action": "step"}));
+    assert_eq!(st["state"], "failed");
+    assert_eq!(st["error"]["step"], "2");
+    assert!(st["message"].as_str().unwrap().starts_with("Step 2 (cell.set):"), "{st}");
+    assert!(Arc::ptr_eq(&s.doc().unwrap().wb, &start));
+    set(&mut s, "B1", "free again");
+    // A run that ends at once (a Stop first) finishes on start.
+    put(&mut s, json!({"name": "Quick", "steps": [{"type": "stop", "message": "bye"}]}));
+    let st = debug(&mut s, json!({"name": "Quick"}));
+    assert_eq!(st["state"], "paused");
+    let st = debug(&mut s, json!({"action": "step"}));
+    assert_eq!((st["state"].as_str(), st["stopped"].as_str()), (Some("stopped"), Some("bye")));
+    put(&mut s, json!({"name": "Empty", "steps": []}));
+    assert_eq!(debug(&mut s, json!({"name": "Empty"}))["state"], "finished");
+}

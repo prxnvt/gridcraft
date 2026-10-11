@@ -270,6 +270,8 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// Macros the person allowed to run this session: (document uid, macro content hash).
     pub macro_approvals: std::collections::HashSet<(u64, u64)>,
+    /// The macro being debugged, between debugger actions.
+    pub macro_debug: Option<macros::debug::Debugger>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
     /// Windows hidden with View › Hide.
@@ -357,6 +359,10 @@ impl Session {
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
+        // While a macro is being debugged its undo group is open: other edits wait.
+        if self.depth == 0 && self.macro_debug.is_some() && spec.undoable && id != "macro.debug" {
+            return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
+        }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         let (first_group, group_epoch) = (self.next_group, self.group_epoch);
@@ -382,6 +388,7 @@ impl Session {
                     d.selection = sel.clone();
                     d.calc.rebuild(&d.wb);
                 }
+                macros::debug::recover(self);
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
         };

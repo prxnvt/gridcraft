@@ -445,6 +445,49 @@ impl Machine {
         self.frames.is_empty()
     }
 
+    /// Starts the time limit again (the debugger gives each action its own).
+    pub fn restart_clock(&mut self) {
+        self.started_ms = clock::now_ms();
+    }
+
+    /// The current step for the debugger: its path, kind, command, parameters as they would run
+    /// now, and the Repeat pass.
+    pub fn current_json(&self, wb: &Workbook) -> Json {
+        let Some((path, st)) = self.current() else { return Json::Null };
+        let env = self.env(wb);
+        let mut out = json!({"step": path, "breakpoint": st.breakpoint});
+        if !st.note.is_empty() {
+            out["note"] = json!(st.note);
+        }
+        match &st.kind {
+            StepKind::Command { id, params } => {
+                out["kind"] = json!("command");
+                out["command"] = json!(id);
+                match resolve::resolve_params(params, &env) {
+                    Ok(p) => out["params"] = p,
+                    Err(e) => out["paramsError"] = json!(e.message()),
+                }
+            }
+            StepKind::Repeat { over, of, .. } => {
+                out["kind"] = json!("repeat");
+                out["over"] = json!(resolve::resolve_ref(over, &env).map(|p| resolve::a1(p, &env)).unwrap_or_else(|e| e.message().to_string()));
+                out["of"] = json!(if *of == RepeatOf::Rows { "rows" } else { "columns" });
+            }
+            StepKind::If { cell, .. } => {
+                out["kind"] = json!("if");
+                out["cell"] = json!(resolve::resolve_ref(cell, &env).map(|p| resolve::a1(p, &env)).unwrap_or_else(|e| e.message().to_string()));
+            }
+            StepKind::Stop { message, .. } => {
+                out["kind"] = json!("stop");
+                out["message"] = json!(message);
+            }
+        }
+        if let Some((at, count)) = self.iteration() {
+            out["iteration"] = json!({"at": at, "of": count});
+        }
+        out
+    }
+
     /// The step that runs next, with its path.
     pub fn current(&self) -> Option<(String, &Step)> {
         let f = self.frames.last()?;
@@ -906,7 +949,7 @@ fn objects(b: &Sheet, a: &Sheet) -> (usize, usize, usize) {
 }
 
 /// Cells as A1 ranges: runs along each row, then runs with the same columns on following rows.
-fn ranges(cells: &mut [CellRef]) -> Vec<String> {
+pub(crate) fn ranges(cells: &mut [CellRef]) -> Vec<String> {
     cells.sort_unstable_by_key(|c| (c.row, c.col));
     let mut runs: Vec<RangeRef> = Vec::new();
     for c in cells.iter() {
@@ -949,9 +992,18 @@ fn make_room(s: &mut Session, fp: &Footprint, down: bool) -> Result<()> {
 
 // ---------------------------------------------------------------- run
 
-/// Runs macro `name` on the active workbook: `{inputs?, onConflict?, overwrite?, approve?,
-/// timeLimit?}` (see `macro.run`).
-pub fn run(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
+/// A macro that passed its checks and is about to run.
+pub struct Begun {
+    pub mac: Macro,
+    pub prepared: Prepared,
+    pub rule: OnConflict,
+    pub time_limit_ms: f64,
+    pub inputs: Json,
+}
+
+/// The checks before a run, on the active workbook: the macro exists, the policy allows it, the
+/// person approved it if it needs that, and its inputs are right.
+pub fn begin(s: &mut Session, name: &str, p: &Json) -> Result<Begun> {
     let d = s.doc()?;
     let (doc, trust) = (d.uid, d.trust);
     let m = super::find(&d.wb, name)
@@ -962,57 +1014,73 @@ pub fn run(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
     approve(s, &m, doc, &asks, p.get("approve").and_then(Json::as_bool).unwrap_or(false))?;
     let prepared = prepare(s, &m, p.get("inputs"))?;
     let rule = conflict_rule(p, &m)?;
-    let limit = p.get("timeLimit").and_then(Json::as_f64).map(|t| (t * 1000.0).clamp(1.0, 600_000.0)).unwrap_or(DEFAULT_TIME_LIMIT_MS);
-    let label = format!("Run Macro: {}", m.name);
+    let time_limit_ms = p.get("timeLimit").and_then(Json::as_f64).map(|t| (t * 1000.0).clamp(1.0, 600_000.0)).unwrap_or(DEFAULT_TIME_LIMIT_MS);
     let inputs = prepared.inputs_json(&s.doc()?.wb);
-    s.grouped(&label, |s| {
-        let mut shifted = false;
-        if rule != OnConflict::Overwrite {
-            let fp = footprint(s, &prepared)?;
-            if let Some(e) = fp.error {
+    Ok(Begun { mac: m, prepared, rule, time_limit_ms, inputs })
+}
+
+/// The footprint check and the output rule, inside the run's undo group: an error when the macro
+/// would fail or write over data it may not, after shifting the data if the rule says so. Returns
+/// whether it shifted.
+pub fn make_way(s: &mut Session, b: &Begun) -> Result<bool> {
+    let (m, rule) = (&b.mac, b.rule);
+    if rule == OnConflict::Overwrite {
+        return Ok(false);
+    }
+    let fp = footprint(s, &b.prepared)?;
+    if let Some(e) = fp.error {
+        return Err(e.into_engine(&m.name));
+    }
+    if fp.conflict_count() == 0 {
+        return Ok(false);
+    }
+    let what = fp.describe_conflicts();
+    match rule {
+        OnConflict::Ask => Err(EngineError::Confirm(format!(
+            "Macro “{}” would write over cells that hold data ({what}). Overwrite them, or run again with onConflict shiftDown, shiftRight or fail",
+            m.name
+        ))),
+        OnConflict::Fail | OnConflict::Overwrite => {
+            Err(EngineError::Other(format!("Macro “{}” would write over cells that hold data ({what}). Nothing was changed.", m.name)))
+        }
+        OnConflict::ShiftDown | OnConflict::ShiftRight => {
+            make_room(s, &fp, rule == OnConflict::ShiftDown)?;
+            let again = footprint(s, &b.prepared)?;
+            if let Some(e) = again.error {
                 return Err(e.into_engine(&m.name));
             }
-            if fp.conflict_count() > 0 {
-                let what = fp.describe_conflicts();
-                match rule {
-                    OnConflict::Ask => {
-                        return Err(EngineError::Confirm(format!(
-                            "Macro “{}” would write over cells that hold data ({what}). Overwrite them, or run again with onConflict shiftDown, shiftRight or fail",
-                            m.name
-                        )));
-                    }
-                    OnConflict::Fail => return Err(EngineError::Other(format!("Macro “{}” would write over cells that hold data ({what}). Nothing was changed.", m.name))),
-                    OnConflict::ShiftDown | OnConflict::ShiftRight => {
-                        make_room(s, &fp, rule == OnConflict::ShiftDown)?;
-                        shifted = true;
-                        let again = footprint(s, &prepared)?;
-                        if let Some(e) = again.error {
-                            return Err(e.into_engine(&m.name));
-                        }
-                        if again.conflict_count() > 0 {
-                            return Err(EngineError::Other(format!(
-                                "Macro “{}”: shifting the data didn't make room ({}). Nothing was changed.",
-                                m.name,
-                                again.describe_conflicts()
-                            )));
-                        }
-                    }
-                    OnConflict::Overwrite => {}
-                }
+            if again.conflict_count() > 0 {
+                return Err(EngineError::Other(format!(
+                    "Macro “{}”: shifting the data didn't make room ({}). Nothing was changed.",
+                    m.name,
+                    again.describe_conflicts()
+                )));
             }
+            Ok(true)
         }
-        let mut machine = Machine::new(&prepared, false);
-        machine.time_limit_ms = limit;
-        machine.run_to_end(s).map_err(|e| e.into_engine(&m.name))?;
+    }
+}
+
+/// Runs macro `name` on the active workbook: `{inputs?, onConflict?, overwrite?, approve?,
+/// timeLimit?}` (see `macro.run`).
+pub fn run(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
+    let b = begin(s, name, p)?;
+    let label = format!("Run Macro: {}", b.mac.name);
+    s.grouped(&label, |s| {
+        let shifted = make_way(s, &b)?;
+        let mut machine = Machine::new(&b.prepared, false);
+        machine.time_limit_ms = b.time_limit_ms;
+        let name = &b.mac.name;
+        machine.run_to_end(s).map_err(|e| e.into_engine(name))?;
         match machine.stopped {
-            Some((msg, true)) => Err(EngineError::Other(format!("Macro “{}” stopped: {msg} Nothing was changed.", m.name))),
+            Some((msg, true)) => Err(EngineError::Other(format!("Macro “{name}” stopped: {msg} Nothing was changed."))),
             stopped => {
-                let mut out = json!({"macro": m.name, "ran": machine.executed, "inputs": inputs});
+                let mut out = json!({"macro": name, "ran": machine.executed, "inputs": b.inputs});
                 if let Some((msg, _)) = stopped {
                     out["stopped"] = json!(msg);
                 }
                 if shifted {
-                    out["shifted"] = json!(rule.name());
+                    out["shifted"] = json!(b.rule.name());
                 }
                 Ok(out)
             }

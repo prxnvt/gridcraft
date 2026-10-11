@@ -11,6 +11,7 @@ use serde_json::{Value as Json, json};
 
 use crate::cmd::stash;
 
+pub mod debug;
 pub mod policy;
 pub mod resolve;
 pub mod run;

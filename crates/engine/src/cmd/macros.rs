@@ -25,6 +25,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             check
         ),
+        cmd!(
+            "macro.debug",
+            "Step Into",
+            ["Automate", "Macros"],
+            None,
+            "{action: start|step|continue|runTo|stop|state, name? and inputs?, onConflict?, approve? (start), step: path (runTo), keep?: bool (stop), breakpoints?: [\"3\", \"2.1\"]} debugs a macro one step at a time as one undo step; other edits wait until it finishes or stops → {state: paused|finished|stopped|failed, current: {step, kind, command?, params?, iteration?}, lastParams, executed, changed, atBreakpoint?, error?}",
+            has_doc,
+            |s, p| crate::macros::debug::debug(s, p)
+        ),
     ]
 }
 
