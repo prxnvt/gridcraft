@@ -1792,6 +1792,7 @@ dependencies = [
 name = "gridcraft-cli"
 version = "0.4.0"
 dependencies = [
+ "gridcraft-core",
  "gridcraft-engine",
  "gridcraft-mcp",
  "gridcraft-python",
