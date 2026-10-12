@@ -9,6 +9,7 @@ use super::format_cells::format_cells;
 use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
+use super::ref_edit::{RefLabel, end_pick, place_window, ref_edit, window_shown};
 use super::spelling::spelling;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
@@ -147,8 +148,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "pasteSpecial" => 480.0,
         _ => 380.0,
     };
+    let window_id = egui::Id::unique("dialog").with(&d.name);
     let window = egui::Window::new(app.ui.language.tr(&d.title))
-        .id(egui::Id::unique("dialog").with(&d.name))
+        .id(window_id)
         .collapsible(false)
         .resizable(false)
         .default_width(width)
@@ -161,7 +163,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
-    window.show(ctx, |ui| {
+    let (window, collapsed) = place_window(ctx, &mut d, window, window_id);
+    let shown = window.show(ctx, |ui| {
+            if let Some(key) = &collapsed {
+                let title = d.title.clone();
+                ref_edit(app, ui, &mut d, key, RefLabel::Named(&title), (width - 40.0).min(380.0));
+                return;
+            }
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
@@ -357,6 +365,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
         });
+    window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -381,6 +390,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
+    }
+    if confirm {
+        // References without a sheet name mean the sheet the dialog was opened on.
+        end_pick(app, &mut d);
     }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
@@ -407,6 +420,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     } else if confirm {
         open = false;
+    }
+    if !open {
+        end_pick(app, &mut d);
     }
     if app.ui_window() != home {
         // A command run from the dialog switched windows: whatever it opened shows in the new

@@ -24,6 +24,7 @@ mod format_cells;
 mod insert_function;
 mod names;
 mod paste;
+mod ref_edit;
 mod show;
 mod spelling;
 mod zoom;
@@ -74,6 +75,8 @@ pub struct Dialog {
     pick: Option<RefPick>,
     /// The linked cell's initial display text; unchanged text must not replace a number or formula.
     original_link_text: Option<String>,
+    /// The state of the dialog's reference boxes (RefEdit).
+    refs: ref_edit::RefBoxes,
 }
 
 /// A formula box in point mode, as in Excel: a click on the grid writes the cell's absolute
@@ -125,6 +128,18 @@ impl Dialog {
             }
         }
         self.values.insert(key.into(), value);
+    }
+
+    /// The reference box the dialog is collapsed to, if any.
+    pub fn collapsed(&self) -> Option<&str> {
+        self.refs.collapsed.as_deref()
+    }
+
+    /// Collapses the dialog to its reference box `key` and starts picking into it, as the box's
+    /// collapse button does.
+    pub fn collapse_to(&mut self, app: &SheetApp, key: &str) {
+        ref_edit::begin_pick(app, self, key);
+        self.refs.collapsed = Some(key.to_string());
     }
 
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
@@ -187,6 +202,7 @@ impl Dialog {
             focus_initialized: false,
             pick: None,
             original_link_text: None,
+            refs: ref_edit::RefBoxes::default(),
         }
     }
 
@@ -210,6 +226,7 @@ impl Dialog {
             focus_initialized: false,
             pick: None,
             original_link_text: None,
+            refs: ref_edit::RefBoxes::default(),
         }
     }
 

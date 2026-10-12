@@ -1,26 +1,28 @@
+use super::ref_edit::{RefLabel, end_pick, ref_edit};
 use super::show::{form_fields, ok_cancel};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
 pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
-    let (mut set, mut to, mut changing) = (get("set"), get("to"), get("changing"));
     egui::Grid::new("gs").show(ui, |ui| {
-        ui.label("Set cell:");
-        ui.text_edit_singleline(&mut set);
+        let l = ui.label("Set cell:");
+        ref_edit(app, ui, d, "set", RefLabel::By(l.id), 200.0);
         ui.end_row();
-        ui.label("To value:");
-        ui.text_edit_singleline(&mut to);
+        let l = ui.label("To value:");
+        let mut to = d.values.get("to").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.add(egui::TextEdit::singleline(&mut to).desired_width(170.0)).labelled_by(l.id).changed() {
+            d.values.insert("to".into(), json!(to));
+        }
         ui.end_row();
-        ui.label("By changing cell:");
-        ui.text_edit_singleline(&mut changing);
+        let l = ui.label("By changing cell:");
+        ref_edit(app, ui, d, "changing", RefLabel::By(l.id), 200.0);
         ui.end_row();
     });
-    d.values.insert("set".into(), json!(set.clone()));
-    d.values.insert("to".into(), json!(to.clone()));
-    d.values.insert("changing".into(), json!(changing.clone()));
+    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let (set, to, changing) = (get("set"), get("to"), get("changing"));
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
     if *confirm {
+        end_pick(app, d);
         match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {
             Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
             Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
