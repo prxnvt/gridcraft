@@ -794,7 +794,11 @@ impl Dialog {
                 }
                 d
             }
-            "insertFunction" => Dialog::custom("insertFunction", "Formula Builder", json!({"category": "Most Recently Used"})),
+            "insertFunction" => {
+                // A Function Library menu opens it on its own category.
+                let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();
+                Dialog::custom("insertFunction", "Formula Builder", json!({"category": category}))
+            }
             "find" => {
                 let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
                 d.tab = if p("replace").as_bool() == Some(true) { "Replace".into() } else { "Find".into() };
@@ -2173,7 +2177,7 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
         for (i, f) in hits.iter().enumerate() {
             let name = locale.function_name(f["name"].as_str().unwrap_or(""));
-            let category = language.tr(function_category_label(f["category"].as_str().unwrap_or("")));
+            let category = language.tr(crate::function_library::category_label(f["category"].as_str().unwrap_or("")));
             let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{name:<18} {category}")).min_size(vec2(480.0, 20.0)));
             if r.clicked() {
                 d.list_index = i;
@@ -2203,18 +2207,6 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     }
     if !open {
         *confirm = true;
-    }
-}
-
-/// Excel's name for a function category, given the catalog's id (`MathTrig`).
-fn function_category_label(id: &str) -> &str {
-    match id {
-        "DateTime" => "Date & Time",
-        "Lookup" => "Lookup & Reference",
-        "MathTrig" => "Math & Trig",
-        "AddIn" => "Add-in and Automation",
-        // Financial, Logical, Text, Statistical, Engineering, Database, Information, …
-        other => other,
     }
 }
 

@@ -5,10 +5,13 @@ use gridcraft_engine::model::{HAlign, Style, VAlign};
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::icons::{self, Icon};
+use crate::function_library;
+use crate::icons::{self, FnGlyph, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
+use crate::widgets::{
+    big_button, big_split_button, color_palette, icon_button, small_button, small_button_accent, small_split_button, split_button, toggle_button,
+};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -1167,7 +1170,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             if s {
                 act(app, "formulas.autoSum", json!({}));
             }
-            egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
+            egui::Popup::menu(&sa).show(|ui| function_library::auto_sum_menu(app, ui));
         });
         let fill = small_button(ui, Icon::FillDown, "", "Fill", true);
         for sequence in keytip_table::group_extension(
@@ -1258,20 +1261,6 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-}
-
-/// The AutoSum menu (Home › Editing and Formulas › Function Library): a function, or the Insert
-/// Function dialog.
-fn autosum_menu(app: &mut SheetApp, ui: &mut Ui) {
-    for f in ["SUM", "AVERAGE", "COUNT", "MAX", "MIN"] {
-        if ui.button(f).clicked() {
-            act(app, "formulas.autoSum", json!({"function": f}));
-        }
-    }
-    ui.separator();
-    if ui.button("More Functions…").clicked() {
-        app.open_dialog("insertFunction", json!({}));
-    }
 }
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
@@ -2024,6 +2013,57 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
+/// What a Function Library button's menu lists.
+#[derive(Clone, Copy, Debug)]
+enum LibraryMenu {
+    Recent,
+    Category(&'static str),
+    More,
+}
+
+/// One Function Library category button: its label, its menu, the glyph and colour of its book,
+/// and the control id its keytip sequence targets in `keytips.json`.
+struct LibraryItem {
+    label: &'static str,
+    menu: LibraryMenu,
+    book: (FnGlyph, Cat),
+    keytip: &'static str,
+}
+
+impl LibraryItem {
+    const fn new(label: &'static str, menu: LibraryMenu, book: (FnGlyph, Cat), keytip: &'static str) -> LibraryItem {
+        LibraryItem { label, menu, book, keytip }
+    }
+}
+
+/// The Function Library categories after AutoSum, column by column (three rows each). Every
+/// category has its own colour.
+const LIBRARY: [LibraryItem; 8] = [
+    LibraryItem::new("Recently Used", LibraryMenu::Recent, (FnGlyph::Star, Cat::Amber), "formulas.recentlyUsed"),
+    LibraryItem::new("Financial", LibraryMenu::Category("Financial"), (FnGlyph::Coins, Cat::Green), "formulas.financial"),
+    LibraryItem::new("Logical", LibraryMenu::Category("Logical"), (FnGlyph::Question, Cat::Purple), "formulas.logical"),
+    LibraryItem::new("Text", LibraryMenu::Category("Text"), (FnGlyph::Letter, Cat::Blue), "formulas.text"),
+    LibraryItem::new("Date & Time", LibraryMenu::Category("DateTime"), (FnGlyph::Clock, Cat::Orange), "formulas.dateTime"),
+    LibraryItem::new("Lookup & Reference", LibraryMenu::Category("Lookup"), (FnGlyph::Magnifier, Cat::Teal), "formulas.lookup"),
+    LibraryItem::new("Math & Trig", LibraryMenu::Category("MathTrig"), (FnGlyph::Theta, Cat::Red), "formulas.mathTrig"),
+    LibraryItem::new("More Functions", LibraryMenu::More, (FnGlyph::Dots, Cat::Slate), "formulas.moreFunctions"),
+];
+
+/// One Function Library category button: a book in the category's colour that opens the
+/// category's menu.
+fn library_button(app: &mut SheetApp, ui: &mut Ui, item: &LibraryItem) {
+    let (glyph, cat) = item.book;
+    let accent = Some(Tokens::get(ui.ctx()).cat(cat));
+    let anchor = small_button_accent(ui, Icon::FnBook(glyph), accent, item.label, item.label, true);
+    control_keytip(app, ui, &anchor, item.keytip);
+    let forced = invoke(app, item.keytip);
+    egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| match item.menu {
+        LibraryMenu::Recent => function_library::recent_menu(app, ui),
+        LibraryMenu::Category(id) => function_library::category_menu(app, ui, id),
+        LibraryMenu::More => function_library::more_menu(app, ui),
+    });
+}
+
 /// The Formulas tab: Insert Function, AutoSum, the function-category menus (names in the formula
 /// language, descriptions in the interface language), defined names, auditing and calculation.
 fn formulas(app: &mut SheetApp, ui: &mut Ui) {
@@ -2032,42 +2072,21 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("insertFunction", json!({}));
     }
-    let (s, sa) = big_split_button(ui, Icon::Sum, "AutoSum", "AutoSum");
-    control_keytip(app, ui, &sa, "formulas.autoSum");
-    if s.clicked() {
+    // Function Library: AutoSum as a big split button, then the categories in columns of three
+    // labelled small buttons, as Excel lays the group out when the window is not wide enough for
+    // a big button per category.
+    let (sum, sum_arrow) = big_split_button(ui, Icon::Sum, "AutoSum", "AutoSum");
+    control_keytip(app, ui, &sum_arrow, "formulas.autoSum");
+    if sum.clicked() {
         act(app, "formulas.autoSum", json!({}));
     }
-    egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
-    for (label, cat, cid) in [
-        ("Financial", "Financial", "formulas.financial"),
-        ("Logical", "Logical", "formulas.logical"),
-        ("Text", "Text", "formulas.text"),
-        ("Date &\nTime", "DateTime", "formulas.dateTime"),
-        ("Lookup &\nReference", "Lookup", "formulas.lookup"),
-        ("Math &\nTrig", "MathTrig", "formulas.mathTrig"),
-        ("More\nFunctions", "Statistical", "formulas.moreFunctions"),
-    ] {
-        let r = big_button(ui, Icon::Book, label, label, true);
-        control_keytip(app, ui, &r, cid);
-        let forced_c = invoke(app, cid);
-        egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
-            ui.set_max_height(420.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for f in gridcraft_engine::cmd::formulas::function_list() {
-                    if f["category"].as_str() == Some(cat)
-                        && let Some(n) = f["name"].as_str()
-                    {
-                        let locale = app.ui.language.formula_locale();
-                        let name =
-                            app.session.active().map(|d| crate::formula_locale::completion_name(n, locale, &d.wb, d.wb.active_sheet)).unwrap_or(n);
-                        let desc = crate::formula_locale::description(n, locale, app.ui.language).unwrap_or_default();
-                        if ui.button(name).on_hover_text(desc).clicked() {
-                            app.run_or_alert("formulas.insertFunction", json!({"name": n}));
-                            ui.close();
-                        }
-                    }
-                }
-            });
+    let forced = invoke(app, "formulas.autoSum");
+    egui::Popup::menu(&sum_arrow).open_memory(popup_command(forced, sum_arrow.clicked())).show(|ui| function_library::auto_sum_menu(app, ui));
+    for column in LIBRARY.chunks(3) {
+        ui.vertical(|ui| {
+            for item in column {
+                library_button(app, ui, item);
+            }
         });
     }
     sep(ui);
@@ -2928,6 +2947,19 @@ mod title_bar_tests {
 }
 
 #[cfg(test)]
+mod tooltip_tests {
+    /// A ribbon tooltip names its control only; `widgets::tooltip_shortcut` adds the shortcut of
+    /// the platform it runs on. A Command-key glyph written into the text would show on Windows
+    /// and Linux, where the shortcut is a Ctrl or Alt one (AutoSum is Alt+=).
+    #[test]
+    fn tooltips_leave_the_shortcut_to_the_platform_lookup() {
+        let source = include_str!("ribbon.rs");
+        let mac_only = source.lines().filter(|l| l.contains('\u{2318}')).collect::<Vec<_>>();
+        assert!(mac_only.is_empty(), "Command-key glyph in ribbon text: {mac_only:?}");
+    }
+}
+
+#[cfg(test)]
 mod checkbox_on_tests {
     use super::*;
 
@@ -2986,6 +3018,24 @@ mod accounting_symbol_tests {
             assert_eq!(out.text.trim(), shown, "{label}");
             let symbol = tag.trim_start_matches("[$").split('-').next().unwrap_or_default();
             assert_eq!(out.fill.map(|(c, at)| (c, out.text[..at].trim_start())), Some((' ', symbol)), "{label}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod function_library_tests {
+    use super::*;
+
+    #[test]
+    fn every_function_library_book_has_its_own_glyph_and_colour() {
+        let books: Vec<(FnGlyph, Cat)> = LIBRARY.iter().map(|i| i.book).collect();
+        assert_eq!(books.len(), 8, "every category is a coloured book");
+        for (i, (glyph, cat)) in books.iter().enumerate() {
+            assert!(books.iter().skip(i + 1).all(|(g, c)| g != glyph && c != cat), "{glyph:?} / {cat:?} is used twice");
+        }
+        assert!(matches!(LIBRARY.first().map(|i| i.menu), Some(LibraryMenu::Recent)));
+        for item in &LIBRARY {
+            assert!(!keytip_table::sequences_for(item.keytip).is_empty(), "{} has a keytip sequence", item.label);
         }
     }
 }
