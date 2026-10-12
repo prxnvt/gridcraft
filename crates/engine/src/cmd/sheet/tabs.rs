@@ -175,6 +175,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             sh.images.iter_mut().for_each(|o| o.id = fresh());
             sh.shapes.iter_mut().for_each(|o| o.id = fresh());
             sh.slicers.iter_mut().for_each(|o| o.id = fresh());
+            sh.controls.iter_mut().for_each(|o| o.id = fresh());
             let at = to.min(n);
             // The copy gets its own copies of the sheet's names, referring to the copy.
             let copies: Vec<gridcraft_model::DefinedName> = cx

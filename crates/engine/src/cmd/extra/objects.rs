@@ -67,6 +67,11 @@ pub(super) fn arrange(s: &mut Session, p: &Json, forward: bool) -> Result<Json> 
                     reorder(&mut sh.slicers, i, forward, extreme);
                 }
             }
+            "control" => {
+                if let Some(i) = sh.controls.iter().position(|c| c.id == id) {
+                    reorder(&mut sh.controls, i, forward, extreme);
+                }
+            }
             _ => {
                 if let Some(i) = sh.shapes.iter().position(|c| c.id == id) {
                     reorder(&mut sh.shapes, i, forward, extreme);
@@ -95,6 +100,12 @@ pub(super) fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
         let name = if c.caption.is_empty() { &c.column } else { &c.caption };
         v.push(json!({"kind": "slicer", "id": c.id, "name": name, "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
+    // Form controls paint above everything else.
+    for c in &sh.controls {
+        v.push(
+            json!({"kind": "control", "id": c.id, "name": c.display_name(), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}),
+        );
+    }
     Ok(Json::Array(v))
 }
 
@@ -103,6 +114,7 @@ fn anchors_of<'a>(sh: &'a mut Sheet, kind: &str) -> Vec<(u32, &'a mut Anchor)> {
         "chart" => sh.charts.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         "image" => sh.images.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         "slicer" => sh.slicers.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
+        "control" => sh.controls.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         _ => sh.shapes.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
     }
 }
