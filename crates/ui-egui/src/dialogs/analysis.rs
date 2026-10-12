@@ -57,6 +57,13 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         ],
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
+        "anovaTwoFactorWithout" => vec![range(), labels(), Text { key: "alpha", label: "Alpha:" }],
+        "anovaTwoFactorWith" => vec![
+            Note("The input range holds column labels in its first row and sample labels in its first column.".into()),
+            range(),
+            Text { key: "rowsPerSample", label: "Rows per sample:" },
+            Text { key: "alpha", label: "Alpha:" },
+        ],
         "regression" => vec![
             Text { key: "inputY", label: "Input Y Range:" },
             Text { key: "inputX", label: "Input X Range:" },
@@ -78,6 +85,17 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
             v.extend([labels(), Text { key: "alpha", label: "Alpha:" }]);
             v
         }
+        "zTest" => {
+            let mut v = two();
+            v.extend([
+                Text { key: "hypothesizedDifference", label: "Hypothesized Mean Difference:" },
+                Text { key: "variance1", label: "Variable 1 Variance (known):" },
+                Text { key: "variance2", label: "Variable 2 Variance (known):" },
+                labels(),
+                Text { key: "alpha", label: "Alpha:" },
+            ]);
+            v
+        }
         _ => {
             let mut v = two();
             v.extend([
@@ -96,6 +114,7 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
         "tool": tool, "range": sel, "inputY": "", "inputX": "", "range1": sel, "range2": "", "bins": "",
         "groupedBy": "columns", "labels": false, "summary": true, "confidence": "", "kthLargest": "", "kthSmallest": "",
         "interval": "3", "damping": "0.3", "alpha": "0.05", "hypothesizedDifference": "0",
+        "rowsPerSample": "", "variance1": "", "variance2": "",
         "outputTo": "newSheet", "output": "", "newSheet": "",
     });
     if tool == "regression" {

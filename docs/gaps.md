@@ -117,16 +117,15 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
-- `data.solver`, `data.analysisToolPak` missing. Forecast Sheet (`data.forecastSheet`) and the
-  FORECAST.ETS family are in, including Forecast Start (hindcast, #785). **Estimate:** 15–25 h.
+- Forecast Sheet (`data.forecastSheet`) and the FORECAST.ETS family are in, including Forecast
+  Start (hindcast, #785).
 - Solver (`data.solver`, #327) has Simplex LP with integer/binary branch and bound, a local
   nonlinear method (augmented Lagrangian, not GRG), the Evolutionary method, and Answer and
   Limits reports. Report refusal leaves the solution, saved model and history unchanged; a
   successful solve and its reports share one Undo step (#1050). AllDifferent constraints,
   the Solver Options dialog, the Sensitivity and Population reports and Load/Save Model remain.
-  The Analysis ToolPak
-  (`data.analysisToolPak`) has 13 of 19 tools. Forecast Sheet (`data.forecastSheet`) and the
-  FORECAST.ETS family are in; the sheet has no Forecast Start (hindcast) option yet. **Estimate:** 12–20 h.
+- The Analysis ToolPak (`data.analysisToolPak`) has 16 of Excel's 19 tools; Fourier Analysis,
+  Random Number Generation, Sampling and the tools' charts remain. **Estimate:** 12–20 h.
 
 ### 14. Page Layout view and print polish (U, F)
 - Page Layout view landed (#329): paper view with rulers and in-place header/footer editing.
