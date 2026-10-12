@@ -440,6 +440,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Compact" => "Compacto",
         "Outline" => "Esquema",
         "Tabular" => "Tabular",
+        "Macros" => "Macros",
+        "Record Macro" => "Grabar macro",
+        "Stop Recording" => "Detener grabación",
+        "Use Relative References" => "Usar referencias relativas",
+        "Run\nMacro" => "Ejecutar macro",
+        "Macros…" => "Macros…",
+        "Recording" => "Grabando",
+        "Stop" => "Detener",
         _ => return None,
     })
 }
