@@ -23,7 +23,7 @@ pub struct WindowUi {
     grid: grid::GridState,
     name_box: Option<String>,
     keytips: keytips::KeyTips,
-    selected_chart: Option<u32>,
+    selected_object: Option<gridcraft_engine::model::ObjRef>,
     tab_run: Option<(u64, usize, u32, CellRef)>,
     open_switch_windows: bool,
     /// The status bar's Ready/Enter/Edit, which follows the window's cell draft.
@@ -61,7 +61,7 @@ impl SheetApp {
             grid,
             name_box,
             keytips,
-            selected_chart,
+            selected_object,
             tab_run,
             open_switch_windows,
             mode,
@@ -76,7 +76,7 @@ impl SheetApp {
         std::mem::swap(&mut self.grid, grid);
         std::mem::swap(&mut self.name_box, name_box);
         std::mem::swap(&mut self.keytips, keytips);
-        std::mem::swap(&mut self.selected_chart, selected_chart);
+        std::mem::swap(&mut self.selected_object, selected_object);
         std::mem::swap(&mut self.tab_run, tab_run);
         std::mem::swap(&mut self.open_switch_windows, open_switch_windows);
         std::mem::swap(&mut self.session.mode, mode);
