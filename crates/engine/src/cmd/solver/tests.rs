@@ -283,6 +283,8 @@ fn refused_solver_reports_preserve_the_document_and_history() {
         (true, "simplex", json!(["A1 <= 4"]), json!(["answer"]), "workbook is protected"),
         (false, "simplex", json!(["A1 <= 4", "A1 int"]), json!(["answer", "limits"]), "integer or binary"),
         (false, "evolutionary", json!(["A1 <= 4"]), json!(["answer", "limits"]), "Simplex LP and GRG"),
+        (false, "simplex", json!(["A1 <= 4", "A1 int"]), json!(["answer", "sensitivity"]), "integer or binary"),
+        (false, "evolutionary", json!(["A1 <= 4"]), json!(["sensitivity"]), "Simplex LP and GRG"),
     ] {
         for (keep, save) in [(true, true), (false, true), (true, false), (false, false)] {
             let mut s = s();
@@ -400,6 +402,121 @@ fn solver_report_insertion_keeps_variable_edit_guards() {
     }
 }
 
+/// The numbers from column D on in the row below the one holding `text` on report `name`.
+fn report_row(s: &Session, name: &str, text: &str, cols: &[&str]) -> Vec<f64> {
+    let r = row_of(s, name, text) + 1;
+    cols.iter().map(|c| at(s, name, &format!("{c}{r}")).as_f64().unwrap()).collect()
+}
+
+fn close(got: &[f64], want: &[f64], tol: f64) -> bool {
+    got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() <= tol * (1.0 + w.abs()))
+}
+
+#[test]
+fn sensitivity_report_gives_the_wyndor_glass_shadow_prices_and_ranges() {
+    // Hillier & Lieberman's Wyndor Glass sensitivity analysis: shadow prices 0, 1.5 and 1
+    // for the three plants; plant 1's hours may fall by 2 and rise without limit, plants 2's
+    // and 3's by 6 either way; the doors' profit 3 may range over 0..7.5, the windows' 5 over
+    // 2 and up.
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [[null, "Doors", "Windows", "Used", "Available"], ["Batches", 0, 0, null, null], ["Plant 1", 1, 0, null, 4], ["Plant 2", 0, 2, null, 12], ["Plant 3", 3, 2, null, 18], ["Profit", 3, 5, null, null]]}),
+    )
+    .unwrap();
+    for r in 3..=6 {
+        set(&mut s, &[(&format!("D{r}"), &format!("=SUMPRODUCT(B{r}:C{r},$B$2:$C$2)"))]);
+    }
+    let solved = s
+        .execute(
+            "data.solver",
+            json!({"objective": "D6", "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    assert_eq!(solved["reports"], json!(["Sensitivity Report 1"]), "{solved}");
+    let rep = "Sensitivity Report 1";
+    assert_eq!(at(&s, rep, "A1"), Value::text("GridCraft Sensitivity Report"));
+    let r = row_of(&s, rep, "Reduced Cost");
+    assert_eq!(at(&s, rep, &format!("F{}", r + 1)), Value::text("Objective Coefficient"));
+    let cols = ["D", "E", "F", "G", "H"];
+    // Final value, reduced cost, objective coefficient, allowable increase and decrease.
+    assert!(close(&report_row(&s, rep, "$B$2", &cols)[1..], &[0.0, 3.0, 4.5, 3.0], 1e-9));
+    assert!(close(&report_row(&s, rep, "$C$2", &cols), &[6.0, 0.0, 5.0, 1e30, 3.0], 1e-9));
+    // Final value, shadow price, right side, allowable increase and decrease.
+    assert!(close(&report_row(&s, rep, "$D$3", &cols), &[2.0, 0.0, 4.0, 1e30, 2.0], 1e-9));
+    assert!(close(&report_row(&s, rep, "$D$4", &cols), &[12.0, 1.5, 12.0, 6.0, 6.0], 1e-9));
+    assert!(close(&report_row(&s, rep, "$D$5", &cols), &[18.0, 1.0, 18.0, 6.0, 6.0], 1e-9));
+    // A minimisation with `>=` rows: min 2x + 3y, x + y ≥ 4, x + 3y ≥ 6 → (3, 1), cost 9.
+    // The duals 1.5 and 0.5 solve u + v = 2, u + 3v = 3; the basis holds for 2 ≤ b₁ ≤ 6,
+    // 4 ≤ b₂ ≤ 12, 1 ≤ c₁ ≤ 3 and 2 ≤ c₂ ≤ 6.
+    set(&mut s, &[("H1", "0"), ("H2", "0"), ("I1", "=2*H1+3*H2"), ("I2", "=H1+H2"), ("I3", "=H1+3*H2")]);
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "I1", "goal": "min", "variables": "H1:H2", "constraints": ["I2 >= 4", "I3 >= 6"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$H$1", &cols), &[3.0, 0.0, 2.0, 1.0, 1.0], 1e-9), "{r}");
+    assert!(close(&report_row(&s, &rep, "$H$2", &cols), &[1.0, 0.0, 3.0, 3.0, 1.0], 1e-9));
+    assert!(close(&report_row(&s, &rep, "$I$2", &cols), &[4.0, 1.5, 4.0, 2.0, 2.0], 1e-9));
+    assert!(close(&report_row(&s, &rep, "$I$3", &cols), &[6.0, 0.5, 6.0, 6.0, 2.0], 1e-9));
+    // A variable held at zero has a reduced cost: min 2x + 3y with x + y ≥ 4 alone uses
+    // only x; y would add 3 − 2 = 1 per unit.
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "I1", "goal": "min", "variables": "H1:H2", "constraints": ["I2 >= 4"], "method": "simplex", "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$H$2", &cols), &[0.0, 1.0, 3.0, 1e30, 1.0], 1e-9), "{r}");
+    // Integer models, the Evolutionary method and Value Of goals have no Sensitivity report.
+    s.execute("data.solver", json!({"objective": "D6", "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex"})).unwrap();
+    for p in [
+        json!({"reports": ["sensitivity"], "constraints": ["D3:D5 <= E3:E5", "B2:C2 int"]}),
+        json!({"reports": ["sensitivity"], "method": "evolutionary", "constraints": ["D3:D5 <= E3:E5", "B2:C2 <= 10"]}),
+        json!({"reports": ["sensitivity"], "goal": "value", "value": 30}),
+    ] {
+        assert!(s.execute("data.solverReport", p.clone()).is_err(), "{p}");
+    }
+    // data.solver refuses a Value Of goal's Sensitivity report before it changes anything.
+    set(&mut s, &[("B2", "1"), ("C2", "1")]);
+    let undo = s.doc().unwrap().undo.len();
+    let p = json!({"objective": "D6", "goal": "value", "value": 30, "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex", "reports": ["sensitivity"]});
+    let err = s.execute("data.solver", p).unwrap_err();
+    assert!(err.to_string().contains("maximise or minimise"), "{err}");
+    assert_eq!((at(&s, "Sheet1", "B2"), at(&s, "Sheet1", "C2")), (Value::number(1.0), Value::number(1.0)));
+    assert_eq!(s.doc().unwrap().undo.len(), undo);
+}
+
+#[test]
+fn sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers() {
+    // The largest rectangle with perimeter at most 20: the area (P/4)² grows by P/8 = 2.5 per
+    // unit of perimeter, and both reduced gradients are 0.
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("A2", "1"), ("B1", "=A1*A2"), ("B2", "=2*A1+2*A2")]);
+    let r =
+        s.execute("data.solver", json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 20"], "reports": ["sensitivity"]})).unwrap();
+    let rep = "Sensitivity Report 1";
+    assert_eq!(r["reports"], json!([rep]), "{r}");
+    assert_eq!(at(&s, rep, &format!("E{}", row_of(&s, rep, "$A$1"))), Value::text("Reduced Gradient"));
+    assert!(close(&report_row(&s, rep, "$A$1", &["D", "E"]), &[5.0, 0.0], 1e-4));
+    assert!(close(&report_row(&s, rep, "$B$2", &["D", "E"]), &[20.0, 2.5], 1e-4));
+    // min (x + 1)² + (y − 2)² with x + y ≤ 1 and x, y ≥ 0: (0, 1). The constraint's
+    // multiplier is −2; x sits at its bound, where raising it costs 2(x + 1) + 2 = 4.
+    set(&mut s, &[("C1", "0.5"), ("C2", "0.5"), ("D1", "=(C1+1)^2+(C2-2)^2"), ("D2", "=C1+C2")]);
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "D1", "goal": "min", "variables": "C1:C2", "constraints": ["D2 <= 1"], "reports": ["sensitivity"]}),
+        )
+        .unwrap();
+    let rep = r["reports"][0].as_str().unwrap().to_string();
+    assert!(close(&report_row(&s, &rep, "$C$1", &["D", "E"]), &[0.0, 4.0], 1e-4), "{r}");
+    assert!(close(&report_row(&s, &rep, "$C$2", &["D", "E"]), &[1.0, 0.0], 1e-4));
+    assert!(close(&report_row(&s, &rep, "$D$2", &["D", "E"]), &[1.0, -2.0], 1e-4));
+}
 #[test]
 fn limits_report_of_a_nonlinear_model() {
     // The largest rectangle with perimeter at most 20 (5 × 5): with the height held at 5, the

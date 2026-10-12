@@ -807,9 +807,9 @@ fn solver_results_write_the_chosen_reports() {
         )
         .unwrap();
     let mut h = harness(s);
-    // Restore Original Values with the Answer and Limits reports: the cells go back, the reports stay.
+    // Restore Original Values with the three reports: the cells go back, the reports stay.
     h.state_mut().open_dialog("solverResults", r);
-    for key in ["restore", "answerReport", "limitsReport"] {
+    for key in ["restore", "answerReport", "sensitivityReport", "limitsReport"] {
         h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(true));
     }
     h.run_steps(2);
@@ -817,7 +817,7 @@ fn solver_results_write_the_chosen_reports() {
     assert!(h.state().dialog.is_none());
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
-    assert_eq!(names, ["Answer Report 1", "Limits Report 1", "Sheet1"]);
+    assert_eq!(names, ["Answer Report 1", "Sensitivity Report 1", "Limits Report 1", "Sheet1"]);
     assert_eq!(value(&h, "B1"), Value::Number(0.0));
 }
 

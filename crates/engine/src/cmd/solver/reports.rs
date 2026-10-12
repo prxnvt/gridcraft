@@ -1,6 +1,7 @@
 use super::lp::Outcome;
 use super::model::{Constraint, Goal, Method, Model, Rel, Rhs, parse_model, saved_model};
 use super::problem::{Evaluator, Problem, as_num, build_problem};
+use super::sensitivity::sensitivity_report;
 use super::{
     Cell, CellRef, Ctx, DEFAULT_EVALS, DocState, EngineError, Json, MAX_EVALS, PRECISION, REPORT_CMD, Result, Session, Sheet, Trial, Value, bad,
     edit, json, optimise, str_param,
@@ -11,6 +12,7 @@ use super::{
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum ReportKind {
     Answer,
+    Sensitivity,
     Limits,
 }
 
@@ -18,6 +20,7 @@ impl ReportKind {
     fn title(self) -> &'static str {
         match self {
             ReportKind::Answer => "Answer",
+            ReportKind::Sensitivity => "Sensitivity",
             ReportKind::Limits => "Limits",
         }
     }
@@ -26,13 +29,14 @@ impl ReportKind {
 /// The `reports` list (`None` when absent).
 pub(super) fn report_kinds(cmd: &'static str, p: &Json) -> Result<Option<Vec<ReportKind>>> {
     let Some(list) = p.get("reports") else { return Ok(None) };
-    let list = list.as_array().ok_or_else(|| bad(cmd, "`reports` must be an array of answer and limits"))?;
+    let list = list.as_array().ok_or_else(|| bad(cmd, "`reports` must be an array of answer, sensitivity and limits"))?;
     let mut kinds = Vec::new();
     for k in list {
         let kind = match k.as_str().map(|t| t.trim().to_ascii_lowercase()).as_deref() {
             Some("answer") => ReportKind::Answer,
+            Some("sensitivity") => ReportKind::Sensitivity,
             Some("limits") => ReportKind::Limits,
-            _ => return Err(bad(cmd, format!("unknown report {k} (answer or limits)"))),
+            _ => return Err(bad(cmd, format!("unknown report {k} (answer, sensitivity or limits)"))),
         };
         if !kinds.contains(&kind) {
             kinds.push(kind);
@@ -42,14 +46,14 @@ pub(super) fn report_kinds(cmd: &'static str, p: &Json) -> Result<Option<Vec<Rep
 }
 
 /// A report's cells: (row, column, value, bold).
-type Lines = Vec<(u32, u32, Value, bool)>;
+pub(super) type Lines = Vec<(u32, u32, Value, bool)>;
 
-fn abs_ref(c: CellRef) -> String {
+pub(super) fn abs_ref(c: CellRef) -> String {
     format!("${}${}", gridcraft_core::col_to_letters(c.col), u64::from(c.row) + 1)
 }
 
 /// A cell's name in the reports: the nearest text to its left and the nearest text above it.
-fn cell_name(sh: &Sheet, c: CellRef) -> String {
+pub(super) fn cell_name(sh: &Sheet, c: CellRef) -> String {
     let text = |c: CellRef| match sh.value(c) {
         Value::Text(t) if !t.trim().is_empty() => Some(t.to_string()),
         _ => None,
@@ -68,7 +72,7 @@ fn method_name(m: Method) -> &'static str {
 }
 
 /// Header labels in bold from column 1, then the rows below them; returns the next free row.
-fn table(out: &mut Lines, row: u32, headers: &[&str], rows: Vec<Vec<Value>>) -> u32 {
+pub(super) fn table(out: &mut Lines, row: u32, headers: &[&str], rows: Vec<Vec<Value>>) -> u32 {
     for (k, h) in headers.iter().enumerate() {
         out.push((row, 1 + k as u32, Value::text(*h), true));
     }
@@ -92,7 +96,7 @@ pub(super) struct ReportInput<'a> {
     pub(super) budget: u64,
 }
 
-fn title(out: &mut Lines, kind: ReportKind, sheet: &str) -> u32 {
+pub(super) fn title(out: &mut Lines, kind: ReportKind, sheet: &str) -> u32 {
     out.push((0, 0, Value::text(format!("GridCraft {} Report", kind.title())), true));
     out.push((1, 0, Value::text(format!("Worksheet: {sheet}")), false));
     3
@@ -267,6 +271,7 @@ pub(super) fn prepare_reports(d: &DocState, kinds: &[ReportKind], inp: &ReportIn
     for k in kinds {
         let lines = match k {
             ReportKind::Answer => answer_report(d, sh, inp),
+            ReportKind::Sensitivity => sensitivity_report(d, sh, inp)?,
             ReportKind::Limits => limits_report(d, sh, inp)?,
         };
         let name = (1..=10_000u32)
@@ -292,7 +297,7 @@ pub(super) fn write_reports(cx: &mut Ctx, at: usize, built: Vec<(String, Lines)>
             let style = if b { bold } else { gridcraft_model::StyleId::DEFAULT };
             sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style });
         }
-        for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 120.0), (6, 120.0), (7, 120.0)] {
+        for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 155.0), (6, 140.0), (7, 140.0)] {
             sheet.cols.insert(c, gridcraft_model::LineInfo { size: Some(w), ..Default::default() });
         }
         cx.wb.sheets.insert(at + i, std::sync::Arc::new(sheet));
@@ -321,9 +326,9 @@ pub(super) fn insert_report_selections(s: &mut Session, at: usize, count: usize)
 
 /// `data.solverReport`: reports for a solution of the sheet's saved model.
 pub(super) fn report(s: &mut Session, p: &Json) -> Result<Json> {
-    let kinds = report_kinds(REPORT_CMD, p)?.ok_or_else(|| bad(REPORT_CMD, "missing `reports` (answer, limits)"))?;
+    let kinds = report_kinds(REPORT_CMD, p)?.ok_or_else(|| bad(REPORT_CMD, "missing `reports` (answer, sensitivity, limits)"))?;
     if kinds.is_empty() {
-        return Err(bad(REPORT_CMD, "`reports` is empty (answer, limits)"));
+        return Err(bad(REPORT_CMD, "`reports` is empty (answer, sensitivity, limits)"));
     }
     let d = s.doc()?;
     // The given model as is, else the saved model with any params given here over it.
