@@ -293,8 +293,9 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
 
 // ---------------------------------------------------------------- saved model
 
-fn ref_text(sheet_name: &str, cells: &str) -> String {
-    let q = crate::pivot::quote_sheet(sheet_name);
+/// `"B2:B4,D1"` as absolute references, each qualified by `sheet_name` when given.
+fn abs_text(sheet_name: Option<&str>, cells: &str) -> String {
+    let q = sheet_name.map(|n| format!("{}!", crate::pivot::quote_sheet(n))).unwrap_or_default();
     cells
         .split(',')
         .map(str::trim)
@@ -302,10 +303,14 @@ fn ref_text(sheet_name: &str, cells: &str) -> String {
         .filter_map(|part| {
             let r = RangeRef::parse(split_sheet(part).1.trim())?;
             let abs = |c: CellRef| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row as u64 + 1);
-            Some(if r.is_single() { format!("{q}!{}", abs(r.start)) } else { format!("{q}!{}:{}", abs(r.start), abs(r.end)) })
+            Some(if r.is_single() { format!("{q}{}", abs(r.start)) } else { format!("{q}{}:{}", abs(r.start), abs(r.end)) })
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn ref_text(sheet_name: &str, cells: &str) -> String {
+    abs_text(Some(sheet_name), cells)
 }
 
 /// The model as hidden names scoped to its sheet (replacing any saved before).
@@ -459,4 +464,138 @@ pub(super) fn model_params(wb: &Workbook, m: &Model) -> Json {
         out["requireBounds"] = json!(e.require_bounds);
     }
     out
+}
+
+// ---------------------------------------------------------------- model on cells
+
+/// The cells Save Model writes, top to bottom, as formula text.
+pub(super) fn model_formulas(m: &Model) -> Result<Vec<String>> {
+    let one_area = |t: &str| !t.contains(',');
+    let mut rows = Vec::with_capacity(m.cons.len() + 3);
+    let obj = abs_text(None, &m.objective.a1());
+    rows.push(match m.goal {
+        Goal::Max => format!("=MAX({obj})"),
+        Goal::Min => format!("=MIN({obj})"),
+        Goal::Value(v) => format!("={obj}={}", gridcraft_core::number_to_text(v)),
+    });
+    rows.push(format!("=COUNT({})", abs_text(None, &m.vars_text)));
+    for c in &m.cons {
+        if !one_area(&c.lhs_text) || !one_area(&c.rhs_text) {
+            return Err(EngineError::Other("Save Model needs each side of a constraint to be one range.".into()));
+        }
+        let lhs = abs_text(None, &c.lhs_text);
+        rows.push(match (c.rel, &c.rhs) {
+            (Rel::Int, _) => format!("=AND({lhs}=INT({lhs}))"),
+            (Rel::Bin, _) => format!("=AND(({lhs}=0)+({lhs}=1))"),
+            (rel, Rhs::Cells(_)) => format!("=AND({lhs}{}{})", rel.text(), abs_text(None, &c.rhs_text)),
+            (rel, Rhs::Const(v)) => format!("=AND({lhs}{}{})", rel.text(), gridcraft_core::number_to_text(*v)),
+            (rel, Rhs::None) => format!("=AND({lhs}{}0)", rel.text()),
+        });
+    }
+    let e = &m.evo;
+    let n = gridcraft_core::number_to_text;
+    let eng = match m.method {
+        Method::Grg => 1,
+        Method::Simplex => 2,
+        Method::Evolutionary => 3,
+    };
+    let yes = |b: bool| if b { 1 } else { 2 };
+    rows.push(format!(
+        "={{{eng},{},{},{},{},{},{},{}}}",
+        yes(m.non_negative),
+        e.population,
+        n(e.mutation),
+        e.seed,
+        yes(e.require_bounds),
+        n(e.convergence),
+        e.stall
+    ));
+    Ok(rows)
+}
+
+/// `NAME(inner)` → inner, ignoring case.
+fn call_args(t: &str, name: &str) -> Option<String> {
+    let head = t.get(..name.len() + 1)?;
+    (head.eq_ignore_ascii_case(&format!("{name}(")) && t.ends_with(')')).then(|| t.get(name.len() + 1..t.len() - 1).map(str::to_string))?
+}
+
+/// References without sheet names or `$`.
+fn local_refs(t: &str) -> String {
+    t.split(',').map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",")
+}
+
+fn not_a_model() -> EngineError {
+    EngineError::Other("The range doesn't hold a Solver model saved with Save Model.".into())
+}
+
+/// The options row of Save Model, `{method, non-negative, …}`, into `model`.
+fn read_options_row(model: &mut Json, list: &str) {
+    let v: Vec<Option<f64>> = list.split([',', ';']).take(16).map(num_text).collect();
+    let get = |k: usize| v.get(k).copied().flatten();
+    model["method"] = json!(match get(0).map(|x| x as i64) {
+        Some(2) => "simplex",
+        Some(3) => "evolutionary",
+        _ => "grg",
+    });
+    model["nonNegative"] = json!(get(1) != Some(2.0));
+    for (k, key) in [(2, "populationSize"), (3, "mutationRate"), (4, "randomSeed"), (6, "convergence"), (7, "generationsWithoutImprovement")] {
+        if let Some(x) = get(k) {
+            model[key] = json!(x);
+        }
+    }
+    model["requireBounds"] = json!(get(5) != Some(2.0));
+}
+
+/// One constraint row of Save Model (`AND(relation)`) as a `data.solver` constraint.
+fn read_constraint_row(t: String) -> Result<String> {
+    let t = call_args(&t, "AND").unwrap_or(t);
+    if let Some((x, y)) = t.split_once("=INT(").or_else(|| t.split_once("=int(")) {
+        if y.strip_suffix(')') != Some(x) {
+            return Err(not_a_model());
+        }
+        return Ok(format!("{} int", local_refs(x)));
+    }
+    if let Some(x) = t.strip_prefix('(').and_then(|x| x.strip_suffix("=1)")).and_then(|x| x.split_once("=0)+(")).filter(|(a, b)| a == b) {
+        return Ok(format!("{} bin", local_refs(x.0)));
+    }
+    let (l, rel, r) = split_constraint(&t).ok_or_else(not_a_model)?;
+    let r = r.trim_matches('"');
+    Ok(match r.to_ascii_lowercase().as_str() {
+        "integer" => format!("{} int", local_refs(&l)),
+        "binary" => format!("{} bin", local_refs(&l)),
+        _ if num_text(r).is_some() => format!("{} {} {r}", local_refs(&l), rel.text()),
+        _ => format!("{} {} {}", local_refs(&l), rel.text(), local_refs(r)),
+    })
+}
+
+/// Reads formula text written by Save Model back into `data.solver` params.
+pub(super) fn parse_model_formulas(rows: &[String]) -> Result<Json> {
+    let body = |t: &str| t.trim().trim_start_matches('=').replace(' ', "");
+    let first = body(rows.first().ok_or_else(not_a_model)?);
+    let (goal, objective, value) = if let Some(o) = call_args(&first, "MAX") {
+        ("max", o, 0.0)
+    } else if let Some(o) = call_args(&first, "MIN") {
+        ("min", o, 0.0)
+    } else {
+        let (o, v) = first.split_once('=').ok_or_else(not_a_model)?;
+        ("value", o.to_string(), num_text(v).ok_or_else(not_a_model)?)
+    };
+    let variables = call_args(&body(rows.get(1).ok_or_else(not_a_model)?), "COUNT").ok_or_else(not_a_model)?;
+    let mut model = json!({"objective": local_refs(&objective), "goal": goal, "value": value, "variables": local_refs(&variables)});
+    let mut constraints = Vec::new();
+    let rest = rows.get(2..).unwrap_or(&[]);
+    for (i, row) in rest.iter().enumerate() {
+        let t = body(row);
+        if let Some(list) = t.strip_prefix('{').and_then(|x| x.strip_suffix('}')) {
+            // The options: the last row.
+            if i + 1 != rest.len() {
+                return Err(not_a_model());
+            }
+            read_options_row(&mut model, list);
+            break;
+        }
+        constraints.push(json!(read_constraint_row(t)?));
+    }
+    model["constraints"] = json!(constraints);
+    Ok(model)
 }

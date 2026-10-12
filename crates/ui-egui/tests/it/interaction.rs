@@ -795,6 +795,44 @@ fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
 }
 
 #[test]
+fn solver_dialog_saves_loads_and_resets_the_model() {
+    let mut s = blank();
+    for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solver", json!({}));
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in [
+            ("objective", json!("B1")),
+            ("variables", json!("A1:A2")),
+            ("constraints", json!(["B2 <= 12", "A1 <= 4"])),
+            ("modelArea", json!(true)),
+            ("modelRange", json!("H1")),
+        ] {
+            d.values.insert(k.into(), v);
+        }
+    }
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    let note = |h: &egui_kittest::Harness<'_, SheetApp>| h.state().dialog.as_ref().unwrap().values.get("modelNote").cloned();
+    assert_eq!(note(&h), Some(json!("The model was saved to H1:H5.")));
+    // Reset All clears the form; Load fills it again from the saved cells.
+    h.get_by_label("Reset All").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("objective"), Some(&json!("")));
+    h.get_by_label("Load").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!(d.values.get("objective"), Some(&json!("B1")), "{:?}", d.values.get("modelNote"));
+    assert_eq!(d.values.get("constraints"), Some(&json!(["B2 <= 12", "A1 <= 4"])));
+    let saved = gridcraft_engine::cmd::solver::saved_model(&h.state().session.active().unwrap().wb, 0);
+    assert_eq!(saved.map(|m| m["variables"].clone()), Some(json!("A1:A2")));
+}
+
+#[test]
 fn solver_results_write_the_chosen_reports() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {

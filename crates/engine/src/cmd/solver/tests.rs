@@ -400,6 +400,84 @@ fn solver_report_insertion_keeps_variable_edit_guards() {
     }
 }
 
+fn formula(s: &Session, a1: &str) -> String {
+    let d = s.doc().unwrap();
+    d.wb.active().unwrap().cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap_or_default()
+}
+
+#[test]
+fn save_and_load_model_round_trip_through_cells() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2"), ("C2", "24")]);
+    let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= C2", "B3 <= 6", "A1:A2 int", "A2 bin", "A1 >= 1"], "method": "simplex"});
+    s.execute("data.solver", model.clone()).unwrap();
+    let out = s.execute("data.solverSaveModel", json!({"to": "H1"})).unwrap();
+    assert_eq!(out["range"], "H1:H8");
+    let rows: Vec<String> = (1..=8).map(|r| formula(&s, &format!("H{r}"))).collect();
+    assert_eq!(
+        rows,
+        [
+            "MAX($B$1)",
+            "COUNT($A$1:$A$2)",
+            "AND($B$2<=$C$2)",
+            "AND($B$3<=6)",
+            "AND($A$1:$A$2=INT($A$1:$A$2))",
+            "AND(($A$2=0)+($A$2=1))",
+            "AND($A$1>=1)",
+            "{2,1,100,0.075,0,1,0.0001,50}",
+        ]
+    );
+    // The constraint cells show whether each constraint holds at the solution (4, 0).
+    assert_eq!(at(&s, "Sheet1", "H3"), Value::Bool(true));
+    assert_eq!(at(&s, "Sheet1", "H2"), Value::number(2.0));
+    // Reset All removes the model; Load Model restores it from the range or its first cell.
+    assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["removed"].as_u64().map(|n| n > 0), Some(true));
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+    assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["removed"], 0);
+    for from in ["H1:H8", "H1"] {
+        let loaded = s.execute("data.solverLoadModel", json!({"from": from})).unwrap();
+        assert_eq!(loaded["model"]["objective"], "B1", "{loaded}");
+        assert_eq!(loaded["model"]["constraints"], json!(["B2 <= C2", "B3 <= 6", "A1:A2 int", "A2 bin", "A1 >= 1"]));
+        assert_eq!(loaded["model"]["method"], "simplex");
+    }
+    set(&mut s, &[("A1", "0"), ("A2", "0")]);
+    let r = s.execute("data.solver", json!({"saved": true})).unwrap();
+    assert_eq!((r["status"].as_str(), n(&s, "A1"), n(&s, "A2")), (Some("optimal"), 4.0, 0.0), "{r}");
+    // A Value Of goal and the Evolutionary options survive too; an explicit model is saved
+    // as given.
+    let evo = json!({"objective": "B1", "goal": "value", "value": -2.5, "variables": "A1:A2", "constraints": ["A1:A2 <= 10"], "nonNegative": false, "method": "evolutionary", "populationSize": 40, "randomSeed": 3, "requireBounds": false});
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "J5", "model": evo})).unwrap()["range"], "J5:J8");
+    assert_eq!(formula(&s, "J5"), "$B$1=-2.5");
+    let m = s.execute("data.solverLoadModel", json!({"from": "J5:J8"})).unwrap()["model"].clone();
+    assert_eq!((m["goal"].as_str(), m["value"].as_f64(), m["nonNegative"].as_bool()), (Some("value"), Some(-2.5), Some(false)), "{m}");
+    assert_eq!((m["method"].as_str(), m["populationSize"].as_f64(), m["randomSeed"].as_f64()), (Some("evolutionary"), Some(40.0), Some(3.0)));
+    assert_eq!(m["requireBounds"], false);
+    // Each command is one undo step.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.execute("data.solver", json!({})).unwrap()["model"]["method"], "simplex");
+    // Refused: no model or no target, overlapping the model, off the sheet, ranges that
+    // hold no model, other sheets and oversized ranges.
+    set(&mut s, &[("L1", "=1+1"), ("L2", "=SUM(A1:A2)")]);
+    for (cmd, p) in [
+        ("data.solverSaveModel", json!({})),
+        ("data.solverSaveModel", json!({"to": "A1"})),
+        ("data.solverSaveModel", json!({"to": "B3"})),
+        ("data.solverSaveModel", json!({"to": "A1048575"})),
+        ("data.solverSaveModel", json!({"to": "H1", "model": {"objective": "B1", "variables": "A1,A2", "constraints": ["A1,A2 <= 3"]}})),
+        ("data.solverSaveModel", json!({"to": "H1", "model": "B1"})),
+        ("data.solverLoadModel", json!({})),
+        ("data.solverLoadModel", json!({"from": "L1:L2"})),
+        ("data.solverLoadModel", json!({"from": "Z1"})),
+        ("data.solverLoadModel", json!({"from": "H2:H8"})),
+        ("data.solverLoadModel", json!({"from": "H1:H1048576"})),
+        ("data.solverLoadModel", json!({"from": "Nope!H1"})),
+    ] {
+        assert!(s.execute(cmd, p.clone()).is_err(), "{cmd} {p}");
+    }
+    s.execute("data.solverReset", json!({})).unwrap();
+    assert!(s.execute("data.solverSaveModel", json!({"to": "H1"})).is_err(), "no model to save");
+}
+
 #[test]
 fn limits_report_of_a_nonlinear_model() {
     // The largest rectangle with perimeter at most 20 (5 × 5): with the height held at 5, the
