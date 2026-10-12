@@ -103,3 +103,90 @@ fn hostile_object_params_are_refused() {
     let a = sheet(&s, 0).object_anchor(o).unwrap();
     assert!(a.dx.is_finite() && a.dy.is_finite() && a.width <= 10000.0 && a.height >= 0.0, "{a:?}");
 }
+
+fn cell_of(s: &Session, o: ObjRef) -> String {
+    sheet(s, 0).object_anchor(o).unwrap().cell.a1()
+}
+
+#[test]
+fn every_kind_follows_row_and_column_edits_and_sorts() {
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    // Anchors: chart D2, picture D18, shape H18, slicer L2.
+    s.execute("object.setAnchorMode", json!({"kind": "shape", "id": objs[2].id, "mode": "absolute"})).unwrap();
+    let cells = |s: &Session| objs.map(|o| cell_of(s, o));
+    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2"]);
+    s.execute("home.insertRows", json!({"rows": "10:11"})).unwrap();
+    assert_eq!(cells(&s), ["D2", "D20", "H18", "L2"], "rows inserted above move the objects below them; an absolute shape stays");
+    s.execute("home.insertColumns", json!({"cols": "C:C"})).unwrap();
+    assert_eq!(cells(&s), ["E2", "E20", "H18", "M2"]);
+    s.execute("home.deleteColumns", json!({"cols": "C:C"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "10:11"})).unwrap();
+    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2"]);
+    // Sorting moves a picture anchored inside the sorted block with its row.
+    s.execute("range.setValues", json!({"range": "T1", "values": [["k"], [3], [1], [2]]})).unwrap();
+    let pic = ObjRef::new(ObjKind::Image, super::add_image(&mut s, "T2", AnchorMode::MoveAndSize));
+    s.execute("selection.set", json!({"range": "T1:T4"})).unwrap();
+    s.execute("data.sortAscending", json!({"header": true, "column": "T"})).unwrap();
+    assert_eq!(cell_of(&s, pic), "T4", "the row holding 3 sorts last");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(cell_of(&s, pic), "T2");
+}
+
+#[test]
+fn slicers_follow_inserted_rows_like_other_objects() {
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    s.execute("home.insertRows", json!({"rows": "1:2"})).unwrap();
+    assert_eq!(cell_of(&s, objs[3]), "L4");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(cell_of(&s, objs[3]), "L2");
+}
+
+#[test]
+fn chart_series_follow_cut_moves_renames_and_sheet_deletes() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[3], [5], [2], [8]]})).unwrap();
+    let chart = id_of(&s.execute("insert.chart", json!({"range": "A1:A4", "type": "column"})).unwrap(), "chart");
+    let values = |s: &Session| sheet(s, 0).charts.iter().find(|c| c.id == chart).map(|c| c.series[0].values.clone()).unwrap_or_default();
+    s.execute("edit.cut", json!({"range": "A1:A4"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert!(values(&s).contains("$F$2:$F$5"), "a cut-move takes the series with the cells: {}", values(&s));
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0].series[0].values = "Other!$A$1:$A$3".into();
+    s.execute("sheet.rename", json!({"sheet": 1, "name": "Inputs"})).unwrap();
+    assert_eq!(values(&s), "Inputs!$A$1:$A$3");
+    s.execute("home.deleteSheet", json!({"sheet": 1})).unwrap();
+    assert!(values(&s).contains("#REF!"), "a series into a deleted sheet becomes #REF!: {}", values(&s));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(values(&s), "Inputs!$A$1:$A$3");
+}
+
+#[test]
+fn a_copied_sheet_gives_its_objects_fresh_ids() {
+    let mut s = s();
+    let objs = every_kind(&mut s);
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let ids_of = |sh: &Sheet| -> Vec<u32> {
+        sh.charts
+            .iter()
+            .map(|c| c.id)
+            .chain(sh.images.iter().map(|c| c.id))
+            .chain(sh.shapes.iter().map(|c| c.id))
+            .chain(sh.slicers.iter().map(|c| c.id))
+            .collect()
+    };
+    let mut ids: Vec<u32> = wb.sheets.iter().flat_map(|sh| ids_of(sh)).collect();
+    assert_eq!(ids.len(), 2 * objs.len());
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 2 * objs.len(), "every object id stays unique across the workbook");
+    let copy = sheet(&s, 1);
+    for (o, id) in objs.iter().zip(ids_of(copy)) {
+        assert_eq!(copy.object_ref(id).map(|c| c.kind), Some(o.kind));
+    }
+    assert!(s.doc().unwrap().wb.next_object_id() > *ids.last().unwrap_or(&0));
+}
