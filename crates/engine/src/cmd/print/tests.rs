@@ -581,3 +581,19 @@ fn checkbox_cells_print_as_boxes_not_true_false() {
     assert!(contains(&pdf, "0.063 0.486 0.255 rg"), "the checked box is not filled");
     assert!(contains(&pdf, "0.431 0.431 0.431 RG"), "the unchecked box is not outlined");
 }
+
+#[test]
+fn equations_print_with_the_symbol_font() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("insert.equation", json!({"latex": "\\sum_{i=1}^{n} \\alpha_i \\le \\infty \\pm \\sqrt{x} \\times \\partial y", "cell": "B2"}))
+        .unwrap();
+    s.execute("insert.equation", json!({"latex": "\\mathbb{R} \\oplus \\text{\u{4E2D}}", "cell": "B8"})).unwrap();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&pdf, "/BaseFont /Symbol >>"), "maths symbols use the Symbol font");
+    assert!(contains(&pdf, "/BaseFont /Times-Italic"), "variables are italic");
+    // The summation (0xE5) and alpha (0x61) codes in Symbol.
+    assert!(contains(&pdf, "(\\345) Tj") && contains(&pdf, "(a) Tj"));
+    // A glyph no standard font has is a [?] box.
+    assert!(contains(&pdf, "(?) Tj"));
+}

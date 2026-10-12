@@ -2167,6 +2167,7 @@ dependencies = [
  "gridcraft-core",
  "gridcraft-formula",
  "gridcraft-functions",
+ "gridcraft-math",
  "gridcraft-model",
  "quick-xml 0.41.0",
  "sha1 0.11.0",

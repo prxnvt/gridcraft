@@ -79,6 +79,14 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
             continue;
         }
         let (x, y, w, h) = place(r);
+        if shp.kind == ShapeKind::Equation {
+            let ink = rgb_of(shp.line, wb).unwrap_or([0, 0, 0]);
+            match shp.math.get(&shp.text) {
+                Some(Ok(list)) => crate::cmd::equation::draw_pdf(pg, list, (x, y, w, h), crate::cmd::equation::PADDING * b.k, ink),
+                _ => pg.text(x + 2.0 * b.k, y + 12.0 * b.scale, 10.0 * b.scale, Font::Courier, ink, &shp.text),
+            }
+            continue;
+        }
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
     for ch in &sh.charts {
