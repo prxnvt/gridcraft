@@ -786,6 +786,18 @@ fn data_analysis_dialog_opens_every_tool_form() {
     key(&mut h, Key::Enter, Modifiers::NONE);
     assert!(h.state().dialog.is_none(), "OK runs the tool and closes the dialog");
     assert_eq!(value(&h, "D1"), Value::from("z-Test: Two Sample for Means"));
+    // Random Number Generation draws from the chosen distribution with the typed seed.
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "randomNumberGeneration"}));
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in [("count", "3"), ("distribution", "bernoulli"), ("seed", "1"), ("outputTo", "range"), ("output", "H1")] {
+            d.values.insert(k.into(), json!(v));
+        }
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(matches!(value(&h, "H3"), Value::Number(x) if x == 0.0 || x == 1.0));
 }
 
 #[test]

@@ -32,7 +32,7 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
 }
 
 /// The fields of one Analysis ToolPak tool's form (input and options; output is drawn apart).
-fn toolpak_fields(tool: &str) -> Vec<Field> {
+fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
     use Field::*;
     let grouped = || Choice { key: "groupedBy", label: "Grouped By:", options: vec![("columns", "Columns"), ("rows", "Rows")] };
     let labels = || Check { key: "labels", label: "Labels in first row" };
@@ -77,6 +77,53 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         "movingAverage" => {
             vec![range(), labels(), Text { key: "interval", label: "Interval:" }, Check { key: "standardErrors", label: "Standard Errors" }]
         }
+        "randomNumberGeneration" => {
+            let mut v = vec![
+                Text { key: "variables", label: "Number of Variables:" },
+                Text { key: "count", label: "Number of Random Numbers:" },
+                Choice {
+                    key: "distribution",
+                    label: "Distribution:",
+                    options: vec![
+                        ("uniform", "Uniform"),
+                        ("normal", "Normal"),
+                        ("bernoulli", "Bernoulli"),
+                        ("binomial", "Binomial"),
+                        ("poisson", "Poisson"),
+                        ("patterned", "Patterned"),
+                        ("discrete", "Discrete"),
+                    ],
+                },
+            ];
+            v.extend(match values.get("distribution").and_then(Json::as_str).unwrap_or("uniform") {
+                "normal" => vec![Text { key: "mean", label: "Mean:" }, Text { key: "standardDeviation", label: "Standard deviation:" }],
+                "bernoulli" => vec![Text { key: "p", label: "p Value:" }],
+                "binomial" => vec![Text { key: "p", label: "p Value:" }, Text { key: "trials", label: "Number of trials:" }],
+                "poisson" => vec![Text { key: "lambda", label: "Lambda:" }],
+                "patterned" => vec![
+                    Text { key: "from", label: "From:" },
+                    Text { key: "to", label: "To:" },
+                    Text { key: "step", label: "In steps of:" },
+                    Text { key: "repeatEach", label: "Repeating each number (times):" },
+                    Text { key: "repeatSequence", label: "Repeating each sequence (times):" },
+                ],
+                "discrete" => vec![Text { key: "valueRange", label: "Value and Probability Input Range:" }],
+                _ => vec![Text { key: "from", label: "Between:" }, Text { key: "to", label: "And:" }],
+            });
+            v.push(Text { key: "seed", label: "Random Seed (blank for none):" });
+            v
+        }
+        "sampling" => vec![
+            range(),
+            labels(),
+            Choice { key: "method", label: "Sampling Method:", options: vec![("periodic", "Periodic"), ("random", "Random")] },
+            if values.get("method").and_then(Json::as_str) == Some("random") {
+                Text { key: "samples", label: "Number of Samples:" }
+            } else {
+                Text { key: "period", label: "Period:" }
+            },
+            Text { key: "seed", label: "Random Seed (blank for none):" },
+        ],
         "fourierAnalysis" => vec![range(), labels(), Check { key: "inverse", label: "Inverse" }],
         "exponentialSmoothing" => {
             vec![range(), labels(), Text { key: "damping", label: "Damping factor:" }, Check { key: "standardErrors", label: "Standard Errors" }]
@@ -118,6 +165,29 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
         "rowsPerSample": "", "variance1": "", "variance2": "", "inverse": false,
         "outputTo": "newSheet", "output": "", "newSheet": "",
     });
+    // Random Number Generation and Sampling.
+    for (k, x) in [
+        ("variables", "1"),
+        ("count", ""),
+        ("distribution", "uniform"),
+        ("from", "0"),
+        ("to", "1"),
+        ("mean", "0"),
+        ("standardDeviation", "1"),
+        ("p", "0.5"),
+        ("trials", "10"),
+        ("lambda", "1"),
+        ("step", "1"),
+        ("repeatEach", "1"),
+        ("repeatSequence", "1"),
+        ("valueRange", ""),
+        ("seed", ""),
+        ("method", "periodic"),
+        ("period", ""),
+        ("samples", ""),
+    ] {
+        v[k] = json!(x);
+    }
     if tool == "regression" {
         v["confidence"] = json!("95");
         v["inputY"] = json!(sel);
@@ -169,7 +239,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
         return;
     };
     d.title = label.to_string();
-    d.fields = toolpak_fields(&tool);
+    d.fields = toolpak_fields(&tool, &d.values);
     form_fields(ui, d);
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());

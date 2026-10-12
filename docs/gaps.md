@@ -124,8 +124,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   Limits reports. Report refusal leaves the solution, saved model and history unchanged; a
   successful solve and its reports share one Undo step (#1050). AllDifferent constraints,
   the Solver Options dialog, the Sensitivity and Population reports and Load/Save Model remain.
-- The Analysis ToolPak (`data.analysisToolPak`) has 17 of Excel's 19 tools; Random Number
-  Generation, Sampling and the tools' charts remain. **Estimate:** 12–20 h.
+- The Analysis ToolPak (`data.analysisToolPak`) has all 19 of Excel's tools; their chart output
+  remains. **Estimate:** 12–20 h.
 
 ### 14. Page Layout view and print polish (U, F)
 - Page Layout view landed (#329): paper view with rulers and in-place header/footer editing.
