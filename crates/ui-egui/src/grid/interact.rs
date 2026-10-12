@@ -64,6 +64,15 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let in_col_header = pos.is_some_and(|p| p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left());
     let in_row_header = pos.is_some_and(|p| p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top());
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top());
+    // Insert › Controls places a control; a click works a form control (Ctrl or Cmd+click, or a
+    // right-click, selects it instead).
+    if app.editor.is_none() && crate::control_ui::place(app, ui, resp, geo, sh) {
+        return;
+    }
+    if app.editor.is_none() && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
+        keyboard(app, &ctx, resp, geo, sh);
+        return;
+    }
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
@@ -146,14 +155,18 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         }
         app.selected_object = None;
     }
-    // A right-click on a chart, picture, shape or slicer opens the object's menu, not the cell's
-    // under it; a right press that wobbles into a drag counts too (#2067).
+    // A right-click on a chart, picture, shape, slicer or form control opens the object's menu, not
+    // the cell's under it; a right press that wobbles into a drag counts too (#2067). On a form
+    // control it selects the control without running it.
     let secondary_drag = resp.drag_started_by(egui::PointerButton::Secondary);
     if (resp.secondary_clicked() || secondary_drag)
         && let Some(p) = if secondary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos }
         && let Some((obj, _)) = crate::chartview::hit(app, geo, sh, p)
     {
         app.selected_object = Some(obj);
+        if obj.kind == ObjKind::Control {
+            app.grid.focused_control = None;
+        }
         app.grid.object_menu = Some((geo.mirror_pos(p), obj.kind.name(), obj.id));
         return;
     }
