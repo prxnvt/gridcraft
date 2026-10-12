@@ -85,7 +85,7 @@ collaboration, mobile, AI).
 | Get & Transform, external data, data model | ~15% | ~10% | 60–100 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 | Insert objects (pictures, shapes, ink, SmartArt, equations) | ~55% | ~45% | 25–40 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 | Review, comments, protection, collaboration | ~55% | ~40% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
-| Automation (recorded scripts; typed macros with a recorder and a Macros dialog; no VBA) | ~30% | ~20% | 12–20 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
+| Automation (recorded scripts; typed macros with a recorder, a Macros dialog and a step editor; no VBA) | ~30% | ~20% | 12–20 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 
 ## Languages
 
@@ -132,7 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
-| 2026-10-21 | Macro interface ([macros.md](docs/macros.md#in-the-window)): an Automate › Macros group (Record Macro, which turns into Stop Recording, Use Relative References, Run Macro with recent macros); "Recording · N steps" with Stop in the status bar; a Record Macro dialog (checked name, free Ctrl+Shift shortcut, description); the Macros dialog lists macros beside Automate scripts and a VBA project, with Run, Delete and Options; Ctrl+Shift+letter macro shortcuts; questions that offer Run, Overwrite, Shift Down or Shift Right |
+| 2026-10-21 | Macro interface ([macros.md](docs/macros.md#in-the-window)): an Automate › Macros group (Record Macro, which turns into Stop Recording, Use Relative References, Run Macro with recent macros); "Recording · N steps" with Stop in the status bar; a Record Macro dialog (checked name, free Ctrl+Shift shortcut, description); the Macros dialog lists macros beside Automate scripts and a VBA project, with Run, Step Into, Edit, Create, Delete and Options; Ctrl+Shift+letter macro shortcuts; questions that offer Run, Overwrite, Shift Down or Shift Right; a step editor with a breakpoint gutter, drag to reorder, a command picker, reference boxes that switch between relative tokens and absolute references, Inputs and Output tabs, a debug bar (Check, Run, Step, Continue, Run to Here, Stop with keep or undo) and grid overlays for inputs, writes, conflicts and the current step |
 | 2026-10-21 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |

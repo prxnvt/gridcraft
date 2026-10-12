@@ -416,6 +416,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Macros…" => "Makroi…",
         "Recording" => "Snimanje",
         "Stop" => "Zaustavi",
+        "New Macro" => "Novi makro",
+        "Show" => "Prikaži",
         _ => return None,
     })
 }
