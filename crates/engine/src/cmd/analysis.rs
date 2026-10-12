@@ -27,6 +27,8 @@ const MAX_MATRIX_VARS: usize = 256;
 const MAX_REGRESSORS: usize = 16;
 /// Most histogram bins.
 const MAX_BINS: usize = 100_000;
+/// Excel's limit on Fourier Analysis input values.
+const MAX_FOURIER: usize = 4096;
 
 /// Part of the error a programmatic call gets when the output range already holds data; the
 /// dialog recognises it and asks before running again with `overwrite: true`.
@@ -42,6 +44,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("descriptive", "Descriptive Statistics"),
     ("exponentialSmoothing", "Exponential Smoothing"),
     ("fTest", "F-Test Two-Sample for Variances"),
+    ("fourierAnalysis", "Fourier Analysis"),
     ("histogram", "Histogram"),
     ("movingAverage", "Moving Average"),
     ("rankPercentile", "Rank and Percentile"),
@@ -58,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Data Analysis…",
         ["Data", "Analysis"],
         None,
-        "{tool: anovaSingle|anovaTwoFactorWith|anovaTwoFactorWithout|correlation|covariance|descriptive|exponentialSmoothing|fTest|histogram|movingAverage|rankPercentile|regression|tTestPaired|tTestEqual|tTestUnequal|zTest (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?; regression: inputY, inputX, constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?; anovaTwoFactorWithout: range, labels?, alpha?; anovaTwoFactorWith: range (first row and column hold labels), rowsPerSample, alpha?; zTest: range1, range2, variance1, variance2 (known variances), alpha?, hypothesizedDifference?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
+        "{tool: anovaSingle|anovaTwoFactorWith|anovaTwoFactorWithout|correlation|covariance|descriptive|exponentialSmoothing|fTest|fourierAnalysis|histogram|movingAverage|rankPercentile|regression|tTestPaired|tTestEqual|tTestUnequal|zTest (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?; regression: inputY, inputX, constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?; anovaTwoFactorWithout: range, labels?, alpha?; anovaTwoFactorWith: range (first row and column hold labels), rowsPerSample, alpha?; zTest: range1, range2, variance1, variance2 (known variances), alpha?, hypothesizedDifference?; fourierAnalysis: range (one row or column of 2^k numbers or complex text, at most 4096), inverse?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
         has_doc,
         run
     )]
@@ -1290,6 +1293,83 @@ fn z_test(s: &Session, p: &Json) -> Result<Grid> {
     Ok(g)
 }
 
+// ---------------------------------------------------------------- fourier analysis
+
+/// Radix-2 fast Fourier transform (iterative Cooley–Tukey) in place, for a power-of-two number of
+/// complex values (re, im). The forward transform is unscaled, X[k] = Σ x[n]·e^(−2πikn/N); the
+/// inverse uses e^(+2πikn/N) and divides by N, so it returns the values the forward one took.
+fn fft(a: &mut [(f64, f64)], inverse: bool) {
+    let n = a.len();
+    if n < 2 || !n.is_power_of_two() {
+        return;
+    }
+    let bits = n.trailing_zeros();
+    for i in 0..n {
+        let j = i.reverse_bits() >> (usize::BITS - bits);
+        if i < j {
+            a.swap(i, j);
+        }
+    }
+    let sign = if inverse { 1.0 } else { -1.0 };
+    let mut len = 2;
+    while len <= n {
+        let ang = sign * 2.0 * std::f64::consts::PI / len as f64;
+        for start in (0..n).step_by(len) {
+            for k in 0..len / 2 {
+                // Each twiddle factor is computed directly, not by repeated multiplication.
+                let (wr, wi) = ((ang * k as f64).cos(), (ang * k as f64).sin());
+                let (i, j) = (start + k, start + k + len / 2);
+                let (Some(&(ur, ui)), Some(&(xr, xi))) = (a.get(i), a.get(j)) else { continue };
+                let (vr, vi) = (xr * wr - xi * wi, xr * wi + xi * wr);
+                if let Some(u) = a.get_mut(i) {
+                    *u = (ur + vr, ui + vi);
+                }
+                if let Some(x) = a.get_mut(j) {
+                    *x = (ur - vr, ui - vi);
+                }
+            }
+        }
+        len <<= 1;
+    }
+    if inverse {
+        let nf = n as f64;
+        a.iter_mut().for_each(|v| *v = (v.0 / nf, v.1 / nf));
+    }
+}
+
+/// Fourier Analysis: the discrete Fourier transform (or with `inverse` its inverse) of one row or
+/// column of 2^k values, read and written as complex numbers the way IMREAL, IMAGINARY and
+/// COMPLEX read and write them.
+fn fourier_analysis(s: &Session, p: &Json) -> Result<Grid> {
+    let v = single(s, p, "range", "")?;
+    let n = v.vals.len();
+    if n == 0 || n > MAX_FOURIER || !n.is_power_of_two() {
+        return Err(EngineError::Other(format!("Fourier Analysis needs 1, 2, 4, 8 … {MAX_FOURIER} input values (a power of two).")));
+    }
+    let mut a = Vec::with_capacity(n);
+    for x in &v.vals {
+        let part = |f: &str| call(f, std::slice::from_ref(x)).as_f64();
+        match (x, part("IMREAL"), part("IMAGINARY")) {
+            (Value::Empty, ..) => return Err(non_numeric()),
+            (_, Some(re), Some(im)) => a.push((re, im)),
+            _ => return Err(EngineError::Other("Input range must hold numbers or complex numbers such as 3+4i.".into())),
+        }
+    }
+    fft(&mut a, flag(p, "inverse"));
+    // Parts far below the largest value are rounding noise of the transform; they are written as 0.
+    let scale = a.iter().fold(0.0f64, |m, (re, im)| m.max(re.abs()).max(im.abs()));
+    let clean = |x: f64| if x.abs() <= scale * 1e-13 { 0.0 } else { x };
+    let mut g = Grid::default();
+    let first = u32::from(flag(p, "labels"));
+    if first == 1 {
+        g.txt(0, 0, &v.name);
+    }
+    for (i, (re, im)) in a.into_iter().enumerate() {
+        g.put(first + idx(i), 0, callf("COMPLEX", &[clean(re), clean(im)]));
+    }
+    Ok(g)
+}
+
 // ---------------------------------------------------------------- output
 
 /// Writes the report at `output` (refusing to overwrite data unless `overwrite`) or on a new
@@ -1405,6 +1485,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
         "anovaTwoFactorWithout" => anova_two_factor_without(s, p)?,
         "anovaTwoFactorWith" => anova_two_factor_with(s, p)?,
         "zTest" => z_test(s, p)?,
+        "fourierAnalysis" => fourier_analysis(s, p)?,
         _ => return Err(bad(CMD, format!("unknown tool `{t}`"))),
     };
     write_report(s, p, tool, g)
@@ -1413,7 +1494,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use gridcraft_core::{CellRef, Value};
-    use serde_json::json;
+    use serde_json::{Value as Json, json};
 
     use crate::Session;
 
@@ -1721,6 +1802,34 @@ mod tests {
         assert!(s.execute("data.analysisToolPak", json!({"tool": "zTest", "range1": "A2:A6", "range2": "B2:B4", "output": "H1"})).is_err());
         let zero = json!({"tool": "zTest", "range1": "A2:A6", "range2": "B2:B4", "variance1": 0, "variance2": 1, "output": "H1"});
         assert!(s.execute("data.analysisToolPak", zero).is_err());
+    }
+
+    #[test]
+    fn fourier_analysis_matches_known_transforms() {
+        let mut s = s();
+        // DFT of 1, 2, 3, 4: 10, −2+2i, −2, −2−2i.
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Signal"], [1], [2], [3], [4]]})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "Fourier Analysis", "range": "A1:A5", "labels": true, "output": "C1"})).unwrap();
+        let col = |s: &Session, c: &str, rows: std::ops::RangeInclusive<u32>| rows.map(|r| v(s, &format!("{c}{r}"))).collect::<Vec<_>>();
+        assert_eq!(col(&s, "C", 1..=5), ["Signal", "10", "-2+2i", "-2", "-2-2i"].map(Value::text).to_vec());
+        // The inverse transform of that output returns the signal.
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "C2:C5", "inverse": true, "output": "E1"})).unwrap();
+        assert_eq!(col(&s, "E", 1..=4), ["1", "2", "3", "4"].map(Value::text).to_vec());
+        // cos(2πn/8) over eight points: N/2 = 4 at the first and last frequencies, 0 elsewhere.
+        let wave: Vec<Json> = (0..8).map(|k| json!([(std::f64::consts::PI * k as f64 / 4.0).cos()])).collect();
+        s.execute("range.setValues", json!({"range": "G1", "values": wave})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "G1:G8", "output": "H1"})).unwrap();
+        assert_eq!(col(&s, "H", 1..=8), ["0", "4", "0", "0", "0", "0", "0", "4"].map(Value::text).to_vec());
+        // Complex text input; a single value is its own transform.
+        s.execute("range.setValues", json!({"range": "J1", "values": [["3+4i"], ["1-i"]]})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "J1:J2", "output": "K1"})).unwrap();
+        assert_eq!(col(&s, "K", 1..=2), ["4+3i", "2+5i"].map(Value::text).to_vec());
+        s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "J1", "output": "L1"})).unwrap();
+        assert_eq!(v(&s, "L1"), Value::text("3+4i"));
+        // Three values are not a power of two; a word is not a number.
+        assert!(s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A2:A4", "output": "N1"})).is_err());
+        assert!(s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1:A4", "output": "N1"})).is_err());
+        assert!(s.execute("data.analysisToolPak", json!({"tool": "fourierAnalysis", "range": "A1:A8192", "output": "N1"})).is_err());
     }
 
     #[test]

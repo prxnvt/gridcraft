@@ -77,6 +77,7 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         "movingAverage" => {
             vec![range(), labels(), Text { key: "interval", label: "Interval:" }, Check { key: "standardErrors", label: "Standard Errors" }]
         }
+        "fourierAnalysis" => vec![range(), labels(), Check { key: "inverse", label: "Inverse" }],
         "exponentialSmoothing" => {
             vec![range(), labels(), Text { key: "damping", label: "Damping factor:" }, Check { key: "standardErrors", label: "Standard Errors" }]
         }
@@ -114,7 +115,7 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
         "tool": tool, "range": sel, "inputY": "", "inputX": "", "range1": sel, "range2": "", "bins": "",
         "groupedBy": "columns", "labels": false, "summary": true, "confidence": "", "kthLargest": "", "kthSmallest": "",
         "interval": "3", "damping": "0.3", "alpha": "0.05", "hypothesizedDifference": "0",
-        "rowsPerSample": "", "variance1": "", "variance2": "",
+        "rowsPerSample": "", "variance1": "", "variance2": "", "inverse": false,
         "outputTo": "newSheet", "output": "", "newSheet": "",
     });
     if tool == "regression" {
