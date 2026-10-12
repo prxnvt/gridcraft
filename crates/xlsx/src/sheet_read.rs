@@ -1,6 +1,6 @@
 //! Reading worksheet parts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
@@ -115,7 +115,9 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     }
 }
 
-pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
+/// Reads the sheet part `part`, with the VML shape numbers of the form controls read into the
+/// model (pass-through keeps the other controls).
+pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, HashSet<u64>), IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
@@ -139,6 +141,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let mut fit_to_page = false;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
+    let mut controls: Option<&El> = None;
     for e in &root.children {
         match e.name.as_str() {
             "sheetPr" => {
@@ -260,10 +263,12 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 }
             }
             "extLst" => read_ext(cx, e, &mut sheet),
+            "controls" | "AlternateContent" => controls = crate::controls::controls_of(e).or(controls),
             "protectedRanges" => read_protected_ranges(e, &mut sheet),
             _ => {}
         }
     }
+    let read_controls = read_form_controls(cx, controls, &rels, &mut sheet);
     // Comments are related to the sheet without an element in it.
     for rel in rels.iter().filter(|r| r.kind == "comments") {
         if let Some(x) = cx.optional_xml(&rel.target)? {
@@ -285,7 +290,13 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             }
         }
     }
-    Ok(sheet)
+    Ok((sheet, read_controls))
+}
+
+/// Buttons, scroll bars and spin buttons: the `<controls>` list with its properties parts, else
+/// the VML shapes. Returns the VML shape numbers read, so pass-through keeps only the others.
+fn read_form_controls(cx: &mut Ctx<'_>, controls: Option<&El>, rels: &[Rel], sheet: &mut Sheet) -> HashSet<u64> {
+    if controls.is_some() || rels.iter().any(|r| r.kind == "vmlDrawing") { crate::controls::read(cx, controls, rels, sheet) } else { HashSet::new() }
 }
 
 /// A protection password hash: the iterated attributes (`algorithmName`, `hashValue`,

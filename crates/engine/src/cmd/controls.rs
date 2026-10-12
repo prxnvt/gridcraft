@@ -13,7 +13,7 @@ use serde_json::{Value as Json, json};
 
 use super::{
     CommandSpec, EngineError, PROTECTED, Result, Session, anchor_mode_param, bad, bool_param, cell_param, cmd, edit, f64_param, find_command,
-    has_doc, split_sheet, str_param, u32_param,
+    has_doc, split_sheet, stash, str_param, u32_param,
 };
 use crate::macros::policy::{Policy, macro_policy};
 
@@ -527,6 +527,62 @@ pub(crate) fn sync_linked_values(wb: &mut Workbook) {
                     c.value = v;
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- xlsx
+
+/// The hidden-data key of the button actions xlsx has no place for.
+const ACTIONS_KEY: &str = "control_actions";
+
+/// A button's action that xlsx carries itself: a macro on the selection (`macro="[0]!Name"`).
+fn plain(a: &ControlAction) -> bool {
+    matches!(a, ControlAction::Macro { input: MacroInput::Selection, output: None, .. })
+}
+
+/// A copy of `wb` for xlsx with the button actions xlsx can't express (commands, fixed inputs,
+/// output cells) in a hidden name, keyed by sheet name and the control's place on the sheet.
+/// `None` when there is nothing to store.
+pub(crate) fn with_action_names(wb: &Workbook) -> Result<Option<Workbook>> {
+    let mut items = Vec::new();
+    for sh in &wb.sheets {
+        for (i, c) in sh.controls.iter().enumerate() {
+            if let Some(a) = c.action.as_ref().filter(|a| !plain(a)) {
+                items.push(json!({"sheet": sh.name, "index": i, "action": a}));
+            }
+        }
+    }
+    let stale = stash::get(wb, ACTIONS_KEY).is_some();
+    if items.is_empty() && !stale {
+        return Ok(None);
+    }
+    let mut out = wb.clone();
+    stash::remove(&mut out, ACTIONS_KEY);
+    if !items.is_empty() {
+        stash::set_json(&mut out, ACTIONS_KEY, &Json::Array(items))?;
+    }
+    Ok(Some(out))
+}
+
+/// After a file is opened: gives buttons back the actions kept in the hidden name, and removes
+/// it. Entries that don't match a button, or don't parse, are dropped.
+pub(crate) fn load_action_names(wb: &mut Workbook) {
+    let Some(items) = stash::get_json(wb, ACTIONS_KEY) else { return };
+    stash::remove(wb, ACTIONS_KEY);
+    for item in items.as_array().into_iter().flatten().take(100_000) {
+        let (Some(sheet), Some(index)) = (item.get("sheet").and_then(Json::as_str), item.get("index").and_then(Json::as_u64)) else { continue };
+        let Ok(action) = serde_json::from_value::<ControlAction>(item.get("action").cloned().unwrap_or(Json::Null)) else { continue };
+        let valid = match &action {
+            ControlAction::Macro { name, .. } => !name.trim().is_empty() && name.chars().count() <= MAX_MACRO_NAME,
+            ControlAction::Command { id, params } => !id.is_empty() && id.len() <= 200 && params.is_object(),
+        };
+        let Some(si) = wb.sheet_index(sheet) else { continue };
+        if !valid || !wb.sheet(si).is_some_and(|sh| sh.controls.get(index as usize).is_some_and(|c| c.kind == ControlKind::Button)) {
+            continue;
+        }
+        if let Some(c) = wb.sheet_mut(si).and_then(|sh| sh.controls.get_mut(index as usize)) {
+            c.action = Some(action);
         }
     }
 }
