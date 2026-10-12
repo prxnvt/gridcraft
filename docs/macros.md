@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-10-21 · **Change:** minor (recording macros and the management commands)
+> **Last updated:** 2026-10-21 · **Change:** minor (Record Macro takes a name, shortcut and description)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -118,9 +118,13 @@ of the step that just ran, and the cells changed so far.
 
 ## Recording
 
-`macro.record` toggles recording (`relative: false` for absolute references; `name` and
-`description` when stopping; a name that another macro has gets a suffix, such as `Tidy (2)`, so
-stopping never replaces a macro). The macro is saved in the workbook where recording started, even if
+`macro.record` toggles recording (`relative: false` for absolute references). When it starts,
+`name`, `shortcut` and `description` give the macro its name, Ctrl+Shift shortcut letter
+(`"Ctrl+Shift+K"` or `"K"`) and description; they are checked at once, so a name that is taken,
+too long or holds line breaks, or a letter that GridCraft or another macro uses, is refused
+before anything is recorded. Without a name the macro is called `Macro1`, `Macro2` and so on. A
+`name` or `description` given when stopping wins over the one given when starting; a name that
+another macro has by then gets a suffix (`Tidy (2)`), so stopping never replaces a macro. The macro is saved in the workbook where recording started, even if
 another one is active; if that workbook was closed, stopping ends the recording without saving it.
 When saving the recording fails (a name the check refuses, a workbook at its macro limit, a
 macro being debugged in that workbook), recording goes on, so stopping again keeps what was
@@ -133,6 +137,10 @@ them back sets them rather than flipping them. Commands a macro may not run are 
 listed in the result, also from the steps of a macro or script run while recording; a macro run
 while recording is replaced by its steps when it has no inputs, no output and only plain commands
 (otherwise it is left out and listed), and an Automate script run by the script's steps.
+
+GridCraft keeps the Ctrl+Shift letters it uses itself on some platform: F, G, H, J, K, L, R, S, T
+and Z (`macros::RESERVED_SHORTCUTS`). A shortcut a file brings with it on one of these letters is
+kept but does not run the macro.
 
 ## Other commands and storage
 
