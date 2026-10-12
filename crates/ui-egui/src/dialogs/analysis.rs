@@ -38,8 +38,8 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
     use Field::*;
     let grouped = || Choice { key: "groupedBy", label: "Grouped By:", options: vec![("columns", "Columns"), ("rows", "Rows")] };
     let labels = || Check { key: "labels", label: "Labels in first row" };
-    let range = || Text { key: "range", label: "Input Range:" };
-    let two = || vec![Text { key: "range1", label: "Variable 1 Range:" }, Text { key: "range2", label: "Variable 2 Range:" }];
+    let range = || Ref { key: "range", label: "Input Range:" };
+    let two = || vec![Ref { key: "range1", label: "Variable 1 Range:" }, Ref { key: "range2", label: "Variable 2 Range:" }];
     match tool {
         "descriptive" => vec![
             range(),
@@ -52,7 +52,7 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         ],
         "histogram" => vec![
             range(),
-            Text { key: "bins", label: "Bin Range (blank for automatic bins):" },
+            Ref { key: "bins", label: "Bin Range (blank for automatic bins):" },
             labels(),
             Check { key: "pareto", label: "Pareto (sorted histogram)" },
             Check { key: "cumulative", label: "Cumulative Percentage" },
@@ -60,8 +60,8 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
         "regression" => vec![
-            Text { key: "inputY", label: "Input Y Range:" },
-            Text { key: "inputX", label: "Input X Range:" },
+            Ref { key: "inputY", label: "Input Y Range:" },
+            Ref { key: "inputX", label: "Input X Range:" },
             labels(),
             Check { key: "constantZero", label: "Constant is Zero" },
             Text { key: "confidence", label: "Confidence Level (%):" },
@@ -152,19 +152,28 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
     };
     d.title = label.to_string();
     d.fields = toolpak_fields(&tool);
-    form_fields(ui, d);
+    form_fields(app, ui, d);
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
     for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
         ui.horizontal(|ui| {
-            if ui.radio(to == choice, text_label).clicked() {
+            let r = ui.radio(to == choice, text_label);
+            if r.clicked() {
                 d.values.insert("outputTo".into(), json!(choice));
             }
-            let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-            if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
-                d.values.insert(key.into(), json!(t));
-                d.values.insert("outputTo".into(), json!(choice));
+            if key == "output" {
+                ref_edit(app, ui, d, key, RefLabel::By(r.id), 190.0);
+                // Typing or picking an output range chooses it.
+                if d.refs.target.as_deref() == Some(key) {
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
+            } else {
+                let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+                if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
+                    d.values.insert(key.into(), json!(t));
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
             }
         });
     }
@@ -173,7 +182,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
 
 /// Data › Solver: the Solver Parameters form. Solve runs `data.solver` through the dialog's
 /// command; the result opens Solver Results.
-pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+pub(super) fn solver(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let lang = crate::i18n::current(ui.ctx());
     let text = |d: &Dialog, k: &str| d.values.get(k).map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default();
     let edit = |ui: &mut egui::Ui, d: &mut Dialog, k: &str, width: f32, label: &str| {
@@ -183,8 +192,8 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
         }
     };
     ui.horizontal(|ui| {
-        ui.label("Set Objective:");
-        edit(ui, d, "objective", 200.0, "Set Objective:");
+        let l = ui.label("Set Objective:");
+        ref_edit(app, ui, d, "objective", RefLabel::By(l.id), 230.0);
     });
     let goal = text(d, "goal");
     ui.horizontal(|ui| {
@@ -196,8 +205,8 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
         }
         edit(ui, d, "value", 80.0, "Value Of:");
     });
-    ui.label("By Changing Variable Cells:");
-    edit(ui, d, "variables", 420.0, "By Changing Variable Cells:");
+    let l = ui.label("By Changing Variable Cells:");
+    ref_edit(app, ui, d, "variables", RefLabel::By(l.id), 420.0);
     ui.label("Subject to the Constraints:");
     let list: Vec<String> = d
         .values
@@ -216,7 +225,7 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
         });
     });
     ui.horizontal(|ui| {
-        edit(ui, d, "newLhs", 110.0, "Constraint Cell Reference");
+        ref_edit(app, ui, d, "newLhs", RefLabel::Named("Constraint Cell Reference"), 130.0);
         let op = text(d, "newOp");
         craft_ui::ComboBox::from_id_salt("solverOp")
             .selected_text(op.clone())
@@ -231,7 +240,7 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
             .response
             .accessible_name(lang.tr("Constraint Operator"));
         if !matches!(op.as_str(), "int" | "bin") {
-            edit(ui, d, "newRhs", 110.0, "Constraint Value");
+            ref_edit(app, ui, d, "newRhs", RefLabel::Named("Constraint Value"), 130.0);
         }
         if ui.button("Add").clicked() {
             let lhs = text(d, "newLhs");

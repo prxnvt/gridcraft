@@ -173,8 +173,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
-                "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
-                "advancedFilter" => advanced_filter_form(ui, &mut d, &mut confirm, &mut open),
+                "dataValidation" => data_validation_form(app, ui, &mut d, &mut confirm, &mut open),
+                "advancedFilter" => advanced_filter_form(app, ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
                 "find" => find(app, ui, &mut d),
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),
@@ -189,7 +189,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
-                "solver" => solver(ui, &mut d, &mut confirm, &mut open),
+                "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
@@ -362,7 +362,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         open = false;
                     }
                 }
-                _ => form(ui, &mut d, &mut confirm, &mut open),
+                _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         });
     window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
@@ -470,8 +470,8 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
     });
 }
 
-fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
-    form_fields(ui, d);
+fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    form_fields(app, ui, d);
     ok_cancel(ui, confirm, open);
 }
 
@@ -517,7 +517,7 @@ fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
 }
 
 /// Draws a dialog's `fields`, editing its values.
-pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
+pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
@@ -544,6 +544,12 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
                             track_pick(pick, &r, r.changed());
                         }
+                    });
+                }
+                Field::Ref { key, label } => {
+                    ui.vertical(|ui| {
+                        let l = ui.label(lang.tr(label));
+                        ref_edit(app, ui, d, key, RefLabel::By(l.id), 320.0);
                     });
                 }
                 Field::Password { key, label } => {

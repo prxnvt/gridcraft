@@ -39,9 +39,12 @@ pub(crate) use show::build_params;
 pub use show::show;
 use zoom::zoom_preset;
 
+/// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
+/// (a RefEdit box).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
     Text { key: &'static str, label: &'static str },
+    Ref { key: &'static str, label: &'static str },
     Password { key: &'static str, label: &'static str },
     Number { key: &'static str, label: &'static str },
     Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },

@@ -219,3 +219,40 @@ fn the_collapse_button_is_named_and_works_from_the_keyboard() {
     key(&mut h, Key::Space, Modifiers::NONE);
     assert_eq!(collapsed(&h), None);
 }
+
+#[test]
+fn data_analysis_picks_its_input_and_output_ranges() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    let buttons = h.get_all_by_label("Collapse dialog").count();
+    assert_eq!(buttons, 2, "Input Range and Output Range are reference boxes");
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("range"));
+    drag(&mut h, "B1", "B6");
+    assert_eq!(field(&h, "range"), "$B$1:$B$6");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    click_button(&mut h, "Collapse dialog", 1);
+    assert_eq!(collapsed(&h).as_deref(), Some("output"));
+    drag(&mut h, "D2", "D2");
+    assert_eq!(field(&h, "output"), "$D$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(field(&h, "outputTo"), "range", "picking an output range chooses it");
+}
+
+#[test]
+fn solver_picks_its_objective_variables_and_constraint_cells() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(4);
+    assert_eq!(h.get_all_by_label("Collapse dialog").count(), 4, "objective, variables and both sides of a constraint");
+    click_button(&mut h, "Collapse dialog", 1);
+    assert_eq!(collapsed(&h).as_deref(), Some("variables"));
+    drag(&mut h, "B2", "B3");
+    assert_eq!(field(&h, "variables"), "$B$2:$B$3");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    click_button(&mut h, "Collapse dialog", 2);
+    drag(&mut h, "D4", "D4");
+    assert_eq!(field(&h, "newLhs"), "$D$4");
+    assert_eq!(field(&h, "objective"), "B5");
+}
