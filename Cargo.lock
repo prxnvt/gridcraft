@@ -2043,6 +2043,7 @@ dependencies = [
  "gridcraft-core",
  "gridcraft-formula",
  "gridcraft-functions",
+ "gridcraft-math",
  "gridcraft-model",
  "gridcraft-numfmt",
  "gridcraft-pdf",
@@ -2098,6 +2099,7 @@ version = "0.14.2"
 dependencies = [
  "gridcraft-core",
  "gridcraft-formula",
+ "gridcraft-math",
  "serde",
  "serde_json",
  "sha2 0.11.1",

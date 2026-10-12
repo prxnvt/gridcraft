@@ -26,6 +26,31 @@ fn python_tokens() {
 }
 
 #[test]
+fn underline_splits_sections_at_the_mark() {
+    let t = Tokens::light();
+    let font = FontId::new(12.0, FontFamily::Monospace);
+    let marked = |job: &egui::text::LayoutJob| -> Vec<String> {
+        job.sections
+            .iter()
+            .filter(|s| s.format.underline.width > 0.0)
+            .map(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].to_string())
+            .collect()
+    };
+    let mut job = layout_job("a + \\foo", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+    underline(&mut job, 4..8, t.danger);
+    assert_eq!(marked(&job), vec!["\\foo"]);
+    let total: usize = job.sections.iter().map(|s| s.byte_range.end.0 - s.byte_range.start.0).sum();
+    assert_eq!(total, job.text.len(), "sections still cover the text");
+    // An empty mark at the end underlines the last character; out-of-range marks are clamped.
+    let mut job = layout_job("x^", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+    underline(&mut job, 2..2, t.danger);
+    assert_eq!(marked(&job), vec!["^"]);
+    let mut job = layout_job("\u{e9}", Lang::Latex, &font, t.text, &t.syntax, 100.0);
+    underline(&mut job, 50..99, t.danger);
+    assert!(job.sections.iter().any(|s| s.format.underline.width > 0.0));
+}
+
+#[test]
 fn latex_tokens() {
     let s = spans("\\frac{a^2}{3} % half\n\\{", Lang::Latex);
     assert_eq!(
