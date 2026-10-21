@@ -96,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Value Field Settings",
             ["PivotTable Analyze", "Active Field"],
             None,
-            "{pivot?, field: caption or source field | index: n, func?, name?, showAs?: normal|percentOfGrandTotal|percentOfColumnTotal|percentOfRowTotal|runningTotal|rank, numberFormat?: \"#,##0\" | null, replace?}",
+            "{pivot?, field: caption or source field | index: n, func?, name?, showAs?: normal|percentOfGrandTotal|percentOfColumnTotal|percentOfRowTotal|percentOf|percentOfParentRowTotal|percentOfParentColumnTotal|percentOfParentTotal|differenceFrom|percentDifferenceFrom|runningTotal|percentRunningTotal|rankAscending|rankDescending|index, baseField?: row or column field, baseItem?: item label | \"(previous)\" | \"(next)\", numberFormat?: \"#,##0\" | null, replace?}",
             has_doc,
             value_settings
         ),
@@ -107,7 +107,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Group Field",
             ["PivotTable Analyze", "Group"],
             None,
-            "{pivot?, field, by: years|quarters|months|days|none, replace?}",
+            "{pivot?, field, by: years|quarters|months|days|range|none, start?, end?, interval? (by: range; default the smallest and largest numbers, and 10), replace?}",
             has_doc,
             group
         ),
@@ -278,27 +278,35 @@ fn func_name(f: PivotFunc) -> &'static str {
     }
 }
 
+/// Show Values As modes: (command name, mode).
+const SHOW_AS: &[(&str, PivotShowAs)] = &[
+    ("normal", PivotShowAs::Normal),
+    ("percentOfGrandTotal", PivotShowAs::PercentOfGrandTotal),
+    ("percentOfColumnTotal", PivotShowAs::PercentOfColumnTotal),
+    ("percentOfRowTotal", PivotShowAs::PercentOfRowTotal),
+    ("percentOf", PivotShowAs::PercentOf),
+    ("percentOfParentRowTotal", PivotShowAs::PercentOfParentRowTotal),
+    ("percentOfParentColumnTotal", PivotShowAs::PercentOfParentColumnTotal),
+    ("percentOfParentTotal", PivotShowAs::PercentOfParentTotal),
+    ("differenceFrom", PivotShowAs::DifferenceFrom),
+    ("percentDifferenceFrom", PivotShowAs::PercentDifferenceFrom),
+    ("runningTotal", PivotShowAs::RunningTotal),
+    ("percentRunningTotal", PivotShowAs::PercentRunningTotal),
+    ("rankAscending", PivotShowAs::RankAscending),
+    ("rankDescending", PivotShowAs::Rank),
+    ("index", PivotShowAs::Index),
+];
+
 fn show_as_param(v: &str) -> Option<PivotShowAs> {
-    Some(match v.to_ascii_lowercase().as_str() {
-        "normal" | "none" => PivotShowAs::Normal,
-        "percentofgrandtotal" => PivotShowAs::PercentOfGrandTotal,
-        "percentofcolumntotal" => PivotShowAs::PercentOfColumnTotal,
-        "percentofrowtotal" => PivotShowAs::PercentOfRowTotal,
-        "runningtotal" => PivotShowAs::RunningTotal,
-        "rank" => PivotShowAs::Rank,
-        _ => return None,
-    })
+    match v.to_ascii_lowercase().as_str() {
+        "none" => Some(PivotShowAs::Normal),
+        "rank" => Some(PivotShowAs::Rank),
+        l => SHOW_AS.iter().find(|(n, _)| n.eq_ignore_ascii_case(l)).map(|(_, m)| *m),
+    }
 }
 
 fn show_as_name(v: PivotShowAs) -> &'static str {
-    match v {
-        PivotShowAs::Normal => "normal",
-        PivotShowAs::PercentOfGrandTotal => "percentOfGrandTotal",
-        PivotShowAs::PercentOfColumnTotal => "percentOfColumnTotal",
-        PivotShowAs::PercentOfRowTotal => "percentOfRowTotal",
-        PivotShowAs::RunningTotal => "runningTotal",
-        PivotShowAs::Rank => "rank",
-    }
+    SHOW_AS.iter().find(|(_, m)| *m == v).map(|(n, _)| *n).unwrap_or("normal")
 }
 
 fn layout_name(l: PivotLayout) -> &'static str {
@@ -317,6 +325,13 @@ fn group_name(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Months => "months",
         PivotDateGroup::Days => "days",
     }
+}
+
+/// A row or column field as `pivot.list` and `pivot.fields` report it.
+fn axis_json(f: &PivotField) -> Json {
+    let group = if f.number_group.is_some() { "range" } else { group_name(f.date_group) };
+    let range = f.number_group.map(|g| json!({"start": g.start, "end": g.end, "interval": g.by}));
+    json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group, "range": range, "collapsed": f.collapsed_items})
 }
 
 fn sort_name(o: PivotSort) -> &'static str {
@@ -416,7 +431,7 @@ fn add_to_area(
                 _ => auto_name(f, &field),
             };
             let nm = unique_value_name(pt, &base, None);
-            let v = PivotValue { source_col: field, func: f, name: nm, show_as: PivotShowAs::Normal, number_format: None };
+            let v = PivotValue { source_col: field, func: f, name: nm, ..PivotValue::default() };
             let at = position.unwrap_or(pt.values.len()).min(pt.values.len());
             pt.values.insert(at, v);
         }
@@ -688,9 +703,9 @@ fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "anchor": pt.anchor.a1(),
         "range": pt.last_range.map(|r| r.a1()),
         "source": pt.source,
-        "rows": pt.rows.iter().map(|f| json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group_name(f.date_group), "collapsed": f.collapsed_items})).collect::<Vec<_>>(),
-        "columns": pt.columns.iter().map(|f| json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group_name(f.date_group), "collapsed": f.collapsed_items})).collect::<Vec<_>>(),
-        "values": pt.values.iter().map(|v| json!({"field": v.source_col, "func": func_name(v.func), "name": v.name, "showAs": show_as_name(v.show_as), "numberFormat": v.number_format})).collect::<Vec<_>>(),
+        "rows": pt.rows.iter().map(axis_json).collect::<Vec<_>>(),
+        "columns": pt.columns.iter().map(axis_json).collect::<Vec<_>>(),
+        "values": pt.values.iter().map(|v| json!({"field": v.source_col, "func": func_name(v.func), "name": v.name, "showAs": show_as_name(v.show_as), "baseField": v.base_field, "baseItem": v.base_item, "numberFormat": v.number_format})).collect::<Vec<_>>(),
         "filters": pt.filters.iter().map(|f| json!({"field": f.source_col, "selected": f.selected, "report": !in_axes(pt, &f.source_col)})).collect::<Vec<_>>(),
         "layout": layout_name(pt.layout),
         "grandTotalsRows": pt.grand_totals_rows,
@@ -731,7 +746,7 @@ fn fields(s: &mut Session, p: &Json) -> Result<Json> {
                     "name": h,
                     "numeric": src.numeric.get(c).copied().unwrap_or(false),
                     "date": src.dates.get(c).copied().unwrap_or(false),
-                    "samples": pv::distinct_labels(&d.wb, src, c, PivotDateGroup::None, 5),
+                    "samples": pv::distinct_labels(&d.wb, src, c, pv::Grouping::default(), 5),
                     "areas": areas,
                 })
             })
@@ -1004,6 +1019,21 @@ fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(sa) = show {
             v.show_as = sa;
         }
+        if let Some(b) = str_param(p, "baseField") {
+            if !in_axes(pt, b) {
+                return Err(bad(C, format!("the base field `{b}` must be a row or column field")));
+            }
+            v.base_field = Some(b.to_string());
+        }
+        if let Some(b) = str_param(p, "baseItem") {
+            v.base_item = Some(b.to_string());
+        }
+        if v.show_as.needs_base_field() && v.base_field.is_none() {
+            v.base_field = pt.rows.first().or(pt.columns.first()).map(|f| f.source_col.clone());
+        }
+        if v.show_as.needs_base_item() && v.base_item.is_none() {
+            v.base_item = Some(BASE_PREVIOUS.to_string());
+        }
         match &fmt {
             Some(Json::String(f)) if !f.is_empty() && f.len() <= 255 => v.number_format = Some(f.clone()),
             Some(Json::Null) => v.number_format = None,
@@ -1105,17 +1135,47 @@ fn group(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.group";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
     let raw = str_param(p, "by").unwrap_or("months");
-    let by = group_param(Some(raw)).ok_or_else(|| bad(C, format!("unknown grouping `{raw}` (years|quarters|months|days|none)")))?;
+    let range = raw.eq_ignore_ascii_case("range");
+    let by = if range {
+        PivotDateGroup::None
+    } else {
+        group_param(Some(raw)).ok_or_else(|| bad(C, format!("unknown grouping `{raw}` (years|quarters|months|days|range|none)")))?
+    };
+    let number = |key: &str| -> Result<Option<f64>> {
+        match p.get(key) {
+            None | Some(Json::Null) => Ok(None),
+            Some(v) => v.as_f64().filter(|x| x.is_finite()).map(Some).ok_or_else(|| bad(C, format!("`{key}` must be a number"))),
+        }
+    };
+    let (start, end, interval) = (number("start")?, number("end")?, number("interval")?);
     update(s, p, |pt, src, _| {
-        if by != PivotDateGroup::None {
+        let mut ranges = None;
+        if range || by != PivotDateGroup::None {
             let c = src.col(&field).ok_or_else(|| bad(C, format!("no field `{field}` in the source data")))?;
             if !src.numeric.get(c).copied().unwrap_or(false) {
                 return Err(other("Cannot group that selection."));
             }
+            if range {
+                // Excel's defaults: from the smallest to the largest number, in tens.
+                let (lo, hi) = src
+                    .rows
+                    .iter()
+                    .filter_map(|r| r.get(c).and_then(|v| if let gridcraft_core::Value::Number(n) = v { Some(*n) } else { None }))
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), n| (lo.min(n), hi.max(n)));
+                let g = PivotNumberGroup::checked(start.unwrap_or(lo), end.unwrap_or(hi), interval.unwrap_or(10.0)).ok_or_else(|| {
+                    other("Enter a starting number no greater than the ending number and a positive By value (at most 100,000 groups).")
+                })?;
+                ranges = Some(g);
+            }
         }
         let f = axis_field(C, pt, &field)?;
         f.date_group = by;
+        f.number_group = ranges;
         f.collapsed_items.clear();
+        // The field's items change, so a selection of its items no longer applies.
+        for x in pt.filters.iter_mut().filter(|x| x.source_col.eq_ignore_ascii_case(&field)) {
+            x.selected = None;
+        }
         Ok(json!({}))
     })
 }
@@ -1131,7 +1191,7 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
             Some(v) => v.clone(),
             None => {
                 let f = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(&field));
-                let g = f.map(|f| f.date_group).unwrap_or_default();
+                let g = f.map(pv::Grouping::of).unwrap_or_default();
                 match src.col(&field) {
                     Some(c) => pv::distinct_labels(wb, src, c, g, 100_000),
                     None => vec![],
@@ -1383,7 +1443,7 @@ fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
 fn suggestions(wb: &Workbook, src: &pv::Source) -> Vec<Json> {
     let n = src.headers.len();
     let h = |i: usize| src.headers.get(i).cloned().unwrap_or_default();
-    let distinct = |i: usize| pv::distinct_labels(wb, src, i, PivotDateGroup::None, 1001).len();
+    let distinct = |i: usize| pv::distinct_labels(wb, src, i, pv::Grouping::default(), 1001).len();
     let records = src.rows.len().max(1);
     let is_num = |i: usize| src.numeric.get(i).copied().unwrap_or(false);
     let is_date = |i: usize| src.dates.get(i).copied().unwrap_or(false);
@@ -1542,6 +1602,67 @@ mod tests {
     }
 
     #[test]
+    fn every_show_values_as_mode() {
+        // Sum of Sales, Region down (East, North, West), Product across (Apples, Pears, Plums):
+        //          Apples Pears Plums Total
+        //   East     160   195    60   415
+        //   North     90    30    15   135
+        //   West     170    45    70   285
+        //   Total    420   270   145   835
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        let close = |s: &Session, a: &str, want: f64| {
+            let got = val(s, a).as_f64().unwrap_or_else(|| panic!("{a} = {:?}", val(s, a)));
+            assert!((got - want).abs() < 1e-12, "{a}: {got} vs {want}");
+        };
+        let set = |s: &mut Session, p: serde_json::Value| {
+            let mut p = p;
+            p["field"] = json!("Sum of Sales");
+            s.execute("pivot.valueSettings", p).unwrap();
+        };
+        set(&mut s, json!({"showAs": "percentOf", "baseField": "Region", "baseItem": "East"}));
+        close(&s, "B6", 90.0 / 160.0);
+        close(&s, "B5", 1.0);
+        assert_eq!(val(&s, "B8"), Value::Empty, "the grand total row has no Region item");
+        let st = s.execute("cell.get", json!({"cell": "B6"})).unwrap();
+        assert_eq!(st["style"]["num_fmt"], "0.00%");
+        set(&mut s, json!({"showAs": "differenceFrom", "baseItem": "(previous)"}));
+        close(&s, "B6", 90.0 - 160.0);
+        assert_eq!(val(&s, "B5"), Value::Empty, "East has no previous item");
+        set(&mut s, json!({"showAs": "percentDifferenceFrom", "baseItem": "East"}));
+        close(&s, "C7", (45.0 - 195.0) / 195.0);
+        set(&mut s, json!({"showAs": "runningTotal"}));
+        close(&s, "B7", 160.0 + 90.0 + 170.0);
+        set(&mut s, json!({"showAs": "percentRunningTotal"}));
+        close(&s, "B6", (160.0 + 90.0) / 420.0);
+        set(&mut s, json!({"showAs": "rankAscending"}));
+        close(&s, "B6", 1.0);
+        close(&s, "B7", 3.0);
+        set(&mut s, json!({"showAs": "rankDescending"}));
+        close(&s, "B7", 1.0);
+        set(&mut s, json!({"showAs": "index"}));
+        close(&s, "B5", 160.0 * 835.0 / (415.0 * 420.0));
+        set(&mut s, json!({"showAs": "percentOfParentRowTotal"}));
+        close(&s, "B5", 160.0 / 420.0);
+        set(&mut s, json!({"showAs": "percentOfParentColumnTotal"}));
+        close(&s, "B5", 160.0 / 415.0);
+        // % of Parent Total over nested rows: Region > Product, each product as a share of its
+        // region.
+        s.execute("pivot.moveField", json!({"field": "Product", "from": "columns", "to": "rows"})).unwrap();
+        set(&mut s, json!({"showAs": "percentOfParentTotal", "baseField": "Region"}));
+        let row = find_row(&s, "Apples").unwrap();
+        close(&s, &CellRef::new(row, 1).a1(), 160.0 / 415.0);
+        assert!(s.execute("pivot.valueSettings", json!({"field": "Sum of Sales", "baseField": "Units"})).is_err());
+        // Through xlsx.
+        set(&mut s, json!({"showAs": "percentOf", "baseField": "Region", "baseItem": "North"}));
+        let want = pt(&s).values;
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "p.xlsx", "base64": b64})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        assert_eq!(pt(&s).values, want);
+    }
+
+    #[test]
     fn region_by_product_sum_of_sales() {
         let mut s = sales();
         s.execute("insert.pivotTable", json!({})).unwrap();
@@ -1600,6 +1721,58 @@ mod tests {
         assert_eq!(text(&s, "I4"), "Total Average of Units");
         let last = pt(&s).last_range.unwrap();
         assert_eq!(val(&s, &CellRef::new(last.end.row, 7).a1()), Value::Number(TOTAL));
+    }
+
+    #[test]
+    fn number_range_grouping() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Units"], "values": ["Sales"]})).unwrap();
+        // Units in fives: 0-4 (2, 4, 3, 1), 5-9 (5, 8, 7, 9, 6, 5), 10-14 (10, 12).
+        s.execute("pivot.group", json!({"field": "Units", "by": "range", "start": 0, "end": 14, "interval": 5})).unwrap();
+        assert_eq!(text(&s, "A4"), "0-4");
+        assert_eq!(val(&s, "B4"), Value::Number(150.0));
+        assert_eq!(text(&s, "A5"), "5-9");
+        assert_eq!(val(&s, "B5"), Value::Number(465.0));
+        assert_eq!(text(&s, "A6"), "10-14");
+        assert_eq!(val(&s, "B6"), Value::Number(220.0));
+        assert_eq!(val(&s, "B7"), Value::Number(TOTAL));
+        let l = s.execute("pivot.list", json!({})).unwrap();
+        assert_eq!(l[0]["rows"][0]["group"], "range");
+        assert_eq!(l[0]["rows"][0]["range"], json!({"start": 0.0, "end": 14.0, "interval": 5.0}));
+        // Values outside the bounds fall into "<start" and ">end", sorted first and last.
+        s.execute("pivot.group", json!({"field": "Units", "by": "range", "start": 3, "end": 9, "interval": 5})).unwrap();
+        assert_eq!(text(&s, "A4"), "<3");
+        assert_eq!(val(&s, "B4"), Value::Number(45.0));
+        assert_eq!(text(&s, "A5"), "3-7");
+        assert_eq!(text(&s, "A7"), ">9");
+        assert_eq!(val(&s, "B7"), Value::Number(220.0));
+        // Fractional widths show both ends; the defaults are the data's bounds, in tens.
+        s.execute("pivot.group", json!({"field": "Units", "by": "range", "start": 0, "end": 12, "interval": 2.5})).unwrap();
+        assert_eq!(text(&s, "A4"), "0-2.5");
+        s.execute("pivot.group", json!({"field": "Units", "by": "range"})).unwrap();
+        assert_eq!(text(&s, "A4"), "1-10");
+        assert_eq!(val(&s, "B4"), Value::Number(TOTAL - 120.0));
+        assert_eq!(text(&s, "A5"), "11-20");
+        // Through xlsx.
+        let want = pt(&s).rows;
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "p.xlsx", "base64": b64})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        assert_eq!(pt(&s).rows, want);
+        // Unusable bounds, widths and fields are refused; `none` ungroups.
+        for bad in [
+            json!({"field": "Units", "by": "range", "interval": 0}),
+            json!({"field": "Units", "by": "range", "interval": -5}),
+            json!({"field": "Units", "by": "range", "start": 10, "end": 1}),
+            json!({"field": "Units", "by": "range", "interval": 1e-9}),
+            json!({"field": "Units", "by": "range", "start": "low"}),
+            json!({"field": "Region", "by": "range"}),
+        ] {
+            assert!(s.execute("pivot.group", bad.clone()).is_err(), "{bad}");
+        }
+        s.execute("pivot.group", json!({"field": "Units", "by": "none"})).unwrap();
+        assert_eq!(text(&s, "A4"), "1");
+        assert_eq!(pt(&s).rows[0].number_group, None);
     }
 
     #[test]

@@ -97,8 +97,15 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                 for (sa, l) in [
                                     ("normal", "No Calculation"),
                                     ("percentOfGrandTotal", "% of Grand Total"),
-                                    ("runningTotal", "Running Total"),
-                                    ("rank", "Rank"),
+                                    ("percentOfColumnTotal", "% of Column Total"),
+                                    ("percentOfRowTotal", "% of Row Total"),
+                                    ("percentOfParentRowTotal", "% of Parent Row Total"),
+                                    ("percentOfParentColumnTotal", "% of Parent Column Total"),
+                                    ("runningTotal", "Running Total In"),
+                                    ("percentRunningTotal", "% Running Total In"),
+                                    ("rankAscending", "Rank Smallest to Largest"),
+                                    ("rankDescending", "Rank Largest to Smallest"),
+                                    ("index", "Index"),
                                 ] {
                                     if ui.button(format!("Show as {l}")).clicked() {
                                         app.run_or_alert("pivot.valueSettings", json!({"pivot": name, "field": f, "showAs": sa}));
@@ -115,6 +122,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                     ("years", "Group by Years"),
                                     ("quarters", "Group by Quarters"),
                                     ("months", "Group by Months"),
+                                    ("range", "Group by Ranges of 10"),
                                     ("none", "Ungroup"),
                                 ] {
                                     if ui.button(l).clicked() {
