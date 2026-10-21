@@ -643,6 +643,25 @@ const JAPANESE: &[(&str, &str)] = &[
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)",
         "Python セル。クリックすると、このセルの Python をオフにします (Enter で通常のセルになり、元に戻すとコードが戻ります)",
     ),
+    ("Open in Python editor", "Python エディターで開く"),
+    ("Open Python Editor", "Python エディターを開く"),
+    ("Python Editor", "Python エディター"),
+    ("Run", "実行"),
+    ("Re-run", "再実行"),
+    (
+        "Insert xl() Reference: click or drag on the sheet to insert a reference (F2 turns it on or off)",
+        "xl() 参照の挿入: シートをクリックまたはドラッグして参照を挿入します (F2 でオン/オフ)",
+    ),
+    ("Select a Python cell", "Python セルを選択してください"),
+    ("Insert Python Here", "ここに Python を挿入"),
+    ("Make the selected cell a Python cell and write its code here", "選択したセルを Python セルにして、ここにコードを記述します"),
+    ("Running…", "実行中…"),
+    (
+        "Not run yet. Ctrl+Enter (Cmd+Enter on macOS) commits the code and runs it.",
+        "未実行です。Ctrl+Enter (macOS では Cmd+Enter) でコードを確定して実行します。",
+    ),
+    ("Result", "結果"),
+    ("Go to the line", "この行へ移動"),
 ];
 
 #[cfg(test)]

@@ -464,6 +464,23 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Buňka Pythonu. Kliknutím vypnete Python pro tuto buňku (Enter z ní pak udělá normální buňku; zpět vrátí kód)"
         }
+        "Open in Python editor" => "Otevřít v editoru Pythonu",
+        "Open Python Editor" => "Otevřít editor Pythonu",
+        "Python Editor" => "Editor Pythonu",
+        "Run" => "Spustit",
+        "Re-run" => "Znovu spustit",
+        "Insert xl() Reference: click or drag on the sheet to insert a reference (F2 turns it on or off)" => {
+            "Vložit odkaz xl(): klikněte nebo táhněte na listu a vložte odkaz (F2 jej zapne nebo vypne)"
+        }
+        "Select a Python cell" => "Vyberte buňku Pythonu",
+        "Insert Python Here" => "Vložit Python sem",
+        "Make the selected cell a Python cell and write its code here" => "Změnit vybranou buňku na buňku Pythonu a napsat její kód sem",
+        "Running…" => "Probíhá…",
+        "Not run yet. Ctrl+Enter (Cmd+Enter on macOS) commits the code and runs it." => {
+            "Zatím nespuštěno. Ctrl+Enter (v macOS Cmd+Enter) potvrdí kód a spustí jej."
+        }
+        "Result" => "Výsledek",
+        "Go to the line" => "Přejít na řádek",
         _ => return None,
     })
 }

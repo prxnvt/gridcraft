@@ -2030,6 +2030,9 @@ fn python_group(app: &mut SheetApp, ui: &mut Ui) {
         if menu_item(app, ui, "Insert xl() Reference") {
             app.point_python();
         }
+        if menu_item(app, ui, "Open Python Editor") {
+            crate::python_window::open(app);
+        }
         ui.separator();
         if menu_item(app, ui, "Initialization…") {
             app.open_dialog("pythonInitialization", json!({}));
@@ -2072,6 +2075,9 @@ fn python_menu(app: &mut SheetApp, ui: &mut Ui) {
     }
     if menu_item(app, ui, "Insert xl() Reference") {
         app.point_python();
+    }
+    if menu_item(app, ui, "Open Python Editor") {
+        crate::python_window::open(app);
     }
     if menu_item(app, ui, "Initialization…") {
         app.open_dialog("pythonInitialization", json!({}));

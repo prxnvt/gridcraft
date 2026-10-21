@@ -466,6 +466,23 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Ячейка Python. Щелкните, чтобы отключить Python для этой ячейки (затем Enter делает ее обычной ячейкой; отмена возвращает код)"
         }
+        "Open in Python editor" => "Открыть в редакторе Python",
+        "Open Python Editor" => "Открыть редактор Python",
+        "Python Editor" => "Редактор Python",
+        "Run" => "Выполнить",
+        "Re-run" => "Выполнить повторно",
+        "Insert xl() Reference: click or drag on the sheet to insert a reference (F2 turns it on or off)" => {
+            "Вставить ссылку xl(): щёлкните или перетащите на листе, чтобы вставить ссылку (F2 включает и выключает)"
+        }
+        "Select a Python cell" => "Выберите ячейку Python",
+        "Insert Python Here" => "Вставить Python сюда",
+        "Make the selected cell a Python cell and write its code here" => "Сделать выбранную ячейку ячейкой Python и написать её код здесь",
+        "Running…" => "Выполняется…",
+        "Not run yet. Ctrl+Enter (Cmd+Enter on macOS) commits the code and runs it." => {
+            "Ещё не выполнялось. Ctrl+Enter (Cmd+Enter в macOS) сохраняет код и выполняет его."
+        }
+        "Result" => "Результат",
+        "Go to the line" => "Перейти к строке",
         _ => return None,
     })
 }

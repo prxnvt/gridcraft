@@ -80,6 +80,8 @@ fn main() {
         i += 1;
     }
     let mut session = Session::new();
+    // Python cells run with the built-in Python, in this process.
+    session.set_python_launcher(gridcraft_python::client::Launcher::InProcess);
     if let Some(p) = &input {
         session.execute("file.open", json!({"path": p})).expect("open");
     } else if let Some(s) = &sample {
@@ -87,8 +89,11 @@ fn main() {
     } else {
         session.new_workbook();
     }
+    let parse =
+        |c: &String| c.split_once('=').map(|(a, b)| (a.to_string(), serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((c.clone(), json!({})));
+    let (ui_cmds, cmds): (Vec<String>, Vec<String>) = cmds.into_iter().partition(|c| c.starts_with("ui."));
     for c in &cmds {
-        let (id, p) = c.split_once('=').map(|(a, b)| (a.to_string(), serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((c.clone(), json!({})));
+        let (id, p) = parse(c);
         if let Err(e) = session.execute(&id, p) {
             eprintln!("{id}: {e}");
         }
@@ -123,6 +128,12 @@ fn main() {
                 if let (Some(part), Some((si, sh))) = (&hf_edit, active) {
                     let zone = gridcraft_engine::paper::HfZone { footer: part == "footer", section: 1 };
                     gridcraft_ui_egui::paper_view::begin(&mut app, si, &sh, (0, 0), zone);
+                }
+                for c in &ui_cmds {
+                    let (id, p) = parse(c);
+                    if let Err(e) = app.run(&id, p) {
+                        eprintln!("{id}: {e}");
+                    }
                 }
                 app
             },

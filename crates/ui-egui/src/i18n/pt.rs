@@ -467,6 +467,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Célula Python. Clique para desativar o Python nesta célula (Enter a torna uma célula normal; desfazer restaura o código)"
         }
+        "Open in Python editor" => "Abrir no editor do Python",
+        "Open Python Editor" => "Abrir o Editor do Python",
+        "Python Editor" => "Editor do Python",
+        "Run" => "Executar",
+        "Re-run" => "Executar novamente",
+        "Insert xl() Reference: click or drag on the sheet to insert a reference (F2 turns it on or off)" => {
+            "Inserir Referência xl(): clique ou arraste na planilha para inserir uma referência (F2 ativa ou desativa)"
+        }
+        "Select a Python cell" => "Selecione uma célula Python",
+        "Insert Python Here" => "Inserir Python Aqui",
+        "Make the selected cell a Python cell and write its code here" => {
+            "Transformar a célula selecionada em uma célula Python e escrever o código dela aqui"
+        }
+        "Running…" => "Executando…",
+        "Not run yet. Ctrl+Enter (Cmd+Enter on macOS) commits the code and runs it." => {
+            "Ainda não executado. Ctrl+Enter (Cmd+Enter no macOS) confirma o código e o executa."
+        }
+        "Result" => "Resultado",
+        "Go to the line" => "Ir para a linha",
         _ => return None,
     })
 }

@@ -456,6 +456,23 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Python 单元格。单击可关闭此单元格的 Python (然后按 Enter 使其成为普通单元格；撤消可恢复代码)"
         }
+        "Open in Python editor" => "在 Python 编辑器中打开",
+        "Open Python Editor" => "打开 Python 编辑器",
+        "Python Editor" => "Python 编辑器",
+        "Run" => "运行",
+        "Re-run" => "重新运行",
+        "Insert xl() Reference: click or drag on the sheet to insert a reference (F2 turns it on or off)" => {
+            "插入 xl() 引用: 在工作表上单击或拖动以插入引用 (F2 打开或关闭)"
+        }
+        "Select a Python cell" => "请选择一个 Python 单元格",
+        "Insert Python Here" => "在此处插入 Python",
+        "Make the selected cell a Python cell and write its code here" => "将所选单元格设为 Python 单元格，并在此处编写其代码",
+        "Running…" => "正在运行…",
+        "Not run yet. Ctrl+Enter (Cmd+Enter on macOS) commits the code and runs it." => {
+            "尚未运行。按 Ctrl+Enter (macOS 上为 Cmd+Enter) 提交代码并运行。"
+        }
+        "Result" => "结果",
+        "Go to the line" => "转到该行",
         _ => return None,
     })
 }

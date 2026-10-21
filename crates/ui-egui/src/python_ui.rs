@@ -72,16 +72,7 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
                 } else if ui.link(RichText::new(format!("{}!{}", gridcraft_engine::formula::quote_sheet(&r.sheet), r.cell)).strong()).clicked() {
                     goto = Some((r.sheet.clone(), r.cell.clone()));
                 }
-                let (status, color) = match r.status {
-                    "ok" => ("OK", t.text_dim),
-                    "error" => ("Error", t.danger),
-                    "timeout" => ("Time limit", t.danger),
-                    "memory" => ("Memory limit", t.danger),
-                    "stopped" => ("Stopped", t.danger),
-                    "blocked" => ("Turned off", t.text_dim),
-                    "cycle" => ("Cycle", t.danger),
-                    other => (other, t.text_dim),
-                };
+                let (status, color) = status_label(r.status, &t);
                 ui.label(RichText::new(tr(ui, status)).color(color).font(theme::ui_bold(12.0)));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(RichText::new(format!("{:.1} ms", r.ms)).color(t.text_dim).font(theme::ui_font(12.0)));
@@ -110,6 +101,20 @@ pub fn diagnostics(app: &mut SheetApp, ui: &mut Ui) {
         }
         app.run_or_alert("selection.set", json!({"cell": cell}));
         app.grid.ensure_visible = true;
+    }
+}
+
+/// A run's status as Diagnostics shows it (in English, for [`tr`]), with its colour.
+pub fn status_label<'a>(status: &'a str, t: &Tokens) -> (&'a str, egui::Color32) {
+    match status {
+        "ok" => ("OK", t.text_dim),
+        "error" => ("Error", t.danger),
+        "timeout" => ("Time limit", t.danger),
+        "memory" => ("Memory limit", t.danger),
+        "stopped" => ("Stopped", t.danger),
+        "blocked" => ("Turned off", t.text_dim),
+        "cycle" => ("Cycle", t.danger),
+        other => (other, t.text_dim),
     }
 }
 

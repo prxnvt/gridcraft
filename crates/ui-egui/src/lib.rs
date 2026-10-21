@@ -28,6 +28,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod python_ui;
+pub mod python_window;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -246,6 +247,8 @@ pub struct SheetApp {
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
     pub started: f64,
+    /// The Python editor window, when open (kept apart from `dialog`, so dialogs don't close it).
+    pub py_window: Option<python_window::PyWindow>,
 }
 
 impl SheetApp {
@@ -289,6 +292,7 @@ impl SheetApp {
             shots: control::Shots::default(),
             selected_chart: None,
             started: now_ms(),
+            py_window: None,
         }
     }
 
@@ -545,6 +549,7 @@ impl SheetApp {
                 self.grid.pane = p.get("name").and_then(Json::as_str).filter(|n| !n.is_empty()).map(str::to_string);
                 Ok(json!({"pane": self.grid.pane}))
             }
+            "ui.pythonEditor" => python_window::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
@@ -1129,6 +1134,7 @@ impl SheetApp {
                 grid::show(self, ui);
                 self.perf.grid_ms = now_ms() - g0;
             });
+            python_window::show(self, &ctx);
         }
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);

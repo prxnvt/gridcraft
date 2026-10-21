@@ -179,7 +179,8 @@ fn run_is_disabled_while_python_is_turned_off() {
     assert!(h.state().message.is_none());
 }
 
-/// The bar keeps its layout: the field moves only by the PY badge and the button.
+/// The bar keeps its layout: the field moves only by the PY badge and the button, and makes room
+/// for the Python editor button on the right.
 #[test]
 fn the_bar_layout_stays_put() {
     let mut h = harness();
@@ -192,7 +193,7 @@ fn the_bar_layout_stays_put() {
     assert_eq!(normal.name_box, python.name_box);
     let shift = python.field.left() - normal.field.left();
     assert!(shift > 0.0 && shift < 80.0, "{shift}");
-    assert_eq!(normal.field.right(), python.field.right());
+    assert_eq!(normal.field.right() - python.field.right(), 24.0);
     assert_eq!(normal.height, python.height);
 }
 

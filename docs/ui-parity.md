@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells: formula bar Python mode, Formulas › Python, Diagnostics pane) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Python editor window) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -21,7 +21,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing |
 | Key tips (Alt / F10 then letters) | yes, every ribbon control | **initial** (#43, 10-10): Alt or F10 shows key tips on Home for alignment, Paste Special and AutoFit plus legacy Alt sequences; other tabs and controls not yet (#33, #49) | 3–5 h |
 | Formula bar with Name Box, expand, function hints | yes | yes; grows with its content from one to five lines (Alt+Enter, wrapped text, or viewing a multi-line cell), then scrolls with the caret in view, the Name Box and buttons staying on the first line; the chevron pins it at five; the in-cell editor also stops at five lines | done; no drag-to-resize handle |
-| Python in cells: formula bar Python mode, PY badge, Formulas › Python, Diagnostics, Initialization | yes | yes (10-12): Python mode in the formula bar (=PY then Tab, Ctrl+Alt+Shift+P), xl() pointing, PY badge and Run / Stop / Re-run button; PY tags and preview cards on the grid; Formulas › Python (Insert Python, Reset, Diagnostics), which folds into one button when the tab is too wide; Diagnostics pane, Initialization and Python Options dialogs, Enable Python bar for workbooks from files | no package-install or object-output UI; no separate Python editor window |
+| Python in cells: formula bar Python mode, PY badge, Formulas › Python, Diagnostics, Initialization | yes | yes (10-12): Python mode in the formula bar (=PY then Tab, Ctrl+Alt+Shift+P), xl() pointing, PY badge and Run / Stop / Re-run button; PY tags and preview cards on the grid; Formulas › Python (Insert Python, Reset, Diagnostics), which folds into one button when the tab is too wide; Diagnostics pane, Initialization and Python Options dialogs, Enable Python bar for workbooks from files; a Python editor window (expand button in the formula bar, about 40 lines, line numbers, Run / Stop / Re-run, output strip) | no package-install or object-output UI |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | rename focus bug on macOS (#145) |
 | Status bar: Sum/Count/Average and more, view buttons, zoom | yes | yes | customizable statistics partial |
 | Task panes (Format Chart, Comments, Watch, Selection, PivotTable fields) | yes | yes | element-level Format pane for shapes and pictures missing |
@@ -162,6 +162,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python editor window: expand button in the formula bar, about 40 lines with line numbers, Run / Stop / Re-run, output strip with the last run's result, output and error line |
 | 2026-10-12 | minor | Python in cells: formula bar Python mode with the PY badge and Run button, PY tags and preview cards, Formulas › Python, Diagnostics pane, Initialization and Python Options dialogs, Enable Python bar |
 | 2026-10-11 | minor | Formula bar grows from one to five lines then scrolls; in-cell editor capped at five lines; code editor widget (Python and LaTeX colouring, Tab indent, Enter keeps indentation) |
 | 2026-10-11 | minor | Ribbon: scroll arrows on a tab wider than the window, Formulas › AutoSum as a split button with its function menu, View › Show in two columns so Headings is no longer cut off |

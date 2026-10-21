@@ -36,6 +36,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.pane` (through `engine.execute`) | `{name?}` | Show a task pane (`comments`, `watch`, `selection`, `formatChart`, `pythonDiagnostics`); no name closes it |
+| `ui.pythonEditor` (through `engine.execute`) | `{cell?, sheet?, close?}` | Open the Python editor window on a cell (default: the active cell, or the Python cell being edited; a selected Python cell starts being edited in it); `close: true` closes it and keeps any edit. Replies `{open, sheet, cell, editing, dirty, python}`, which `ui.inspect` also reports as `pythonEditor` |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
 | `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
 

@@ -466,6 +466,23 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Python 셀입니다. 클릭하면 이 셀의 Python이 꺼집니다(Enter를 누르면 일반 셀이 되고, 실행 취소하면 코드가 돌아옵니다)"
         }
+        "Open in Python editor" => "Python 편집기에서 열기",
+        "Open Python Editor" => "Python 편집기 열기",
+        "Python Editor" => "Python 편집기",
+        "Run" => "실행",
+        "Re-run" => "다시 실행",
+        "Insert xl() Reference: click or drag on the sheet to insert a reference (F2 turns it on or off)" => {
+            "xl() 참조 삽입: 시트를 클릭하거나 끌어 참조를 삽입합니다 (F2로 켜기/끄기)"
+        }
+        "Select a Python cell" => "Python 셀을 선택하세요",
+        "Insert Python Here" => "여기에 Python 삽입",
+        "Make the selected cell a Python cell and write its code here" => "선택한 셀을 Python 셀로 만들고 여기에 코드를 작성합니다",
+        "Running…" => "실행 중…",
+        "Not run yet. Ctrl+Enter (Cmd+Enter on macOS) commits the code and runs it." => {
+            "아직 실행되지 않았습니다. Ctrl+Enter(macOS에서는 Cmd+Enter)를 누르면 코드를 커밋하고 실행합니다."
+        }
+        "Result" => "결과",
+        "Go to the line" => "해당 줄로 이동",
         _ => return None,
     })
 }
