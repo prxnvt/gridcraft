@@ -5,7 +5,10 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"))
+    let mut c = Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"));
+    // Never GridCraft's real Python environment.
+    c.env("GRIDCRAFT_PYTHON_ENV", std::env::temp_dir().join("gridcraft-cli-test-no-env"));
+    c
 }
 
 fn run(args: &[&str]) -> Output {

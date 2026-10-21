@@ -42,6 +42,9 @@ pub trait Transport: Send {
     }
 }
 
+/// The least time a worker gets to become ready (a cold start of pandas can take seconds).
+const INIT_ALLOWANCE: Duration = Duration::from_secs(30);
+
 /// How often the memory watchdog looks.
 const RSS_EVERY: Duration = Duration::from_millis(50);
 /// Time over the limit a run gets before the parent kills it: the worker's own time limit stops
@@ -59,6 +62,11 @@ struct Inflight {
     code: String,
     /// When the run became the worker's current one.
     started: Option<Instant>,
+    /// Time the run has spent importing modules, as the worker last said (capped at
+    /// [`Limits::import_ms`]): its deadline moves by that much.
+    extended: Duration,
+    /// The module the worker said it was importing (`None` once the import ended).
+    importing: Option<String>,
 }
 
 struct Conn {
@@ -164,7 +172,7 @@ impl PyWorker {
             return Err(Failure { kind: FailureKind::Crashed, line: None, message: CRASH_MESSAGE.into() });
         }
         let started = if self.inflight.is_empty() { Some(now()) } else { None };
-        self.inflight.push_back(Inflight { id, code: code.to_string(), started });
+        self.inflight.push_back(Inflight { id, code: code.to_string(), started, extended: Duration::ZERO, importing: None });
         Ok(id)
     }
 
@@ -189,19 +197,25 @@ impl PyWorker {
         }
         for (i, r) in self.inflight.iter_mut().enumerate() {
             r.started = (i == 0).then(now);
+            r.extended = Duration::ZERO;
+            r.importing = None;
         }
         self.conn = Some(c);
         true
     }
 
-    /// The deadline of the current run: its time limit plus a grace period, plus another time
-    /// limit while the initialization code may still be running.
+    /// The deadline of the current run: its time limit plus a grace period, plus the time it has
+    /// spent importing (up to [`Limits::import_ms`]), plus another time limit while the
+    /// initialization code may still be running.
     fn deadline(&self) -> Option<Instant> {
         let head = self.inflight.front()?;
         let started = head.started?;
         let limit = Duration::from_millis(self.limits.timeout_ms);
-        let init = if self.conn.as_ref().is_some_and(|c| c.ready) { Duration::ZERO } else { limit };
-        Some(started + limit + init + KILL_GRACE)
+        // Starting takes longer: the worker loads pandas and numpy (when installed) and runs the
+        // initialization code before it is ready.
+        let init = if self.conn.as_ref().is_some_and(|c| c.ready) { Duration::ZERO } else { limit.max(INIT_ALLOWANCE) };
+        let imports = head.extended.min(Duration::from_millis(self.limits.import_ms));
+        Some(started + limit + imports + init + KILL_GRACE)
     }
 
     /// Takes what the worker sent, waiting up to `wait` for the first line. `resolve` answers
@@ -240,6 +254,13 @@ impl PyWorker {
                 if let Some(c) = self.conn.as_mut() {
                     c.ready = true;
                 }
+                // The current run's time starts now: starting the worker (loading pandas, the
+                // initialization code) isn't the cell's time.
+                if let Some(head) = self.inflight.front_mut()
+                    && head.started.is_some()
+                {
+                    head.started = Some(now());
+                }
                 if let Some(e) = init_error {
                     events.push(Event::InitError(e));
                 }
@@ -253,6 +274,15 @@ impl PyWorker {
                     self.fail_all(FailureKind::Crashed, CRASH_MESSAGE.into(), events);
                 }
             }
+            FromWorker::Extend { id, ms, module } => {
+                let cap = self.limits.import_ms;
+                if let Some(head) = self.inflight.front_mut()
+                    && head.id == id
+                {
+                    head.extended = head.extended.max(Duration::from_millis(ms.min(cap)));
+                    head.importing = module;
+                }
+            }
             FromWorker::Done(done) => {
                 let Some(at) = self.inflight.iter().position(|r| r.id == done.id) else { return };
                 self.inflight.remove(at);
@@ -261,7 +291,13 @@ impl PyWorker {
                 {
                     next.started = Some(now());
                 }
+                let restart = done.error.as_ref().is_some_and(|e| e.restart);
                 events.push(Event::Done(outcome(done, &self.limits)));
+                if restart {
+                    // The worker is stopped (runs behind this one fail as stopped); the next run
+                    // starts a fresh one.
+                    self.fail_all(FailureKind::Crashed, CRASH_MESSAGE.into(), events);
+                }
             }
         }
     }
@@ -272,7 +308,13 @@ impl PyWorker {
             if self.retry_start() {
                 return;
             }
-            let msg = timeout_message(&self.limits);
+            // Stopped in the middle of an import: say so (it may only be a slow first import).
+            let msg = match self.inflight.front() {
+                Some(Inflight { importing: Some(m), started, .. }) => {
+                    import_timeout_message(started.map(|s| s.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0), m)
+                }
+                _ => timeout_message(&self.limits),
+            };
             self.fail_all(FailureKind::Timeout, msg, events);
             return;
         }
@@ -296,12 +338,14 @@ impl PyWorker {
         for (i, r) in runs.into_iter().enumerate() {
             let (kind, message) = if i == 0 { (kind, message.clone()) } else { (FailureKind::Crashed, CRASH_MESSAGE.to_string()) };
             let elapsed_ms = r.started.map(|s| s.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0);
+            let importing = if i == 0 && kind == FailureKind::Timeout { r.importing } else { None };
             events.push(Event::Done(RunOutcome {
                 id: r.id,
                 result: Err(Failure { kind, line: None, message }),
                 stdout: String::new(),
                 stderr: String::new(),
                 elapsed_ms,
+                importing,
             }));
         }
     }
@@ -310,7 +354,7 @@ impl PyWorker {
     pub fn run_blocking(&mut self, code: &str, resolve: &mut dyn FnMut(&str, bool) -> XlReply) -> RunOutcome {
         let id = match self.submit(code) {
             Ok(id) => id,
-            Err(f) => return RunOutcome { id: 0, result: Err(f), stdout: String::new(), stderr: String::new(), elapsed_ms: 0.0 },
+            Err(f) => return RunOutcome { id: 0, result: Err(f), stdout: String::new(), stderr: String::new(), elapsed_ms: 0.0, importing: None },
         };
         loop {
             for e in self.poll(Duration::from_millis(10), resolve) {
@@ -331,8 +375,18 @@ impl Drop for PyWorker {
 }
 
 fn outcome(done: Done, limits: &Limits) -> RunOutcome {
+    // A time limit that hit an import (the shim names the module; a restart says the modules
+    // changed, so one was loading).
+    let importing = done.error.as_ref().filter(|e| e.timeout).and_then(|e| e.importing.clone().or_else(|| e.restart.then(String::new)));
     let result = match (done.output, done.error) {
-        (_, Some(e)) if e.timeout => Err(Failure { kind: FailureKind::Timeout, line: e.line, message: timeout_message(limits) }),
+        (_, Some(e)) if e.timeout => {
+            // The message names the module only when the shim saw it importing one.
+            let message = match &e.importing {
+                Some(m) => import_timeout_message(done.elapsed_ms, m),
+                None => timeout_message(limits),
+            };
+            Err(Failure { kind: FailureKind::Timeout, line: e.line, message })
+        }
         (_, Some(e)) if e.message.starts_with("RecursionError") => {
             Err(Failure { kind: FailureKind::Error, line: e.line, message: RECURSION_MESSAGE.into() })
         }
@@ -340,7 +394,7 @@ fn outcome(done: Done, limits: &Limits) -> RunOutcome {
         (Some(o), None) => Ok(o),
         (None, None) => Ok(Output::default()),
     };
-    RunOutcome { id: done.id, result, stdout: done.stdout, stderr: done.stderr, elapsed_ms: done.elapsed_ms }
+    RunOutcome { id: done.id, result, stdout: done.stdout, stderr: done.stderr, elapsed_ms: done.elapsed_ms, importing }
 }
 
 fn start(launcher: &Launcher) -> Result<Box<dyn Transport>, Failure> {
@@ -778,7 +832,8 @@ mod cpython_tests {
     use gridcraft_core::{Array, CellError, Value};
 
     fn cpython(limits: Limits) -> Option<(PyWorker, crate::interp::Interpreter)> {
-        let d = crate::interp::detect("");
+        // GRIDCRAFT_TEST_PYTHON picks the interpreter (a virtual environment with pandas, say).
+        let d = crate::interp::detect(&std::env::var("GRIDCRAFT_TEST_PYTHON").unwrap_or_default(), None);
         match d.found {
             Some(i) => Some((PyWorker::new(i.launcher(), limits, "base = 100".into()), i)),
             None => {
@@ -849,17 +904,10 @@ mod cpython_tests {
         assert!(failure(&w.run_blocking("xl('nowhere')", &mut cells)).message.starts_with("ValueError"));
         let o = w.run_blocking("[[0] * 2000 for _ in range(1000)]", &mut cells);
         assert!(failure(&o).message.contains("more than 1000000 cells"), "{o:?}");
-        // A missing package names the command that installs it (GridCraft never runs pip).
+        // A missing package is named plainly; GridCraft finds the package to install from it.
         let o = w.run_blocking("import gridcraft_no_such_module.sub", &mut cells);
-        let m = &failure(&o).message;
-        assert!(m.starts_with("ModuleNotFoundError: No module named 'gridcraft_no_such_module'"), "{m}");
-        let exe = i.program.display().to_string();
-        if i.externally_managed {
-            assert!(m.contains(&format!("\"{exe}\" -m venv <folder>")) && m.contains("-m pip install gridcraft_no_such_module"), "{m}");
-        } else {
-            assert!(m.ends_with(&format!("Install it with: \"{exe}\" -m pip install gridcraft_no_such_module")), "{m}");
-        }
-        assert!(failure(&w.run_blocking("import sklearn_gc_missing", &mut cells)).message.contains("pip install sklearn_gc_missing"));
+        assert_eq!(failure(&o).message, "ModuleNotFoundError: No module named 'gridcraft_no_such_module'");
+        assert_eq!(crate::env::missing_module(&failure(&o).message).as_deref(), Some("gridcraft_no_such_module"));
         // Runaway recursion.
         assert_eq!(failure(&w.run_blocking("def f(n): return f(n + 1)\nf(0)", &mut cells)).message, "Too much recursion");
         // SystemExit is a cell error, not the end of the worker.
@@ -880,11 +928,73 @@ mod cpython_tests {
         let o = w.run_blocking("while True: pass", &mut cells);
         assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
         assert_eq!(value(&w.run_blocking("n", &mut cells)), Value::Number(5.0));
+        // A time limit that interrupts while modules are being loaded (here: one is added, then
+        // the loop) leaves the worker unfit: it is replaced.
+        let starts = w.starts();
+        let o = w.run_blocking("import sys, types\nsys.modules['gc_half'] = types.ModuleType('gc_half')\nwhile True: pass", &mut cells);
+        assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
+        assert!(!w.alive(), "stopped after the run");
+        assert_eq!(value(&w.run_blocking("import sys\n'gc_half' in sys.modules", &mut cells)), Value::Bool(false));
+        assert_eq!(w.starts(), starts + 1);
+        w.run_blocking("n = 5", &mut cells);
         // A long C call can't be interrupted: the parent kills the worker.
         let o = w.run_blocking("10 ** 10 ** 9", &mut cells);
         assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
         assert!(!w.alive());
         assert_eq!(value(&w.run_blocking("2 * 21", &mut cells)), Value::Number(42.0), "a fresh worker starts");
+    }
+
+    /// Time spent importing a module that wasn't loaded yet doesn't count against the time limit
+    /// (up to the allowance), and the parent's deadline moves with it; an endless loop still
+    /// stops at the limit, and an import past the allowance stops with a message that names it.
+    #[test]
+    fn slow_imports_do_not_count_against_the_time_limit() {
+        let Some((_, i)) = cpython(Limits::default()) else { return };
+        let dir = std::env::temp_dir().join(format!("gridcraft-slow-import-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("gc_slow_ok.py"), "import time\ntime.sleep(2.5)\nVALUE = 7\n").unwrap();
+        std::fs::write(dir.join("gc_slow_cap.py"), "import time\ntime.sleep(30)\n").unwrap();
+        let Launcher::Process { program, args, mut env } = i.launcher() else { panic!("not a process") };
+        env.push(("PYTHONPATH".into(), dir.display().to_string()));
+        let limits = Limits { timeout_ms: 1_000, import_ms: 4_000, ..Limits::default() };
+        let mut w = PyWorker::new(Launcher::Process { program, args, env }, limits, String::new());
+        // A 2.5 s import under a 1 s limit: past the parent's own deadline (1 s and its grace)
+        // too, which the shim's heartbeats moved.
+        let o = w.run_blocking("import gc_slow_ok\ngc_slow_ok.VALUE", &mut cells);
+        assert_eq!(value(&o), Value::Number(7.0), "{o:?}");
+        assert!(o.elapsed_ms > 2_000.0, "{o:?}");
+        // Imported once, it is free: an endless loop still stops at the limit.
+        let started = now();
+        let o = w.run_blocking("import gc_slow_ok\nwhile True: pass", &mut cells);
+        assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
+        assert_eq!(o.importing, None);
+        assert!(started.elapsed() < Duration::from_millis(2_500), "{:?}", started.elapsed());
+        assert!(w.alive(), "the shim stopped it");
+        // An import longer than the allowance stops at limit + allowance, naming the module; the
+        // worker is replaced (the module may be half loaded).
+        let started = now();
+        let o = w.run_blocking("import gc_slow_cap", &mut cells);
+        assert_eq!(failure(&o).kind, FailureKind::Timeout, "{o:?}");
+        assert_eq!(o.importing.as_deref(), Some("gc_slow_cap"));
+        assert!(failure(&o).message.contains("while importing gc_slow_cap (the first import after an install can be slow)"), "{o:?}");
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(4_500) && took < Duration::from_secs(10), "{took:?}");
+        assert!(!w.alive());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_timeouts_say_what_was_importing() {
+        assert_eq!(
+            import_timeout_message(61_400.0, "sklearn"),
+            "Stopped after 61 s while importing sklearn (the first import after an install can be slow)"
+        );
+        assert_eq!(
+            import_timeout_message(1_520.0, ""),
+            "Stopped after 1.5 s while importing a module (the first import after an install can be slow)"
+        );
+        assert!(import_timeout_message(f64::NAN, "x").starts_with("Stopped after 0.0 s"));
     }
 
     /// A worker started with SIGINT ignored (as children of a background job are) still stops a

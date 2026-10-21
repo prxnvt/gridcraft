@@ -1,10 +1,11 @@
 //! Finding the user's own Python (CPython 3.11 or newer), which runs Python cells when it is
-//! there, so packages such as pandas and numpy work. GridCraft never installs an interpreter or
-//! packages: it looks for one, or uses the path the user set in Python Options.
+//! there, so packages such as pandas and numpy work. GridCraft never installs an interpreter: it
+//! looks for one, or uses the path the user set in Python Options. (Packages go into a virtual
+//! environment only after the person approves them: see [`crate::env`].)
 //!
 //! Search order: the path from Python Options; an active virtual environment (`VIRTUAL_ENV`, then
-//! `CONDA_PREFIX`); `python3` and then `python` on `PATH`; on Windows, the `py -3` launcher and
-//! then the usual install folders. On Windows the Microsoft Store shortcuts under
+//! `CONDA_PREFIX`); GridCraft's own environment, when it exists; `python3` and then `python` on
+//! `PATH`; on Windows, the `py -3` launcher and then the usual install folders. On Windows the Microsoft Store shortcuts under
 //! `%LOCALAPPDATA%\Microsoft\WindowsApps` are skipped: they open the Store instead of running
 //! Python. Each candidate is checked by running it with a small probe under a 5 s deadline.
 //!
@@ -34,7 +35,19 @@ pub struct Probe {
     /// The interpreter is managed by the system (PEP 668: Homebrew, Debian…), so `pip install`
     /// into it is refused and packages belong in a virtual environment.
     pub externally_managed: bool,
+    /// It runs in a virtual environment (`sys.prefix` differs from `sys.base_prefix`).
+    pub venv: bool,
+    /// It runs in a conda environment (`conda-meta` is in `sys.prefix`).
+    pub conda: bool,
+    /// The installed distributions (name, version), up to [`MAX_INSTALLED`].
+    pub installed: Vec<(String, String)>,
 }
+
+/// Installed packages a probe reports.
+pub const MAX_INSTALLED: usize = 1_000;
+
+/// Where GridCraft's own environment was found, as a [`Candidate::source`].
+pub const GRIDCRAFT_SOURCE: &str = "GridCraft environment";
 
 /// A program to try.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,7 +60,7 @@ pub struct Candidate {
 }
 
 /// The interpreter cells run with.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Interpreter {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -55,6 +68,9 @@ pub struct Interpreter {
     pub pandas: Option<String>,
     pub numpy: Option<String>,
     pub externally_managed: bool,
+    pub venv: bool,
+    pub conda: bool,
+    pub installed: Vec<(String, String)>,
     pub source: String,
 }
 
@@ -76,6 +92,19 @@ impl Interpreter {
     /// `3.14` from `3.14.0`.
     pub fn short_version(&self) -> String {
         self.version.split('.').take(2).collect::<Vec<_>>().join(".")
+    }
+
+    /// The installed version of package `name` (compared the way pip compares names).
+    pub fn package(&self, name: &str) -> Option<&str> {
+        let want = crate::env::normalize(name);
+        self.installed.iter().find(|(n, _)| crate::env::normalize(n) == want).map(|(_, v)| v.as_str())
+    }
+
+    /// Whether packages may be installed straight into this interpreter: it is the person's own
+    /// virtual or conda environment, chosen in Python Options or active through `VIRTUAL_ENV` or
+    /// `CONDA_PREFIX`, and not managed by the system.
+    pub fn own_environment(&self) -> bool {
+        (self.venv || self.conda) && !self.externally_managed && matches!(self.source.as_str(), "Python Options" | "VIRTUAL_ENV" | "CONDA_PREFIX")
     }
 }
 
@@ -166,8 +195,9 @@ fn install_folders(host: &dyn Host, root: &Path) -> Vec<PathBuf> {
     found.into_iter().map(|(_, d)| d.join("python.exe")).collect()
 }
 
-/// The programs to try, in order, and the ones skipped without running them.
-pub fn candidates(host: &dyn Host, configured: &str) -> (Vec<Candidate>, Vec<Rejected>) {
+/// The programs to try, in order, and the ones skipped without running them. `env` is
+/// GridCraft's own environment folder (tried when its python exists).
+pub fn candidates(host: &dyn Host, configured: &str, env: Option<&Path>) -> (Vec<Candidate>, Vec<Rejected>) {
     let mut out: Vec<Candidate> = Vec::new();
     let mut rejected = Vec::new();
     let add = |out: &mut Vec<Candidate>, rejected: &mut Vec<Rejected>, program: PathBuf, args: &[&str], source: &str| {
@@ -203,6 +233,13 @@ pub fn candidates(host: &dyn Host, configured: &str) -> (Vec<Candidate>, Vec<Rej
             rejected.push(Rejected { path: program.display().to_string(), reason: format!("{var} is set, but this file doesn't exist") });
         }
     }
+    if let Some(dir) = env {
+        let os = if host.windows() { crate::env::Os::Windows } else { crate::env::Os::Unix };
+        let program = crate::env::env_python(dir, os);
+        if host.is_file(&program) {
+            add(&mut out, &mut rejected, program, &[], GRIDCRAFT_SOURCE);
+        }
+    }
     for name in ["python3", "python"] {
         let Some(path) = host.var("PATH") else { break };
         for dir in split_path(host, &path) {
@@ -236,8 +273,8 @@ fn version_text(v: (u32, u32, u32)) -> String {
 
 /// Finds the interpreter cells run with: the first candidate that answers the probe with Python
 /// 3.11 or newer. Every other candidate tried, or skipped, is listed with its reason.
-pub fn detect_with(host: &dyn Host, configured: &str) -> Detection {
-    let (cands, mut rejected) = candidates(host, configured);
+pub fn detect_with(host: &dyn Host, configured: &str, env: Option<&Path>) -> Detection {
+    let (cands, mut rejected) = candidates(host, configured, env);
     for c in cands {
         let shown = if c.args.is_empty() { c.program.display().to_string() } else { format!("{} {}", c.program.display(), c.args.join(" ")) };
         match host.probe(&c.program, &c.args) {
@@ -257,6 +294,9 @@ pub fn detect_with(host: &dyn Host, configured: &str) -> Detection {
                     pandas: p.pandas,
                     numpy: p.numpy,
                     externally_managed: p.externally_managed,
+                    venv: p.venv,
+                    conda: p.conda,
+                    installed: p.installed,
                     source: c.source,
                 };
                 return Detection { found: Some(found), rejected };
@@ -266,15 +306,15 @@ pub fn detect_with(host: &dyn Host, configured: &str) -> Detection {
     Detection { found: None, rejected }
 }
 
-/// Searches this machine.
-pub fn detect(configured: &str) -> Detection {
+/// Searches this machine (`env`: GridCraft's environment folder).
+pub fn detect(configured: &str, env: Option<&Path>) -> Detection {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        detect_with(&native::Machine, configured)
+        detect_with(&native::Machine, configured, env)
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = configured;
+        let _ = (configured, env);
         Detection::default()
     }
 }
@@ -286,13 +326,13 @@ pub struct Detector {
 }
 
 impl Detector {
-    /// Starts a search of this machine.
-    pub fn start(configured: String) -> Detector {
+    /// Starts a search of this machine (`env`: GridCraft's environment folder).
+    pub fn start(configured: String, env: Option<PathBuf>) -> Detector {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let (tx, rx) = std::sync::mpsc::channel();
             let spawned = std::thread::Builder::new().name("python-detect".into()).spawn(move || {
-                let _ = tx.send(detect(&configured));
+                let _ = tx.send(detect(&configured, env.as_deref()));
             });
             match spawned {
                 Ok(_) => Detector { rx: Some(rx), result: None },
@@ -304,7 +344,7 @@ impl Detector {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = configured;
+            let _ = (configured, env);
             Detector::ready(Detection::default())
         }
     }
@@ -363,8 +403,17 @@ def ver(name):
         return "unknown version"
 stdlib = sysconfig.get_path("stdlib") or ""
 venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+conda = os.path.isdir(os.path.join(sys.prefix, "conda-meta"))
 managed = (not venv) and os.path.isfile(os.path.join(stdlib, "EXTERNALLY-MANAGED"))
-print(json.dumps({"executable": sys.executable or "", "version": list(sys.version_info[:3]), "pandas": ver("pandas"), "numpy": ver("numpy"), "externallyManaged": managed}))
+installed = []
+try:
+    for d in md.distributions():
+        name = d.metadata["Name"] if d.metadata else None
+        if name and len(installed) < 1000:
+            installed.append([str(name), str(d.version or "")])
+except Exception:
+    pass
+print(json.dumps({"executable": sys.executable or "", "version": list(sys.version_info[:3]), "pandas": ver("pandas"), "numpy": ver("numpy"), "externallyManaged": managed, "venv": venv, "conda": conda, "installed": installed}))
 "#;
 
 /// Parses `3.14.7`.
@@ -385,6 +434,18 @@ pub fn parse_report(text: &str) -> Option<Probe> {
         pandas: s("pandas"),
         numpy: s("numpy"),
         externally_managed: v.get("externallyManaged").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        venv: v.get("venv").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        conda: v.get("conda").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        installed: v
+            .get("installed")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .take(MAX_INSTALLED)
+                    .filter_map(|p| Some((p.get(0)?.as_str()?.chars().take(200).collect(), p.get(1)?.as_str()?.chars().take(100).collect())))
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -541,9 +602,10 @@ mod tests {
                 pandas: Some("2.2.3".into()),
                 numpy: Some("2.1.0".into()),
                 externally_managed: true,
+                ..Probe::default()
             }),
         );
-        let d = detect_with(&f, "");
+        let d = detect_with(&f, "", None);
         let found = d.found.unwrap();
         assert_eq!(norm(&found.program.display().to_string()), "/opt/bin/python3.12", "cells run with sys.executable");
         assert_eq!((found.version.as_str(), found.short_version().as_str()), ("3.12.1", "3.12"));
@@ -562,7 +624,7 @@ mod tests {
         f.vars.insert("PATH".into(), "/usr/bin".into());
         f.vars.insert("VIRTUAL_ENV".into(), "/home/u/venv".into());
         f.files = vec!["/home/u/venv/bin/python".into(), "/usr/bin/python3".into(), "/custom/python".into()];
-        let (c, _) = candidates(&f, "/custom/python");
+        let (c, _) = candidates(&f, "/custom/python", None);
         let order: Vec<_> = c.iter().map(|c| (norm(&c.program.display().to_string()), c.source.as_str())).collect();
         assert_eq!(
             order,
@@ -574,13 +636,13 @@ mod tests {
         );
         // A path that doesn't exist is reported, and the search goes on.
         f.probes.insert("/usr/bin/python3".into(), py((3, 13, 0)));
-        let d = detect_with(&f, "/missing/python");
+        let d = detect_with(&f, "/missing/python", None);
         assert_eq!(d.rejected[0], Rejected { path: "/missing/python".into(), reason: "the file doesn't exist".into() });
         assert_eq!(norm(&d.rejected[1].path), "/home/u/venv/bin/python");
         assert_eq!(d.rejected[1].reason, "it didn't start");
         assert_eq!(norm(&d.found.unwrap().program.display().to_string()), "/usr/bin/python3", "no executable reported: the candidate itself");
         // A bare name is looked up on PATH.
-        let (c, _) = candidates(&f, "python3");
+        let (c, _) = candidates(&f, "python3", None);
         assert_eq!(norm(&c[0].program.display().to_string()), "/usr/bin/python3");
     }
 
@@ -591,13 +653,13 @@ mod tests {
         f.files = vec!["/a/python3".into(), "/b/python".into()];
         f.probes.insert("/a/python3".into(), Err("it didn't answer within 5 s".into()));
         f.probes.insert("/b/python".into(), Err("it stopped with an error (exit status: 1)".into()));
-        let d = detect_with(&f, "");
+        let d = detect_with(&f, "", None);
         assert!(d.found.is_none());
         assert_eq!(
             d.rejected.iter().map(|r| r.reason.as_str()).collect::<Vec<_>>(),
             ["it didn't answer within 5 s", "it stopped with an error (exit status: 1)"]
         );
-        assert_eq!(detect_with(&Fake::default(), ""), Detection::default(), "nothing on the machine");
+        assert_eq!(detect_with(&Fake::default(), "", None), Detection::default(), "nothing on the machine");
     }
 
     #[test]
@@ -623,7 +685,7 @@ mod tests {
                 ..Probe::default()
             }),
         );
-        let d = detect_with(&f, "");
+        let d = detect_with(&f, "", None);
         let stubs: Vec<_> = d.rejected.iter().filter(|r| r.reason.contains("Microsoft Store")).collect();
         assert_eq!(stubs.len(), 2, "{:?}", d.rejected);
         assert!(d.rejected.iter().any(|r| norm(&r.path) == "C:/Windows/py.exe -3"), "{:?}", d.rejected);
@@ -647,12 +709,65 @@ mod tests {
         assert_eq!((p.version, p.pandas, p.numpy.as_deref()), ((3, 12, 4), None, Some("2.0.1")));
         assert_eq!(parse_report("{\"version\": \"3\"}"), None);
         assert_eq!(parse_report(""), None);
+        let p = parse_report("{\"version\": [3, 13, 0], \"venv\": true, \"conda\": false, \"installed\": [[\"pandas\", \"2.2.3\"], [\"Python_Dateutil\", \"2.9\"], [1, 2]]}").unwrap();
+        assert!(p.venv && !p.conda);
+        assert_eq!(p.installed, [("pandas".to_string(), "2.2.3".to_string()), ("Python_Dateutil".into(), "2.9".into())]);
+    }
+
+    #[test]
+    fn gridcraft_environment_comes_after_active_environments_and_before_path() {
+        let mut f = Fake::default();
+        f.vars.insert("PATH".into(), "/usr/bin".into());
+        f.vars.insert("VIRTUAL_ENV".into(), "/home/u/venv".into());
+        f.files = vec!["/home/u/venv/bin/python".into(), "/usr/bin/python3".into(), "/gc/env/bin/python".into()];
+        let (c, _) = candidates(&f, "", Some(Path::new("/gc/env")));
+        let order: Vec<_> = c.iter().map(|c| c.source.as_str()).collect();
+        assert_eq!(order, ["VIRTUAL_ENV", GRIDCRAFT_SOURCE, "PATH"]);
+        // An environment folder without a python is skipped quietly.
+        let (c, r) = candidates(&f, "", Some(Path::new("/gc/missing")));
+        assert_eq!(c.len(), 2);
+        assert!(r.is_empty());
+        // Its python must pass the probe like any other.
+        f.vars.remove("VIRTUAL_ENV");
+        f.probes.insert("/usr/bin/python3".into(), py((3, 13, 0)));
+        f.probes.insert("/gc/env/bin/python".into(), Ok(Probe { version: (3, 13, 0), venv: true, ..Probe::default() }));
+        let found = detect_with(&f, "", Some(Path::new("/gc/env"))).found.unwrap();
+        assert_eq!(found.source, GRIDCRAFT_SOURCE);
+        assert!(!found.own_environment(), "GridCraft's environment isn't the person's own");
+        f.probes.insert("/gc/env/bin/python".into(), Err("it didn't start".into()));
+        let d = detect_with(&f, "", Some(Path::new("/gc/env")));
+        assert_eq!(d.found.unwrap().source, "PATH");
+        assert_eq!(norm(&d.rejected[0].path), "/gc/env/bin/python");
+    }
+
+    #[test]
+    fn packages_go_straight_into_the_persons_own_environment_only() {
+        let base = Interpreter {
+            program: "/v/bin/python".into(),
+            args: vec![],
+            version: "3.13.0".into(),
+            pandas: None,
+            numpy: None,
+            externally_managed: false,
+            venv: true,
+            conda: false,
+            installed: vec![("NumPy".into(), "2.1.0".into())],
+            source: "VIRTUAL_ENV".into(),
+        };
+        assert!(base.own_environment());
+        assert_eq!(base.package("numpy"), Some("2.1.0"));
+        assert_eq!(base.package("pandas"), None);
+        assert!(Interpreter { source: "Python Options".into(), ..base.clone() }.own_environment());
+        assert!(Interpreter { venv: false, conda: true, source: "CONDA_PREFIX".into(), ..base.clone() }.own_environment());
+        assert!(!Interpreter { venv: false, ..base.clone() }.own_environment(), "a system Python chosen in Options");
+        assert!(!Interpreter { source: "PATH".into(), ..base.clone() }.own_environment(), "a venv's python found on PATH isn't chosen");
+        assert!(!Interpreter { externally_managed: true, ..base }.own_environment());
     }
 
     /// The real probe against this machine's python3, when there is one.
     #[test]
     fn the_real_probe_reads_this_machines_python() {
-        let d = detect("");
+        let d = detect("", None);
         match &d.found {
             Some(i) => {
                 assert!(i.program.is_file(), "{i:?}");

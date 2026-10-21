@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells: the `python` crate, worker processes, the engine runtime) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells: package installs and import-aware time limits) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -85,21 +85,53 @@ it like any other cell. Code is written with `python.set`, never by typing `=PY(
   application that is not Rust.
 - **Protocol** (`python/protocol.rs`). One JSON object per line. The parent sends `Init`, `Run`,
   `XlValue` and `Reset`; the worker answers `Ready`, `Xl` (a request for cell values) and `Done`
-  (value, printed output, error and line, time). Worker frames start with a marker, so stray
-  output is never taken for a frame. Values travel as `gridcraft_core::Value`.
+  (value, printed output, error and line, time), and the CPython shim also sends `Extend` while
+  it imports a module not loaded yet (see time limits below). Worker frames start with a marker,
+  so stray output is never taken for a frame. Values travel as `gridcraft_core::Value`.
 - **Built-in and CPython.** Monty has no ambient access: file, environment and network
   operations suspend to the worker, which refuses them. It lacks most of the standard library and
   every third-party package, so a cell that imports one, or uses a construct Monty's compiler does
   not support, is refused before any of it runs, with a message that asks for CPython. CPython runs
   with the access of the person's account, so pandas and numpy work.
+- **Packages** (`python/env.rs`, `engine/pyenv.rs`). GridCraft keeps one virtual environment of
+  its own, made from the CPython it found (it never downloads an interpreter), in the app's data
+  folder: `~/Library/Application Support/GridCraft/python-env` on macOS,
+  `$XDG_DATA_HOME/gridcraft/python-env` (by default `~/.local/share`) on Linux and BSD, and
+  `%LOCALAPPDATA%\GridCraft\python-env` on Windows; `GRIDCRAFT_PYTHON_ENV` or
+  `python.options {environment}` move it. The search for Python tries it after `VIRTUAL_ENV` and
+  `CONDA_PREFIX` and before `PATH`. `python.install` installs only after the person approves the
+  exact list (`approve: true`; otherwise it answers with the question as `EngineError::Approve`),
+  and only into a virtual environment: the person's own venv or conda environment when that runs
+  cells, otherwise GridCraft's (made first with `uv venv --seed` or `python -m venv`), never a
+  system or externally managed Python. Requirements are a name, plain extras and a version
+  specifier only (no URLs, paths, options or markers; at most 32). The install runs `uv pip
+  install` when `uv` is on `PATH` (and the target is not a conda environment), else `python -m
+  pip install`, with `--only-binary :all:`, from
+  an argument list, on a thread with a 10-minute deadline; `python.stop` cancels it. When it
+  succeeds, the search runs again and every workbook's Python cells run again. Workbooks declare
+  the packages they need with `python.packages` (kept in hidden names, so they travel in xlsx).
+- **Time limits and imports.** On CPython, time spent importing modules not loaded yet does not
+  count against a cell's time limit, up to `python.options {importSeconds}` (60 s by default):
+  the shim wraps `builtins.__import__`, checks the run's time less its import time every 50 ms,
+  and sends `Extend {id, ms, module}` heartbeats so the parent moves its own deadline by the same
+  amount (never past the allowance); the parent's kill stays the backstop. A worker loads numpy
+  and pandas, when installed, before it reports ready, and its start-up is not counted as the
+  first cell's time. A time limit that interrupts an import replaces the worker, since a package
+  may be half loaded. A cell stopped at its time limit mid-import, or on its first run on a new
+  worker, runs once more on a fresh worker (a `retried` row in Diagnostics) before the crash-loop
+  guard refuses it. Each install ends by importing what it installed once under a 120 s deadline
+  (a warm-up, so the first import in a cell is fast; a failure there is a warning, not a failed
+  install), and uv installs compile bytecode.
 - **Runtime** (`engine/python.rs`). After every top-level command that changed a workbook,
   `Session::execute` compares the workbook before and after and runs the Python cells whose code
   changed or whose `xl()` references read changed cells, and every Python cell after the first of
   those in row-major order, sheet by sheet, since all of them share one namespace. Results are
   written into the workbook without an undo step of their own, then calc recalculates their
   dependents. Headless callers run to the end inside the command; a host with a frame loop calls
-  `set_python_background(true)` and `step_python()`, and waiting cells show `#BUSY!`. A cell that
-  took its worker down is not run again until its code or input changes (crash-loop guard).
+  `set_python_background(true)` and `step_python()`, and waiting cells show `#BUSY!`;
+  `python.stop` kills the workbook's worker and leaves every unfinished cell as `#PYTHON!`
+  ("Stopped") until the next edit. A cell that took its worker down is not run again until its
+  code or input changes (crash-loop guard).
 - **Trust gate.** A `FromFile` workbook runs no Python: opening shows the cached values, and new
   code there shows `#BLOCKED!` until `python.enable` makes the workbook `Trusted`.
 - **Files.** xlsx stores a Python cell as `PY("…"&"…",0|1)` with its cached value (a spill as a
@@ -133,6 +165,8 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2; no Python cells). Relea
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python in cells: import-aware time limits (`Extend` heartbeats, `importSeconds`, one retry, install warm-up) |
+| 2026-10-12 | minor | Python in cells: GridCraft's own Python environment and package installs the person approves |
 | 2026-10-12 | minor | Python in cells: the `python` crate (L1), worker processes, protocol, built-in and CPython backends, the engine runtime, the trust gate, files and the web build |
 | 2026-10-11 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

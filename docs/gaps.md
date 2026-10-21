@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (§22: Python in cells in the engine) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (§22: Python package installs; slow first imports) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -147,8 +147,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 22. AI features (F)
 - No in-app assistant, natural-language formulas or Analyze Data; agent control via MCP is
-  already strong. Python in cells runs in the engine; its editing UI (Python mode in the formula
-  bar, Diagnostics pane, Enable bar) is still to come. **Estimate:** 30–50 h; model choice needs the owner.
+  already strong. Python in cells runs in the engine, with approved package installs into an
+  application-managed environment; its editing UI (Python mode in the formula bar, Diagnostics
+  pane, Enable bar, install approval) is still to come. A cold first import of a large package in
+  a new environment can be slow: scikit-learn took about 22 s on macOS, spent loading native
+  libraries (cause unconfirmed); the import allowance, the install warm-up and one retry mitigate
+  it. **Estimate:** 30–50 h; model choice needs the owner.
 
 ### 23. Mobile (platform)
 - No iOS, iPadOS or Android layout. **Estimate:** 30–60 h.
@@ -161,6 +165,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | §22: approved Python package installs in the engine; a slow cold first import of scikit-learn, mitigated |
 | 2026-10-12 | minor | §22: Python in cells landed in the engine; its UI is still missing |
 | 2026-10-11 | minor | §6: iterative calculation for circular references landed (Maximum Iterations, Maximum Change) |
 | 2026-10-11 | minor | §15: trim-reference operators (`A1:.E10`, `A1.:E10`, `A1.:.E10`) parse and evaluate |

@@ -77,8 +77,36 @@ gridcraft-cli run \
 
 A workbook opened with `--in` came from a file, so its Python cells keep their saved values and
 new code shows `#BLOCKED!` until a `python.enable` step. `python.options` shows which Python runs
-cells. The binary also serves as the built-in Python's worker process (`--python-worker`, started by
+cells and sets the time limits: `timeoutSeconds` for one cell (5 by default) and, on CPython,
+`importSeconds` (60 by default), the time importing modules not loaded yet may take beyond it. The binary also serves as the built-in Python's worker process (`--python-worker`, started by
 GridCraft itself, not meant to be run by hand).
+
+### Packages
+
+`python.install` installs packages for Python cells, and only with `approve: true`; without it the
+step fails with the question it would ask (what goes where). Packages go into the virtual
+environment that runs cells when it is the person's own (`VIRTUAL_ENV`, `CONDA_PREFIX` or the
+`python.options` interpreter), otherwise into GridCraft's own environment, which is made first
+from the Python found. That environment lives in `~/Library/Application Support/GridCraft/python-env`
+on macOS, `$XDG_DATA_HOME/gridcraft/python-env` (by default `~/.local/share`) on Linux and BSD, and
+`%LOCALAPPDATA%\GridCraft\python-env` on Windows; `GRIDCRAFT_PYTHON_ENV` moves it. A system or
+externally managed Python is never installed into.
+
+Installs use [uv](https://docs.astral.sh/uv/) when `uv` is on `PATH`, and otherwise the
+interpreter's own `venv` and `pip` (slower, and they need `pip` and the `venv` module, which some
+Linux distributions package separately). Only ready-made packages (wheels) are installed, never
+built from source. The step waits for the install (at most 10 minutes); the cells then run again.
+
+```sh
+GRIDCRAFT_PYTHON_ENV=/tmp/gc-env gridcraft-cli run \
+  --cmd 'python.environment={"action":"create"}' \
+  --cmd 'python.install={"packages":["six"],"approve":true}' \
+  --cmd 'python.set={"cell":"A1","code":"import six\nsix.__version__"}' --print A1
+```
+
+`python.environment` reports the environment and its packages (`{"action":"delete","approve":true}`
+removes it), `python.installStatus` the last install, and `python.packages` the packages a
+workbook declares.
 
 ## `check`
 

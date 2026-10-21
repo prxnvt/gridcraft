@@ -50,13 +50,14 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             output
         ),
+        cmd!(noundo "python.stop", "Stop", ["Formulas", "Python"], None, "{} → {stopped}: stops the Python cells running or waiting in the active workbook; they show #PYTHON! (\"Stopped\") until the next edit or Reset", has_doc, stop),
         cmd!(noundo "python.reset", "Reset Runtime", ["Formulas", "Python"], None, "{clearDiagnostics?: bool} starts Python afresh and runs every Python cell again", has_doc, reset),
         cmd!(
             query "python.diagnostics",
             "Diagnostics",
             ["Formulas", "Python"],
             None,
-            "{sheet?, errorsOnly?: bool} → {backend: {kind, summary, path?, version?, pandas?, numpy?, rejected}, runs: [{seq, sheet, cell, status, ms, stdout, stderr, error?, line?}]}: which Python runs cells, and the last 500 runs, oldest first",
+            "{sheet?, errorsOnly?: bool} → {backend: {kind, summary, path?, version?, pandas?, numpy?, rejected}, packages: [{requirement, name, found, version?}], runs: [{seq, sheet, cell, status, ms, stdout, stderr, error?, line?, missing?, packages?, target?, summary?}]}: which Python runs cells, the workbook's packages found or missing in it, and the last 500 runs, oldest first. Package installs are rows with no sheet or cell (status installed, installFailed or cancelled; stdout is the installer's output), kept whatever `sheet` says",
             has_doc,
             diagnostics
         ),
@@ -74,11 +75,47 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Options",
             [],
             None,
-            "{timeoutSeconds?: 0.1..3600, interpreter?: path (empty: look for one), detect?: bool} → {timeoutSeconds, interpreter, backend}: how long one Python cell may run (default 5), and the user's Python (3.11 or newer) that runs cells instead of the built-in one; `detect` looks for it again",
+            "{timeoutSeconds?: 0.1..3600, importSeconds?: 1..600, interpreter?: path (empty: look for one), environment?: folder (empty: the default), detect?: bool} → {timeoutSeconds, importSeconds, interpreter, environmentPath, environment, backend}: how long one Python cell may run (default 5), how much of a run's time importing modules not loaded yet doesn't count against that, at most (default 60), the user's Python (3.11 or newer) that runs cells instead of the built-in one, and where GridCraft keeps its own Python environment; `detect` looks for Python again",
             always,
             options
         ),
         cmd!(noundo "python.enable", "Enable Python", [], None, "{} lets Python run in a workbook opened from a file, and runs its Python cells", has_doc, enable),
+        cmd!(
+            "python.packages",
+            "Workbook Packages",
+            [],
+            None,
+            "{packages?: [requirement]} → {packages}: the Python packages the workbook needs (names with an optional version, such as pandas or numpy>=1.26; at most 32); with `packages`, sets them",
+            has_doc,
+            packages
+        ),
+        cmd!(
+            noundo "python.install",
+            "Install Python Packages",
+            [],
+            None,
+            "{packages: [requirement], approve: bool, declare?: bool} → {state, target, packages, message?}: installs packages (names with an optional version; no URLs, paths or options; at most 32) into the person's own virtual environment when it runs cells, else GridCraft's own environment (made first if needed). Asks for approval unless `approve` is true; `declare` also adds them to the workbook's packages. Runs in the background in the app (python.stop cancels it)",
+            always,
+            install
+        ),
+        cmd!(
+            query "python.installStatus",
+            "Python Install Status",
+            [],
+            None,
+            "{} → {state: idle|running|installed|installFailed|cancelled, packages?, target?, message?, summary?, versions?: [{name, version}], ms?, output?}: the running or last package install (`summary`: \"Installed scikit-learn 1.9.1\")",
+            always,
+            install_status
+        ),
+        cmd!(
+            noundo "python.environment",
+            "Python Environment",
+            [],
+            None,
+            "{action?: create|delete, approve?: bool} → {path, python, exists, active, packages: [{name, version}], custom}: GridCraft's own Python environment; `create` makes it from the Python found, `delete` removes it (with `approve: true`)",
+            always,
+            environment
+        ),
     ]
 }
 
@@ -203,6 +240,11 @@ fn reset(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"runs": s.doc()?.py_log.len()}))
 }
 
+fn stop(s: &mut Session, _p: &Json) -> Result<Json> {
+    let stopped = s.python_stop()?;
+    Ok(json!({"stopped": stopped}))
+}
+
 fn diagnostics(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let sheet = match p.get("sheet") {
@@ -210,11 +252,19 @@ fn diagnostics(s: &mut Session, p: &Json) -> Result<Json> {
         Some(_) => Some(target_sheet(s, p)?),
     };
     let sheet_name = sheet.and_then(|i| d.wb.sheet(i)).map(|sh| sh.name.clone());
+    // Rows of the whole workbook (package installs, the initialization code) show whatever the
+    // sheet: an install that worked must never look as if nothing happened.
     let errors_only = bool_param(p, "errorsOnly").unwrap_or(false);
-    let runs: Vec<crate::python::PyRunLog> =
-        d.py_log.iter().filter(|r| sheet_name.as_ref().is_none_or(|n| r.sheet == *n)).filter(|r| !errors_only || r.status != "ok").cloned().collect();
+    let runs: Vec<crate::python::PyRunLog> = d
+        .py_log
+        .iter()
+        .filter(|r| r.cell.is_empty() || sheet_name.as_ref().is_none_or(|n| r.sheet == *n))
+        .filter(|r| !errors_only || r.status != "ok")
+        .cloned()
+        .collect();
     let backend = s.python_backend();
-    Ok(json!({"backend": backend, "runs": runs}))
+    let packages = s.python_declared_status();
+    Ok(json!({"backend": backend, "packages": packages, "runs": runs}))
 }
 
 fn initialization(s: &mut Session, p: &Json) -> Result<Json> {
@@ -249,12 +299,99 @@ fn enable(s: &mut Session, _p: &Json) -> Result<Json> {
     Ok(json!({"trust": s.doc()?.trust}))
 }
 
+/// A list of requirement strings from `packages`.
+fn requirements(p: &Json, id: &str) -> Result<Option<Vec<String>>> {
+    let Some(list) = p.get("packages") else { return Ok(None) };
+    let Some(items) = list.as_array() else { return Err(bad(id, "`packages` is a list of package names, such as [\"pandas\", \"numpy>=1.26\"]")) };
+    if items.len() > gridcraft_python::env::MAX_PACKAGES {
+        return Err(bad(id, format!("At most {} packages can be listed at once", gridcraft_python::env::MAX_PACKAGES)));
+    }
+    let texts: Vec<&str> =
+        items.iter().map(|i| i.as_str().ok_or_else(|| bad(id, "each package is text, such as \"pandas\""))).collect::<Result<_>>()?;
+    gridcraft_python::env::check_requirements(&texts).map(Some).map_err(|e| bad(id, e))
+}
+
+fn packages(s: &mut Session, p: &Json) -> Result<Json> {
+    if let Some(list) = requirements(p, "python.packages")? {
+        edit(s, |cx| crate::pyenv::set_declared(&mut cx.wb, &list))?;
+    }
+    Ok(json!({"packages": crate::pyenv::declared(&s.doc()?.wb)}))
+}
+
+fn install(s: &mut Session, p: &Json) -> Result<Json> {
+    let list = requirements(p, "python.install")?.unwrap_or_default();
+    if list.is_empty() {
+        return Err(bad("python.install", "missing `packages` (a list of package names, such as [\"pandas\"])"));
+    }
+    // A workbook from a file can't install anything until Python is enabled for it.
+    if s.doc().is_ok_and(|d| !d.trust.allows_code()) {
+        return Err(EngineError::Other("Python is turned off for this workbook: enable Python before installing packages for it.".into()));
+    }
+    let target = s.python_install_target(&list).map_err(EngineError::Other)?;
+    if !bool_param(p, "approve").unwrap_or(false) {
+        let what = match &target {
+            gridcraft_python::env::Target::Own { python, .. } => format!("your Python environment ({})", python.display()),
+            gridcraft_python::env::Target::GridCraft { dir, .. } => format!("GridCraft's Python environment ({})", dir.display()),
+        };
+        return Err(EngineError::Approve(format!(
+            "Install {} into {what}? Installing downloads packages from the internet and runs their code on this computer: install only packages you trust.",
+            list.join(", ")
+        )));
+    }
+    if bool_param(p, "declare").unwrap_or(false) && s.doc().is_ok() {
+        let all = crate::pyenv::merged(&s.doc()?.wb, &list).map_err(|e| bad("python.install", e))?;
+        edit(s, |cx| crate::pyenv::set_declared(&mut cx.wb, &all))?;
+    }
+    s.python_start_install(target, list)
+}
+
+fn install_status(s: &mut Session, _p: &Json) -> Result<Json> {
+    Ok(s.python_install_status())
+}
+
+fn environment(s: &mut Session, p: &Json) -> Result<Json> {
+    match str_param(p, "action") {
+        None => {}
+        Some("create") => {
+            if s.doc().is_ok_and(|d| !d.trust.allows_code()) {
+                return Err(EngineError::Other("Python is turned off for this workbook: enable Python first.".into()));
+            }
+            let base = s.python_detection().and_then(|d| d.found.clone()).map(|i| i.program);
+            let (Some(dir), Some(base)) = (s.python_env_dir(), base) else {
+                return Err(EngineError::Other(
+                    "GridCraft makes its environment from Python 3.11 or newer on this computer, and found none. Install Python, then try again."
+                        .into(),
+                ));
+            };
+            if gridcraft_python::env::is_env(&dir) {
+                return Ok(s.python_environment());
+            }
+            s.python_start_install(gridcraft_python::env::Target::GridCraft { dir, base }, Vec::new())?;
+        }
+        Some("delete") => {
+            let path = s.python_env_dir().map(|d| d.display().to_string()).unwrap_or_default();
+            if !bool_param(p, "approve").unwrap_or(false) {
+                return Err(EngineError::Approve(format!("Delete GridCraft's Python environment at {path}, with every package installed in it?")));
+            }
+            s.python_delete_environment()?;
+        }
+        Some(other) => return Err(bad("python.environment", format!("`action` is `create` or `delete`, not `{other}`"))),
+    }
+    Ok(s.python_environment())
+}
+
 fn options(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(t) = f64_param(p, "timeoutSeconds") {
         if !(0.1..=3_600.0).contains(&t) {
             return Err(bad("python.options", "`timeoutSeconds` is between 0.1 and 3600"));
         }
         s.prefs.python_timeout_seconds = t;
+    }
+    if let Some(t) = f64_param(p, "importSeconds") {
+        if !(1.0..=600.0).contains(&t) {
+            return Err(bad("python.options", "`importSeconds` is between 1 and 600"));
+        }
+        s.prefs.python_import_seconds = t;
     }
     let mut detect = bool_param(p, "detect").unwrap_or(false);
     if let Some(path) = p.get("interpreter") {
@@ -266,6 +403,15 @@ fn options(s: &mut Session, p: &Json) -> Result<Json> {
         detect |= path != s.prefs.python_interpreter;
         s.prefs.python_interpreter = path;
     }
+    if let Some(path) = p.get("environment") {
+        let Some(path) = path.as_str() else { return Err(bad("python.options", "`environment` is a folder path, or empty for the default")) };
+        if path.len() > 4_096 || path.contains('\0') {
+            return Err(bad("python.options", "`environment` is not a usable path"));
+        }
+        let path = path.trim().to_string();
+        detect |= path != s.prefs.python_environment;
+        s.prefs.python_environment = path;
+    }
     if detect {
         s.python_detect();
         // Cells run again on whatever Python the search finds.
@@ -274,5 +420,13 @@ fn options(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     let backend = s.python_backend();
-    Ok(json!({"timeoutSeconds": s.prefs.python_timeout_seconds, "interpreter": s.prefs.python_interpreter, "backend": backend}))
+    let environment = s.python_environment();
+    Ok(json!({
+        "timeoutSeconds": s.prefs.python_timeout_seconds,
+        "importSeconds": s.prefs.python_import_seconds,
+        "interpreter": s.prefs.python_interpreter,
+        "environmentPath": s.prefs.python_environment,
+        "environment": environment,
+        "backend": backend,
+    }))
 }

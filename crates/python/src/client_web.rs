@@ -49,6 +49,6 @@ impl PyWorker {
     pub fn run_blocking(&mut self, _code: &str, _resolve: &mut dyn FnMut(&str, bool) -> XlReply) -> RunOutcome {
         let id = self.next_id;
         self.next_id += 1;
-        RunOutcome { id, result: Err(self.unavailable()), stdout: String::new(), stderr: String::new(), elapsed_ms: 0.0 }
+        RunOutcome { id, result: Err(self.unavailable()), stdout: String::new(), stderr: String::new(), elapsed_ms: 0.0, importing: None }
     }
 }

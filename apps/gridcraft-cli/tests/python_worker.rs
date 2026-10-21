@@ -32,7 +32,10 @@ fn the_binary_serves_python_and_survives_hostile_code() {
 /// process (this binary with --python-worker), results in the cells.
 #[test]
 fn cli_commands_run_python_cells_and_contain_hostile_code() {
+    // Never GridCraft's real Python environment: a folder that doesn't exist.
+    let env = std::env::temp_dir().join(format!("gridcraft-cli-test-no-env-{}", std::process::id()));
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"))
+        .env("GRIDCRAFT_PYTHON_ENV", &env)
         .args([
             "run",
             "--cmd",

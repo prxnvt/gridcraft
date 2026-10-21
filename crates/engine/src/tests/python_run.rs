@@ -261,8 +261,68 @@ fn a_killed_worker_is_replaced_and_earlier_cells_run_again() {
     assert_eq!(v(&s, "A1"), Value::Number(7.0));
     assert_eq!(v(&s, "A2"), err(CellError::Timeout));
     assert_eq!(v(&s, "A3"), Value::Number(8.0), "A1 ran again in the new worker before A3");
+    // A2 stopped the worker on its first run on it, so it ran once more on a fresh one (after A1
+    // again) before it counted as stopped.
     let cells: Vec<String> = s.doc().unwrap().py_log.iter().map(|e| format!("{}:{}", e.cell, e.status)).collect();
-    assert_eq!(cells, ["A1:ok", "A2:timeout", "A1:ok", "A3:ok"]);
+    assert_eq!(cells, ["A1:ok", "A2:retried", "A1:ok", "A2:timeout", "A1:ok", "A3:ok"]);
+}
+
+#[test]
+fn stop_kills_a_cell_that_loops_forever_and_nothing_reruns_until_an_edit() {
+    let mut s = py_session();
+    // A real process, so the kill really ends the endless loop.
+    s.set_python_launcher(process_launcher());
+    s.set_python_background(true);
+    s.prefs.python_timeout_seconds = 60.0;
+    plant(&mut s, "A1", "base = 1\nbase");
+    plant(&mut s, "A2", "while True:\n    pass");
+    plant(&mut s, "A3", "base + 1");
+    s.python_reset().unwrap();
+    // A1 finishes; A2 then runs until stopped.
+    for _ in 0..2000 {
+        s.step_python();
+        if v(&s, "A1") == Value::Number(1.0) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    for _ in 0..20 {
+        s.step_python();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(v(&s, "A2"), err(CellError::Busy));
+    assert_eq!(v(&s, "A3"), err(CellError::Busy));
+    let r = s.execute("python.stop", json!({})).unwrap();
+    assert_eq!(r["stopped"], 2);
+    assert!(!s.python_busy());
+    assert_eq!(v(&s, "A1"), Value::Number(1.0), "a finished cell keeps its value");
+    assert_eq!(v(&s, "A2"), err(CellError::Python));
+    assert_eq!(v(&s, "A3"), err(CellError::Python));
+    let log: Vec<(String, &str, Option<String>)> = s.doc().unwrap().py_log.iter().map(|e| (e.cell.clone(), e.status, e.error.clone())).collect();
+    assert!(log.ends_with(&[("A2".into(), "stopped", Some("Stopped".into())), ("A3".into(), "stopped", Some("Stopped".into()))]), "{log:?}");
+    // Nothing reruns by itself, and stopping again does nothing.
+    for _ in 0..20 {
+        assert!(!s.step_python());
+    }
+    assert_eq!(s.execute("python.stop", json!({})).unwrap()["stopped"], 0);
+    assert_eq!(v(&s, "A3"), err(CellError::Python));
+    // An edit runs again from a fresh namespace: A1 first, so A3 still finds `base`.
+    s.execute("python.set", json!({"cell": "A2", "code": "2"})).unwrap();
+    for _ in 0..2000 {
+        if !s.step_python() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(v(&s, "A2"), Value::Number(2.0));
+    assert_eq!(v(&s, "A3"), Value::Number(2.0));
+}
+
+#[test]
+fn stop_without_python_running_is_harmless() {
+    let mut s = py_session();
+    assert_eq!(s.execute("python.stop", json!({})).unwrap()["stopped"], 0);
 }
 
 #[test]
@@ -290,7 +350,7 @@ fn background_edits_during_the_first_run_of_a_worker_process() {
 /// Cells on this machine's own Python (3.11 or newer), found by the search, when there is one.
 #[test]
 fn cells_run_on_the_users_python_when_the_search_finds_one() {
-    let detection = gridcraft_python::interp::detect("");
+    let detection = gridcraft_python::interp::detect(&std::env::var("GRIDCRAFT_TEST_PYTHON").unwrap_or_default(), None);
     if detection.found.is_none() {
         eprintln!("skipped: no Python 3.11 or newer here ({:?})", detection.rejected);
         return;
@@ -301,7 +361,7 @@ fn cells_run_on_the_users_python_when_the_search_finds_one() {
     assert_eq!(s.python_backend()["kind"], "cpython");
     s.execute("range.setValues", json!({"range": "A1:B3", "values": [["k", "v"], ["a", 1], ["b", 2]]})).unwrap();
     s.execute("python.initialization", json!({"code": "import sys\nscale = 10"})).unwrap();
-    s.execute("python.set", json!({"cell": "D1", "code": "rows = xl('A1:B3')\nsys.version_info[0]"})).unwrap();
+    s.execute("python.set", json!({"cell": "D1", "code": "rows = xl('A1:B3')\n# A frame when pandas is there.\nrows = rows.values.tolist() if hasattr(rows, 'values') else rows\nsys.version_info[0]"})).unwrap();
     assert_eq!(v(&s, "D1"), Value::Number(3.0));
     s.execute("python.set", json!({"cell": "D2", "code": "[r[1] * scale for r in rows[1:]]"})).unwrap();
     assert_eq!(v(&s, "D2"), Value::Number(10.0));
@@ -311,6 +371,57 @@ fn cells_run_on_the_users_python_when_the_search_finds_one() {
     assert_eq!(v(&s, "D3"), Value::Number(50.0));
     let log = s.execute("python.diagnostics", json!({})).unwrap();
     assert!(log["runs"].as_array().unwrap().iter().all(|r| r["status"] == "ok"), "{log}");
+}
+
+/// A cell the time limit stops in the middle of a slow import runs once more on a fresh Python
+/// (a first import after an install is slow once); stopped again, it is refused as usual.
+#[test]
+fn a_cell_stopped_mid_import_runs_once_more_then_is_refused() {
+    let detection = gridcraft_python::interp::detect(&std::env::var("GRIDCRAFT_TEST_PYTHON").unwrap_or_default(), None);
+    if detection.found.is_none() {
+        eprintln!("skipped: no Python 3.11 or newer here ({:?})", detection.rejected);
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("gridcraft-engine-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Slow the first time only (as a cold first import is), and slow every time.
+    let once = "import os, time\nmark = os.path.join(os.path.dirname(__file__), 'warm')\nif not os.path.exists(mark):\n    open(mark, 'w').close()\n    time.sleep(30)\nVALUE = 42\n";
+    std::fs::write(dir.join("gc_once.py"), once).unwrap();
+    std::fs::write(dir.join("gc_always.py"), "import time\ntime.sleep(30)\n").unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.set_python_detection(detection);
+    s.prefs.python_timeout_seconds = 0.5;
+    s.prefs.python_import_seconds = 1.0;
+    let path = serde_json::to_string(&dir.display().to_string()).unwrap();
+    s.execute("python.initialization", json!({"code": format!("import sys\nsys.path.insert(0, {path})")})).unwrap();
+    s.execute("python.set", json!({"cell": "A1", "code": "import gc_once\ngc_once.VALUE"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0), "it worked the second time");
+    let rows = |s: &mut Session, cell: &str| -> Vec<(String, String)> {
+        let log = s.execute("python.diagnostics", json!({})).unwrap();
+        log["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["cell"] == cell)
+            .map(|r| (r["status"].as_str().unwrap_or_default().to_string(), r["error"].as_str().unwrap_or_default().to_string()))
+            .collect()
+    };
+    let a1 = rows(&mut s, "A1");
+    assert_eq!(a1.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["retried", "ok"], "{a1:?}");
+    assert!(a1[0].1.contains("while importing gc_once (the first import after an install can be slow)"), "{a1:?}");
+    // Slow every time: tried twice, then it counts as stopping Python.
+    s.execute("python.set", json!({"cell": "A2", "code": "import gc_always\n1"})).unwrap();
+    assert_eq!(v(&s, "A2"), err(CellError::Timeout));
+    let a2 = rows(&mut s, "A2");
+    assert_eq!(a2.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["retried", "timeout"], "{a2:?}");
+    assert!(a2[1].1.contains("while importing gc_always"), "{a2:?}");
+    // A1 (before it) changed: A2 isn't run again, it is refused.
+    s.execute("python.set", json!({"cell": "A1", "code": "import gc_once\ngc_once.VALUE + 1"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(43.0));
+    assert_eq!(rows(&mut s, "A2").last().map(|r| r.0.clone()).as_deref(), Some("refused"));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The crash-loop guard: a cell that stopped the worker doesn't run again (and can't stop it
