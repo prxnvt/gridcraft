@@ -112,6 +112,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Convertir",
         "Link" => "Lien",
         "Symbol" => "Symbole",
+        "Equation" => "Équation",
+        "Insert New Equation..." => "Insérer une nouvelle équation",
         "Sparklines" => "Sparklines",
         "Checkbox" => "Cliquez pour ajouter des données",
         "Insert checkboxes in the selected cells" => "Mots-clés",

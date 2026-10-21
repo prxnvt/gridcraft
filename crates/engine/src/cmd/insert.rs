@@ -137,13 +137,13 @@ pub fn specs() -> Vec<CommandSpec> {
             &with(p, "kind", json!("textBox"))
         )),
         cmd!("shape.setText", "Edit Text Box", [], None, "{id: textBox id, text: string}", has_doc, shape_set_text),
-        cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape|slicer, id}", has_doc, delete_object),
+        cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape|slicer|equation, id}", has_doc, delete_object),
         cmd!(
             "object.move",
             "Move Object",
             [],
             None,
-            "{kind: chart|image|shape|slicer, id, at?: \"C3\", dx?, dy?, width?, height?}",
+            "{kind: chart|image|shape|slicer|equation, id, at?: \"C3\", dx?, dy?, width?, height?}",
             has_doc,
             move_object
         ),
@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Object Properties",
             [],
             None,
-            "{kind: chart|image|shape|slicer, id, mode: moveAndSize|moveOnly|absolute}",
+            "{kind: chart|image|shape|slicer|equation, id, mode: moveAndSize|moveOnly|absolute}",
             has_doc,
             set_anchor_mode
         ),
@@ -1020,6 +1020,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         Color::Theme(4, -250)
     });
     let shape = Shape {
+        math: Default::default(),
         id,
         kind,
         anchor: Anchor {
@@ -1077,7 +1078,7 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
 /// objects are errors, so a stale id never succeeds silently.
 fn object_param(s: &Session, p: &Json, cmd: &str) -> Result<(usize, ObjRef)> {
     let id = u32_param(p, "id").ok_or_else(|| bad(cmd, "missing `id`"))?;
-    let kind = str_param(p, "kind").and_then(ObjKind::parse).ok_or_else(|| bad(cmd, "kind must be chart, image, shape or slicer"))?;
+    let kind = str_param(p, "kind").and_then(ObjKind::parse).ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer or equation"))?;
     let d = s.doc()?;
     let sheet = d.wb.active_sheet;
     let o = ObjRef::new(kind, id);
@@ -1448,6 +1449,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let color = super::format::color_param(p.get("color")).unwrap_or(Color::Theme(1, 0));
     let shape = Shape {
+        math: Default::default(),
         id,
         kind: ShapeKind::Icon,
         anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },

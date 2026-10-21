@@ -74,7 +74,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Bring Forward",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape|slicer, id, toFront?: bool}",
+            "{kind: chart|image|shape|slicer|equation, id, toFront?: bool}",
             has_doc,
             |s, p| arrange(s, p, true)
         ),
@@ -83,7 +83,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Send Backward",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape|slicer, id, toBack?: bool}",
+            "{kind: chart|image|shape|slicer|equation, id, toBack?: bool}",
             has_doc,
             |s, p| arrange(s, p, false)
         ),
@@ -93,7 +93,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Align",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape|slicer, ids: [..], align: left|center|right|top|middle|bottom}",
+            "{kind: chart|image|shape|slicer|equation, ids: [..], align: left|center|right|top|middle|bottom}",
             has_doc,
             align
         ),
@@ -603,7 +603,8 @@ fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let mut v = Vec::new();
     for c in &sh.shapes {
-        v.push(json!({"kind": "shape", "id": c.id, "name": format!("{:?} {}", c.kind, c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
+        let kind = if c.kind == ShapeKind::Equation { "equation" } else { "shape" };
+        v.push(json!({"kind": kind, "id": c.id, "name": format!("{:?} {}", c.kind, c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     for c in &sh.images {
         v.push(json!({"kind": "image", "id": c.id, "name": format!("Picture {}", c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));

@@ -1,5 +1,5 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
-//! we paint with egui), pictures, shapes and slicers.
+//! we paint with egui), pictures, shapes, equations and slicers.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -309,6 +309,10 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 }
                 label = false;
             }
+            ShapeKind::Equation => {
+                crate::equation::paint_shape(p, r, sp, wb, geo.z);
+                label = false;
+            }
             ShapeKind::Line | ShapeKind::Arrow => {
                 p.line_segment([r.left_top(), r.right_bottom()], Stroke::new(2.0, line));
                 if sp.kind == ShapeKind::Arrow {
@@ -510,7 +514,7 @@ pub fn object_rect(geo: &Geo, sh: &Sheet, o: ObjRef) -> Option<Rect> {
 }
 
 /// The topmost object under `p` and its rect: slicers paint on top, so they are hit first, then
-/// charts, pictures and shapes, each from the top of its stack.
+/// charts, pictures and shapes (equations included), each from the top of its stack.
 pub fn hit(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
     if !geo.cells.contains(p) {
         return None;
@@ -536,7 +540,8 @@ pub fn hit(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
     for s in sh.shapes.iter().rev() {
         let r = anchor_rect(geo, sh, &s.anchor);
         if r.expand(3.0).contains(p) {
-            return Some((ObjRef::new(ObjKind::Shape, s.id), r));
+            let kind = if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape };
+            return Some((ObjRef::new(kind, s.id), r));
         }
     }
     None

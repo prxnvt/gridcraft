@@ -502,6 +502,9 @@ pub enum ShapeKind {
     /// A freehand ink stroke; `Shape::text` holds the points as `x,y;x,y;…` relative to the
     /// anchor (sheet points), `Shape::line` the ink colour and `fill` unused.
     Ink,
+    /// An equation: `Shape::text` holds its LaTeX source, `Shape::line` its ink colour
+    /// (`Color::Auto` for the sheet's text colour) and `Shape::math` its cached layout.
+    Equation,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -515,10 +518,61 @@ pub struct Shape {
     /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
+    /// An equation's layout, rebuilt from `text` and never saved.
+    #[serde(skip)]
+    pub math: EquationCache,
+}
+
+/// The laid-out form of an equation's LaTeX source. It is derived data: rebuilt by
+/// [`EquationCache::refresh`] whenever the source changes, never saved, and ignored when shapes
+/// are compared. Painters read it and never lay equations out themselves, so nothing in a paint
+/// path can reach the layout engine.
+#[derive(Clone, Debug, Default)]
+pub struct EquationCache {
+    /// A hash of the source the layout was built from.
+    key: u64,
+    layout: Option<Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>>,
+}
+
+impl PartialEq for EquationCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+fn source_key(src: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    h.finish()
+}
+
+impl EquationCache {
+    /// The layout of `src`, or why it has none; `None` until [`EquationCache::refresh`] has run
+    /// for this source.
+    pub fn get(&self, src: &str) -> Option<Result<&gridcraft_math::MathList, &gridcraft_math::MathError>> {
+        if self.key != source_key(src) {
+            return None;
+        }
+        self.layout.as_ref().map(|r| r.as_ref().map(|l| l.as_ref()))
+    }
+
+    /// Lays `src` out again unless the cache already holds its layout. True when it did.
+    pub fn refresh(&mut self, src: &str) -> bool {
+        let key = source_key(src);
+        if self.layout.is_some() && self.key == key {
+            return false;
+        }
+        self.key = key;
+        self.layout = Some(gridcraft_math::layout(src).map(std::sync::Arc::new));
+        true
+    }
 }
 
 /// The kinds of floating object a sheet holds. Commands name an object by kind and
 /// workbook-unique id (`{kind: "chart", id}`); [`ObjKind::name`] is that parameter's spelling.
+/// Equations are stored as shapes ([`ShapeKind::Equation`]) but select, open and delete as their
+/// own kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ObjKind {
@@ -526,10 +580,11 @@ pub enum ObjKind {
     Image,
     Shape,
     Slicer,
+    Equation,
 }
 
 impl ObjKind {
-    pub const ALL: [ObjKind; 4] = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer];
+    pub const ALL: [ObjKind; 5] = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer, ObjKind::Equation];
 
     /// The name used in command parameters.
     pub fn name(self) -> &'static str {
@@ -538,6 +593,7 @@ impl ObjKind {
             ObjKind::Image => "image",
             ObjKind::Shape => "shape",
             ObjKind::Slicer => "slicer",
+            ObjKind::Equation => "equation",
         }
     }
 

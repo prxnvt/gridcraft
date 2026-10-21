@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (UI building blocks: theme tokens, ribbon widgets, code editor) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (equations: the `math` crate and the layout cache) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -16,6 +16,7 @@ including tests, 2026-10-10.
 | L0 | `numfmt` | ~2.1k | Excel number-format codes (sections, conditions, colours, dates, elapsed time, fractions, scientific, fill), General, `TEXT()`; en-US only |
 | L1 | `formula` | ~1.7k | Tokenizer, parser, AST, printer (A1 and R1C1), reference adjustment for copy, fill and structural edits |
 | L1 | `functions` | ~13.4k | The function library: `FnSpec` registry (name, arity, category, scalar args, signature, description) and pure implementations; automatic array lifting |
+| L1 | `math` | ~1.1k | Equations: LaTeX laid out by RaTeX (MIT, pinned) into plain glyph, rule and path data, and LaTeX to Office Math; every entry point capped and panic-guarded |
 | L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings, protection |
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
@@ -67,8 +68,22 @@ drawing its own:
   indentation (one level more after a Python colon), and it scrolls past `max_lines` with the
   caret in view. The tokenizer and the key edits are pure functions with tests, including
   hostile input.
+- **Code editor marks**: `code_editor_marked` underlines a byte range in the error colour (the
+  equation editor marks the position of a LaTeX error with it).
 - **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
   scrolls; `formula_bar::BarLayout` records where its parts went each frame, for tests.
+
+## Equations
+
+An equation is a shape (`ShapeKind::Equation`) whose `text` is its LaTeX source; it selects,
+opens and deletes as its own object kind (`ObjKind::Equation`). `gridcraft-math` is the only
+code that calls the layout engine (RaTeX), and only through `layout`, `check` and `to_omml`,
+which cap the source (4 KB, nesting 32) and run under `catch_unwind`. The result is cached on
+the shape (`Shape::math`, never saved); `Workbook::refresh_equations` rebuilds stale layouts when
+a document is created and on every commit, so painting only reads the cache and nothing in a
+paint path can reach the layout engine. The equation editor's preview and the gallery are the
+only other callers, through the same guarded entry points. The gate that admitted RaTeX is
+recorded in [`decisions.md`](decisions.md) and re-run by `crates/math/tests/gate.rs`.
 
 ## Agent control
 
@@ -95,6 +110,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
 | 2026-10-11 | minor | UI building blocks: code editor, growing formula bar |
 | 2026-10-11 | minor | UI building blocks: ribbon widgets and overflow |
 | 2026-10-11 | minor | UI building blocks: theme tokens and the contrast test |

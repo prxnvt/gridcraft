@@ -171,8 +171,8 @@ impl Sheet {
             ObjKind::Chart
         } else if self.images.iter().any(|o| o.id == id) {
             ObjKind::Image
-        } else if self.shapes.iter().any(|o| o.id == id) {
-            ObjKind::Shape
+        } else if let Some(s) = self.shapes.iter().find(|o| o.id == id) {
+            if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape }
         } else if self.slicers.iter().any(|o| o.id == id) {
             ObjKind::Slicer
         } else {
@@ -181,7 +181,8 @@ impl Sheet {
         Some(ObjRef::new(kind, id))
     }
 
-    /// Whether the floating object `o` exists on this sheet.
+    /// Whether the floating object `o` exists on this sheet. `Shape` accepts any shape (an
+    /// equation included); `Equation` only an equation.
     pub fn has_object(&self, o: ObjRef) -> bool {
         self.object_anchor(o).is_some()
     }
@@ -193,6 +194,7 @@ impl Sheet {
             ObjKind::Image => self.images.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Equation => self.shapes.iter().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| c.anchor),
         }
     }
 
@@ -202,6 +204,7 @@ impl Sheet {
             ObjKind::Image => self.images.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Equation => self.shapes.iter_mut().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| &mut c.anchor),
         }
     }
 
@@ -217,6 +220,7 @@ impl Sheet {
             ObjKind::Image => take(&mut self.images, |c| c.id == o.id),
             ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
             ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
+            ObjKind::Equation => take(&mut self.shapes, |c| c.id == o.id && c.kind == ShapeKind::Equation),
         }
     }
 

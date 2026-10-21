@@ -1,0 +1,326 @@
+//! The RaTeX gate, kept as a regression suite so that a version bump re-runs it: hostile and
+//! random input never panics, nesting is bounded below the stack, macro bombs stop, and the
+//! syntax an equation editor needs is covered. Every call goes through `catch_unwind`, so a panic
+//! is counted, not fatal. `docs/decisions.md` holds the full gate record.
+
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+#[derive(Debug, PartialEq)]
+enum Outcome {
+    Laid(usize),
+    Rejected(String),
+    Panicked(String),
+}
+
+fn run(src: &str) -> Outcome {
+    let r = catch_unwind(AssertUnwindSafe(|| match ratex_parser::parse(src) {
+        Ok(nodes) => {
+            let lb = ratex_layout::layout(&nodes, &ratex_layout::LayoutOptions::default());
+            Ok(ratex_layout::to_display_list(&lb).items.len())
+        }
+        Err(e) => Err(e.message),
+    }));
+    match r {
+        Ok(Ok(n)) => Outcome::Laid(n),
+        Ok(Err(m)) => Outcome::Rejected(m),
+        Err(p) => {
+            Outcome::Panicked(p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default())
+        }
+    }
+}
+
+/// xorshift64: deterministic, so a failure reproduces.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+    fn pick<'a>(&mut self, v: &[&'a str]) -> &'a str {
+        v[self.below(v.len())]
+    }
+}
+
+const TOKENS: &[&str] = &[
+    "{",
+    "}",
+    "[",
+    "]",
+    "(",
+    ")",
+    "^",
+    "_",
+    "&",
+    "\\\\",
+    "x",
+    "1",
+    "+",
+    "=",
+    "\\frac",
+    "\\sqrt",
+    "\\left",
+    "\\right",
+    "\\middle",
+    "\\sum",
+    "\\int",
+    "\\begin{matrix}",
+    "\\end{matrix}",
+    "\\begin{pmatrix}",
+    "\\end{pmatrix}",
+    "\\begin{cases}",
+    "\\end{cases}",
+    "\\begin{aligned}",
+    "\\end{aligned}",
+    "\\begin{array}{cc}",
+    "\\end{array}",
+    "\\text{",
+    "\\mathbb",
+    "\\hat",
+    "\\overline",
+    "\\underbrace",
+    "\\overbrace",
+    "\\binom",
+    "\\color{red}",
+    "\\def\\a{\\a}",
+    "\\a",
+    "\\newcommand",
+    "\\boxed",
+    "\\xrightarrow",
+    "\\stackrel",
+    "\\over",
+    "\\atop",
+    "\\choose",
+    "\\displaystyle",
+    "\\big",
+    "\\Bigg",
+    "|",
+    "\\|",
+    "\\langle",
+    ".",
+    "\\ce{",
+    "\\pu{",
+    "H2O",
+    "->",
+    "\\operatorname",
+    "\\mathrm",
+    "\\verb|x|",
+    "\\char",
+    "\\kern",
+    "\\hspace{",
+    "1em",
+    "-1000em",
+    "\\rule{",
+    "\\raisebox{",
+    "\\phantom",
+    "\\cancel",
+    "\\not",
+    "\\limits",
+    "\\tag{",
+    "$",
+    "%",
+    "#",
+    "~",
+    "'",
+    "\\vec",
+    "\\mathchoice",
+    "\\href{",
+    "\\includegraphics",
+    "\\cr",
+    "\\hline",
+    "\\multicolumn",
+    "\\begin{CD}",
+    "\\end{CD}",
+    "@>>>",
+    "\\infty",
+    "\\alpha",
+    "\\partial",
+    "\u{1F600}",
+    "\u{0301}",
+    "\u{0000}",
+    "\u{FFFF}",
+    "\\sideset",
+    "\\genfrac",
+    "\\substack{",
+    "\\smash",
+    "\\llap",
+    "\\textcolor{",
+    "#ff0000",
+    "\\colorbox{",
+    "\\sqrt[",
+    "\\lim",
+    "\\overset",
+    "\\underset",
+    "\\Huge",
+    "\\begin{align}",
+    "\\end{align}",
+    "\\begin{alignat}{2}",
+    "\\end{alignat}",
+    "\\begin{rcases}",
+    "\\expandafter",
+    "\\noexpand",
+    "\\let",
+    "\\gdef",
+    "\\global",
+    "\\edef",
+    "\\boldsymbol",
+    "\\mathcal",
+    "\\mathfrak",
+    "\\char\"41",
+    "\\unicode",
+    "\\infer",
+];
+
+/// What the editor's gallery and quick-insert buttons produce, plus everyday notation.
+const COVERAGE: &[&str] = &[
+    "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+    "a^2 + b^2 = c^2",
+    "(x + a)^n = \\sum_{k=0}^{n} \\binom{n}{k} x^k a^{n-k}",
+    "A = \\pi r^2",
+    "e^{i\\pi} + 1 = 0",
+    "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
+    "\\begin{bmatrix}1&0\\\\0&1\\end{bmatrix}",
+    "\\begin{vmatrix}a&b\\\\c&d\\end{vmatrix}",
+    "\\int_0^\\infty e^{-x^2}\\,dx",
+    "\\iint \\oint \\prod_{i} \\coprod",
+    "\\lim_{n\\to\\infty}\\left(1+\\frac1n\\right)^n",
+    "f(x) = \\begin{cases} x & x \\ge 0 \\\\ -x & x < 0 \\end{cases}",
+    "\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}",
+    "\\overbrace{a+b}^{n} \\underbrace{c}_{m}",
+    "\\vec v \\cdot \\hat n \\times \\overline{z} \\tilde a \\dot x \\ddot y \\bar b",
+    "\\mathbb{R}^n \\mathcal{L} \\mathfrak g \\mathrm{d} \\mathbf{v} \\mathit{x} \\mathsf{s} \\mathtt{t}",
+    "\\sqrt[3]{x}",
+    "\\left\\langle \\psi \\middle| \\phi \\right\\rangle",
+    "\\left\\{ x \\right\\} \\left[ y \\right] \\left| z \\right| \\left\\lfloor w \\right\\rceil",
+    "\\color{red}{x}\\textcolor{blue}{y}",
+    "\\text{if } x \\in A",
+    "\\xrightarrow[below]{above} \\xleftarrow{a}",
+    "\\begin{array}{c|c} 1 & 2 \\\\ \\hline 3 & 4 \\end{array}",
+    "\\alpha\\beta\\gamma\\delta\\epsilon\\varepsilon\\zeta\\eta\\theta\\vartheta\\iota\\kappa\\lambda\\mu\\nu\\xi\\pi\\rho\\sigma\\tau\\upsilon\\phi\\varphi\\chi\\psi\\omega",
+    "\\Gamma\\Delta\\Theta\\Lambda\\Xi\\Pi\\Sigma\\Upsilon\\Phi\\Psi\\Omega",
+    "\\le\\ge\\ne\\approx\\equiv\\sim\\simeq\\cong\\propto\\ll\\gg\\subset\\supseteq\\in\\notin\\ni",
+    "\\pm\\mp\\times\\div\\cdot\\circ\\bullet\\oplus\\otimes\\cup\\cap\\wedge\\vee\\setminus",
+    "\\infty\\partial\\nabla\\forall\\exists\\emptyset\\angle\\triangle\\hbar\\ell\\Re\\Im\\aleph",
+    "\\to\\leftarrow\\Rightarrow\\Leftrightarrow\\mapsto\\uparrow\\iff\\implies",
+    "\\sin\\cos\\tan\\log\\ln\\exp\\max\\min\\det\\gcd\\operatorname{sgn}",
+    "\\displaystyle\\sum_{i=1}^n i = \\frac{n(n+1)}{2}",
+    "\\binom{n}{k} \\dbinom{a}{b} \\tfrac12 \\dfrac{1}{2} \\cfrac{1}{1+\\cfrac{1}{2}}",
+    "x_{i,j}^{(k)} x' x''",
+    "\\boxed{E=mc^2}",
+    "\\cancel{x} \\bcancel{y}",
+    "\\overset{!}{=} \\underset{x}{\\arg\\max} \\stackrel{def}{=}",
+    "\\begin{matrix}1&2\\\\3&4\\end{matrix}",
+    "\\begin{smallmatrix}1&2\\end{smallmatrix}",
+    "\\begin{gather} a \\\\ b \\end{gather}",
+    "\\begin{align} a &= b \\end{align}",
+    "\\ldots\\cdots\\vdots\\ddots",
+    "a\\quad b\\qquad c\\,d\\;e\\!f",
+    "\\langle x \\rangle \\lVert v \\rVert",
+    "\\frac{\\partial f}{\\partial x}",
+    "\\int\\limits_a^b",
+    "a\\phantom{x}b\\hphantom{y}c",
+    "\\widehat{abc} \\widetilde{xyz} \\overrightarrow{AB}",
+    "a \\pmod{n} \\bmod b",
+    "\\Big( \\bigg[ \\Bigg\\{",
+    "\\not= \\not\\in",
+    "1{,}000 \\%\\$\\#\\&\\_\\{\\}",
+    "\\textbf{bold} \\textit{it}",
+    "\\sum_{\\substack{a\\\\b}}",
+];
+
+#[test]
+fn random_token_soup_never_panics() {
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let mut panics = Vec::new();
+    for _ in 0..3000 {
+        let mut s = String::new();
+        for _ in 0..1 + rng.below(24) {
+            if rng.below(10) == 0 {
+                s.push(char::from_u32(rng.below(0x3000) as u32).unwrap_or('?'));
+            } else {
+                s.push_str(rng.pick(TOKENS));
+            }
+        }
+        if let Outcome::Panicked(p) = run(&s) {
+            panics.push((s, p));
+        }
+    }
+    assert!(panics.is_empty(), "RaTeX panicked: {panics:?}");
+}
+
+#[test]
+fn mutated_valid_input_never_panics() {
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    let mut panics = Vec::new();
+    for _ in 0..3000 {
+        let mut v: Vec<char> = rng.pick(COVERAGE).chars().collect();
+        for _ in 0..1 + rng.below(4) {
+            if v.is_empty() {
+                break;
+            }
+            let at = rng.below(v.len() + 1);
+            match rng.below(4) {
+                0 if at < v.len() => {
+                    v.remove(at);
+                }
+                1 => {
+                    for c in rng.pick(TOKENS).chars().rev() {
+                        v.insert(at.min(v.len()), c);
+                    }
+                }
+                2 if at < v.len() => v[at] = char::from_u32(rng.below(0x2200) as u32).unwrap_or('?'),
+                _ => {
+                    let b = rng.below(v.len());
+                    let e = (b + rng.below(12)).min(v.len());
+                    let seg: Vec<char> = v[b..e].to_vec();
+                    for c in seg.into_iter().rev() {
+                        v.insert(at.min(v.len()), c);
+                    }
+                }
+            }
+        }
+        let s: String = v.into_iter().collect();
+        if let Outcome::Panicked(p) = run(&s) {
+            panics.push((s, p));
+        }
+    }
+    assert!(panics.is_empty(), "RaTeX panicked: {panics:?}");
+}
+
+#[test]
+fn nesting_is_refused_before_the_stack_runs_out() {
+    for (open, close) in [("{", "}"), ("\\frac{", "}{1}"), ("\\sqrt{", "}"), ("\\left(", "\\right)"), ("x^{", "}")] {
+        let at = |d: usize| format!("{}x{}", open.repeat(d), close.repeat(d));
+        assert!(matches!(run(&at(32)), Outcome::Laid(_)), "{open}: 32 levels lay out");
+        for d in [64, 2000] {
+            assert_eq!(run(&at(d)), Outcome::Rejected("Recursion limit exceeded".into()), "{open}: {d} levels");
+        }
+    }
+}
+
+#[test]
+fn macro_bombs_and_huge_dimensions_stop() {
+    for bomb in [
+        "\\def\\a{\\a\\a}\\a",
+        "\\def\\a{xxxxxxxxxx}\\def\\b{\\a\\a\\a\\a\\a\\a\\a\\a\\a\\a}\\def\\c{\\b\\b\\b\\b\\b\\b\\b\\b\\b\\b}\\def\\d{\\c\\c\\c\\c\\c\\c\\c\\c\\c\\c}\\d",
+    ] {
+        assert!(matches!(run(bomb), Outcome::Rejected(m) if m.contains("Too many expansions")));
+    }
+    // Absurd sizes lay out (the wrapper in this crate caps them); NaN is refused.
+    for s in ["\\kern99999999em x", "\\rule{1e308em}{1e308em}", "\\hspace{-99999em}x"] {
+        assert!(matches!(run(s), Outcome::Laid(_)), "{s}");
+    }
+    assert!(matches!(run("\\rule{nanem}{1em}"), Outcome::Rejected(_)));
+    assert!(matches!(run(&"x+".repeat(2048)), Outcome::Laid(4096)));
+}
+
+#[test]
+fn editor_syntax_is_covered() {
+    let missing: Vec<(&str, Outcome)> = COVERAGE.iter().map(|s| (*s, run(s))).filter(|(_, o)| !matches!(o, Outcome::Laid(n) if *n > 0)).collect();
+    assert!(missing.is_empty(), "unsupported: {missing:?}");
+}

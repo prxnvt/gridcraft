@@ -1266,6 +1266,14 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
             continue;
         }
         let (x, y, w, h) = place(r);
+        if shp.kind == ShapeKind::Equation {
+            let ink = rgb_of(shp.line, wb).unwrap_or([0, 0, 0]);
+            match shp.math.get(&shp.text) {
+                Some(Ok(list)) => super::equation::draw_pdf(pg, list, (x, y, w, h), super::equation::PADDING * b.k, ink),
+                _ => pg.text(x + 2.0 * b.k, y + 12.0 * b.scale, 10.0 * b.scale, Font::Courier, ink, &shp.text),
+            }
+            continue;
+        }
         let fill = rgb_of(shp.fill, wb);
         let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
         match shp.kind {
@@ -2083,5 +2091,21 @@ mod tests {
         // Every piece of both headers is rotated, each wrapped along the row height into a few long lines.
         assert_eq!(up + down, blocks.len(), "a header line printed flat: {blocks:?}");
         assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
+    }
+
+    #[test]
+    fn equations_print_with_the_symbol_font() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        s.execute("insert.equation", json!({"latex": "\\sum_{i=1}^{n} \\alpha_i \\le \\infty \\pm \\sqrt{x} \\times \\partial y", "cell": "B2"}))
+            .unwrap();
+        s.execute("insert.equation", json!({"latex": "\\mathbb{R} \\oplus \\text{\u{4E2D}}", "cell": "B8"})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert!(contains(&pdf, "/BaseFont /Symbol >>"), "maths symbols use the Symbol font");
+        assert!(contains(&pdf, "/BaseFont /Times-Italic"), "variables are italic");
+        // The summation (0xE5) and alpha (0x61) codes in Symbol.
+        assert!(contains(&pdf, "(\\345) Tj") && contains(&pdf, "(a) Tj"));
+        // A glyph no standard font has is a [?] box.
+        assert!(contains(&pdf, "(?) Tj"));
     }
 }

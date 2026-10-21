@@ -19,9 +19,9 @@ fn id_of(v: &serde_json::Value, key: &str) -> u32 {
     v[key].as_u64().unwrap() as u32
 }
 
-/// A table with one object of each kind on the first sheet: a chart, a picture, a shape and a
-/// slicer, in `ObjKind::ALL` order.
-fn every_kind(s: &mut Session) -> [ObjRef; 4] {
+/// A table with one object of each kind on the first sheet: a chart, a picture, a shape, a
+/// slicer and an equation, in `ObjKind::ALL` order.
+fn every_kind(s: &mut Session) -> [ObjRef; 5] {
     s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Qty"], ["East", 3], ["West", 5], ["East", 2], ["North", 8]]})).unwrap();
     s.execute("insert.table", json!({"range": "A1:B5", "name": "Sales"})).unwrap();
     let chart = id_of(&s.execute("insert.chart", json!({"range": "B1:B5", "type": "column", "at": "D2"})).unwrap(), "chart");
@@ -29,7 +29,14 @@ fn every_kind(s: &mut Session) -> [ObjRef; 4] {
     let shape = id_of(&s.execute("insert.shape", json!({"kind": "ellipse", "at": "H18"})).unwrap(), "shape");
     s.execute("selection.set", json!({"cell": "A2"})).unwrap();
     let slicer = id_of(&s.execute("insert.slicer", json!({"column": "Region", "at": "L2"})).unwrap(), "slicer");
-    [ObjRef::new(ObjKind::Chart, chart), ObjRef::new(ObjKind::Image, image), ObjRef::new(ObjKind::Shape, shape), ObjRef::new(ObjKind::Slicer, slicer)]
+    let equation = id_of(&s.execute("insert.equation", json!({"latex": "x^2", "cell": "L18"})).unwrap(), "equation");
+    [
+        ObjRef::new(ObjKind::Chart, chart),
+        ObjRef::new(ObjKind::Image, image),
+        ObjRef::new(ObjKind::Shape, shape),
+        ObjRef::new(ObjKind::Slicer, slicer),
+        ObjRef::new(ObjKind::Equation, equation),
+    ]
 }
 
 #[test]
@@ -45,6 +52,9 @@ fn every_kind_is_found_moved_and_deleted_by_kind_and_id() {
         s.execute("object.setAnchorMode", json!({"kind": o.kind.name(), "id": o.id, "mode": "absolute"})).unwrap();
         assert_eq!(sheet(&s, 0).object_anchor(o).unwrap().mode, AnchorMode::Absolute);
     }
+    // An equation is a shape too; a plain shape is not an equation.
+    assert!(sheet(&s, 0).has_object(ObjRef::new(ObjKind::Shape, objs[4].id)));
+    assert!(s.execute("object.delete", json!({"kind": "equation", "id": objs[2].id})).is_err());
     // A kind that does not match the id, an unknown id or kind, and a missing kind are refused.
     assert!(s.execute("object.delete", json!({"kind": "slicer", "id": objs[0].id})).is_err());
     assert!(s.execute("object.delete", json!({"kind": "chart", "id": 9999})).is_err());
@@ -58,9 +68,9 @@ fn every_kind_is_found_moved_and_deleted_by_kind_and_id() {
             assert!(sheet(&s, 0).has_object(*later), "deleting {o:?} leaves {later:?}");
         }
     }
-    // One undo step per delete brings the slicer back.
+    // One undo step per delete brings the equation back.
     s.execute("edit.undo", json!({})).unwrap();
-    assert!(sheet(&s, 0).has_object(objs[3]));
+    assert!(sheet(&s, 0).has_object(objs[4]));
 }
 
 #[test]
@@ -112,17 +122,17 @@ fn cell_of(s: &Session, o: ObjRef) -> String {
 fn every_kind_follows_row_and_column_edits_and_sorts() {
     let mut s = s();
     let objs = every_kind(&mut s);
-    // Anchors: chart D2, picture D18, shape H18, slicer L2.
+    // Anchors: chart D2, picture D18, shape H18, slicer L2, equation L18.
     s.execute("object.setAnchorMode", json!({"kind": "shape", "id": objs[2].id, "mode": "absolute"})).unwrap();
     let cells = |s: &Session| objs.map(|o| cell_of(s, o));
-    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2"]);
+    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2", "L18"]);
     s.execute("home.insertRows", json!({"rows": "10:11"})).unwrap();
-    assert_eq!(cells(&s), ["D2", "D20", "H18", "L2"], "rows inserted above move the objects below them; an absolute shape stays");
+    assert_eq!(cells(&s), ["D2", "D20", "H18", "L2", "L20"], "rows inserted above move the objects below them; an absolute shape stays");
     s.execute("home.insertColumns", json!({"cols": "C:C"})).unwrap();
-    assert_eq!(cells(&s), ["E2", "E20", "H18", "M2"]);
+    assert_eq!(cells(&s), ["E2", "E20", "H18", "M2", "M20"]);
     s.execute("home.deleteColumns", json!({"cols": "C:C"})).unwrap();
     s.execute("home.deleteRows", json!({"rows": "10:11"})).unwrap();
-    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2"]);
+    assert_eq!(cells(&s), ["D2", "D18", "H18", "L2", "L18"]);
     // Sorting moves a picture anchored inside the sorted block with its row.
     s.execute("range.setValues", json!({"range": "T1", "values": [["k"], [3], [1], [2]]})).unwrap();
     let pic = ObjRef::new(ObjKind::Image, super::add_image(&mut s, "T2", AnchorMode::MoveAndSize));
@@ -185,8 +195,10 @@ fn a_copied_sheet_gives_its_objects_fresh_ids() {
     ids.dedup();
     assert_eq!(ids.len(), 2 * objs.len(), "every object id stays unique across the workbook");
     let copy = sheet(&s, 1);
-    for (o, id) in objs.iter().zip(ids_of(copy)) {
-        assert_eq!(copy.object_ref(id).map(|c| c.kind), Some(o.kind));
-    }
+    let mut kinds: Vec<&str> = ids_of(copy).into_iter().filter_map(|id| copy.object_ref(id)).map(|o| o.kind.name()).collect();
+    let mut want: Vec<&str> = objs.iter().map(|o| o.kind.name()).collect();
+    kinds.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(kinds, want, "the copies keep their kinds");
     assert!(s.doc().unwrap().wb.next_object_id() > *ids.last().unwrap_or(&0));
 }

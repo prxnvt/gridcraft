@@ -15,6 +15,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;
+pub mod equation;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
@@ -239,7 +240,7 @@ pub struct SheetApp {
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
     pub(crate) shots: control::Shots,
-    /// The floating object selected on the sheet (chart, picture, shape or slicer).
+    /// The floating object selected on the sheet (chart, picture, shape, equation or slicer).
     pub selected_object: Option<gridcraft_engine::model::ObjRef>,
     pub started: f64,
 }
