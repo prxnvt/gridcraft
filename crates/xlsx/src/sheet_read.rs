@@ -32,11 +32,15 @@ struct RowState {
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
     dynamic: Vec<RangeRef>,
+    /// What-If data tables, from the `<f t="dataTable">` on their first result cell.
+    data_tables: Vec<gridcraft_model::DataTable>,
     dropped: u64,
     rows: u64,
 }
 
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
+/// Most What-If data tables read per sheet.
+const MAX_DATA_TABLES: usize = 1_000;
 
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
@@ -57,6 +61,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
+    sheet.data_tables = std::mem::take(&mut st.data_tables);
     drop(bytes);
 
     let mut fit_to_page = false;
@@ -493,7 +498,7 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
             Some(fm)
         }
         "dataTable" => {
-            cx.warn("what-if data tables are not supported; kept their values");
+            read_data_table(cx, st, f, pos);
             None
         }
         _ => {
@@ -503,6 +508,40 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
                 Some(Formula::new(text))
             }
         }
+    }
+}
+
+/// A What-If data table, `<f t="dataTable" ref="E3:E5" dt2D="0" dtr="0" r1="B2"/>` on its first
+/// result cell. `ref` is the results area; the edges are the row above it and the column to its
+/// left. Two-variable (`dt2D`): `r1` is the row input and `r2` the column input. One-variable: `r1`
+/// is the input, a row input when `dtr` is set. `del1`/`del2` mark a deleted input cell. The
+/// result cells keep their cached values, and recalculation fills them again.
+fn read_data_table(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef) {
+    let Some(body) = f.attr("ref").and_then(RangeRef::parse) else {
+        cx.warn("a what-if data table has no results area; kept its values");
+        return;
+    };
+    let input = |k: &str, deleted: &str| if f.flag(deleted, false) { None } else { f.attr(k).and_then(CellRef::parse) };
+    let (row_input, col_input) = if f.flag("dt2D", false) {
+        (input("r1", "del1"), input("r2", "del2"))
+    } else if f.flag("dtr", false) {
+        (input("r1", "del1"), None)
+    } else {
+        (None, input("r1", "del1"))
+    };
+    let (Some(r0), Some(c0)) = (body.start.row.checked_sub(1), body.start.col.checked_sub(1)) else {
+        cx.warn("a what-if data table has no room for its input values and formulas; kept its values");
+        return;
+    };
+    let table = gridcraft_model::DataTable { range: RangeRef::new(CellRef::new(r0, c0), body.end), row_input, col_input };
+    if body.start != pos || !table.is_valid() || (f.flag("dt2D", false) && (row_input.is_none() || col_input.is_none())) {
+        cx.warn("a what-if data table is damaged, too large or has a deleted input cell; kept its values");
+    } else if st.data_tables.len() >= MAX_DATA_TABLES {
+        cx.warn(format!("a sheet has more than {MAX_DATA_TABLES} what-if data tables; kept the values of the rest"));
+    } else if st.data_tables.iter().any(|t| t.range.intersects(&table.range)) {
+        cx.warn("what-if data tables overlap; kept the values of the later ones");
+    } else {
+        st.data_tables.push(table);
     }
 }
 

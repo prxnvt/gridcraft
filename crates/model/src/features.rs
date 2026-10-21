@@ -848,6 +848,93 @@ pub struct LineInfo {
     pub custom: bool,
 }
 
+// ---------------------------------------------------------------- data tables
+
+/// Most result cells one What-If data table may have.
+pub const MAX_DATA_TABLE_CELLS: u64 = 100_000;
+
+/// A What-If data table (`{=TABLE(row_input, column_input)}`), a multi-cell formula over its
+/// results. The range's top row and left column are its edges: input values along one or both of
+/// them, and the formulas along the other (for a two-variable table, one formula in the top-left
+/// corner). The rest of the range is the body: each body cell holds a formula's result with the
+/// edge value substituted into the input cell. Input cells are on the table's sheet, outside the
+/// range.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataTable {
+    pub range: RangeRef,
+    /// Receives the values across the top row.
+    pub row_input: Option<CellRef>,
+    /// Receives the values down the left column.
+    pub col_input: Option<CellRef>,
+}
+
+/// One substitution of a data table: each `(input, value_cell)` input takes the value of
+/// `value_cell`, then each `(formula, result)` formula's value is copied into `result`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableTrial {
+    pub inputs: Vec<(CellRef, CellRef)>,
+    pub outputs: Vec<(CellRef, CellRef)>,
+}
+
+impl DataTable {
+    /// The results area: the range without its top row and left column.
+    pub fn body(&self) -> Option<RangeRef> {
+        let r = self.range;
+        (r.height() >= 2 && r.width() >= 2).then(|| RangeRef::new(CellRef::new(r.start.row + 1, r.start.col + 1), r.end))
+    }
+
+    /// Whether the table can be calculated: it has a body of at most [`MAX_DATA_TABLE_CELLS`]
+    /// cells and at least one input cell, outside the range.
+    pub fn is_valid(&self) -> bool {
+        self.body().is_some_and(|b| b.count() <= MAX_DATA_TABLE_CELLS)
+            && (self.row_input.is_some() || self.col_input.is_some())
+            && [self.row_input, self.col_input].into_iter().flatten().all(|c| !self.range.contains(c))
+    }
+
+    /// Whether `c` is on the top row or the left column (the cells the results depend on).
+    pub fn is_edge(&self, c: CellRef) -> bool {
+        self.range.contains(c) && (c.row == self.range.start.row || c.col == self.range.start.col)
+    }
+
+    /// The text body cells show: `TABLE(B1,B2)`, with an absent input left blank (`TABLE(,B2)`).
+    pub fn formula_text(&self) -> String {
+        let a = |c: Option<CellRef>| c.map(|c| c.a1()).unwrap_or_default();
+        format!("TABLE({},{})", a(self.row_input), a(self.col_input))
+    }
+
+    /// The substitutions that fill the body, grouped so that each is computed once. Empty for a
+    /// table that isn't [valid](Self::is_valid).
+    pub fn trials(&self) -> Vec<TableTrial> {
+        let Some(body) = self.body().filter(|_| self.is_valid()) else { return vec![] };
+        let (r0, c0) = (self.range.start.row, self.range.start.col);
+        match (self.row_input, self.col_input) {
+            // Values down the left column, formulas across the top row.
+            (None, Some(ci)) => (body.start.row..=body.end.row)
+                .map(|row| TableTrial {
+                    inputs: vec![(ci, CellRef::new(row, c0))],
+                    outputs: (body.start.col..=body.end.col).map(|col| (CellRef::new(r0, col), CellRef::new(row, col))).collect(),
+                })
+                .collect(),
+            // Values across the top row, formulas down the left column.
+            (Some(ri), None) => (body.start.col..=body.end.col)
+                .map(|col| TableTrial {
+                    inputs: vec![(ri, CellRef::new(r0, col))],
+                    outputs: (body.start.row..=body.end.row).map(|row| (CellRef::new(row, c0), CellRef::new(row, col))).collect(),
+                })
+                .collect(),
+            // One formula in the corner; every body cell is its own substitution.
+            (Some(ri), Some(ci)) => body
+                .iter()
+                .map(|c| TableTrial {
+                    inputs: vec![(ri, CellRef::new(r0, c.col)), (ci, CellRef::new(c.row, c0))],
+                    outputs: vec![(self.range.start, c)],
+                })
+                .collect(),
+            (None, None) => vec![],
+        }
+    }
+}
+
 // ---------------------------------------------------------------- pivot tables
 
 /// How a PivotTable lays out its row fields.

@@ -9,6 +9,10 @@
 //! calculation is on: then a formula read while it is being evaluated gives its previous value,
 //! and the formulas that read one are evaluated again until the loop settles
 //! (`PassHost::iterate_loops`).
+//!
+//! What-If data tables (`{=TABLE()}`) are calculated after the formulas: each result is a
+//! [`Trial`] that substitutes an edge value into the input cell and recalculates the formula on
+//! a copy of the workbook ([`Calc::refresh_tables`]).
 
 use std::collections::{BTreeSet, VecDeque};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -371,11 +375,14 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Set inside a what-if trial, where data tables are not calculated (a table whose formulas
+    /// depend on a data table would otherwise recurse).
+    in_trial: bool,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0, in_trial: false }
     }
 }
 
@@ -809,7 +816,7 @@ impl Calc {
         self.graph.settle();
     }
 
-    /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
+    /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading), data tables included.
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
@@ -824,6 +831,7 @@ impl Calc {
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
         self.run(wb, all, true);
+        self.refresh_tables(wb, None);
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -908,13 +916,26 @@ impl Calc {
         let dirty = self.dirty_closure(wb, &seeds);
         let t1 = prof_now();
         let n = dirty.len();
+        // Data tables whose edges changed are calculated after the formulas (not in Automatic
+        // Except for Data Tables mode, where they wait for F9).
+        let tables = wb.calc.mode == CalcMode::Automatic && wb.sheets.iter().any(|s| !s.data_tables.is_empty());
+        let trigger: Option<HashSet<Key>> = tables.then(|| changed.iter().chain(dirty.iter()).copied().collect());
         self.run(wb, dirty, false);
+        if let Some(t) = trigger {
+            self.refresh_tables(wb, Some(t));
+        }
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
     }
 
     fn dirty_closure(&self, _wb: &Workbook, seeds: &[Key]) -> Vec<Key> {
+        self.closure(seeds, true)
+    }
+
+    /// The formulas that depend on `seeds` (and the seeds that are formulas), transitively; with
+    /// `dynamic`, also every formula whose references are only known while evaluating.
+    fn closure(&self, seeds: &[Key], dynamic: bool) -> Vec<Key> {
         let mut seen: HashSet<Key> = HashSet::default();
         let mut queue: VecDeque<Key> = VecDeque::new();
         for k in seeds {
@@ -929,7 +950,7 @@ impl Calc {
                 }
             }
         }
-        for k in &self.graph.dynamic {
+        for k in self.graph.dynamic.iter().filter(|_| dynamic) {
             if seen.insert(*k) {
                 queue.push_back(*k);
             }
@@ -1083,6 +1104,162 @@ impl Calc {
 /// when no clock is available.
 pub fn now_serial() -> f64 {
     gridcraft_core::date::unix_now_ms().map_or(46302.5, gridcraft_core::date::serial_from_unix_ms)
+}
+
+// ---------------------------------------------------------------- what-if trials and data tables
+
+/// Evaluates a workbook with some cells replaced by constants, without changing it: the workbook
+/// is cloned (cheap, as sheets and cell bands are copy-on-write) and only the replaced cells'
+/// dependents are recalculated with the dependency graph. Goal Seek, Scenario Manager, Solver and
+/// data tables use it.
+pub struct Trial {
+    base: Workbook,
+    calc: Calc,
+}
+
+impl Trial {
+    pub fn new(wb: &Workbook, calc: &Calc) -> Trial {
+        let mut base = wb.clone();
+        // What-if analysis always recalculates, even in manual mode.
+        base.calc.mode = CalcMode::Automatic;
+        let mut calc = calc.clone();
+        calc.in_trial = true;
+        Trial { base, calc }
+    }
+
+    /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
+    pub fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Vec<Value> {
+        let mut wb = self.base.clone();
+        let mut keys = Vec::with_capacity(sets.len());
+        for (si, c, v) in sets {
+            if let Some(sh) = wb.sheet_mut(*si) {
+                let style = sh.style_id(*c);
+                sh.set_cell(*c, gridcraft_model::Cell { value: v.clone(), formula: None, style });
+                keys.push((*si, *c));
+            }
+        }
+        self.calc.cells_changed(&mut wb, &keys);
+        reads.iter().map(|(si, c)| wb.sheet(*si).map(|s| s.value(*c)).unwrap_or_default()).collect()
+    }
+}
+
+/// Result cells one refresh of the data tables may calculate, over all tables and passes. Tables
+/// past the budget keep their values until the next refresh (a hostile file can't hang a recalc).
+const MAX_REFRESH_CELLS: u64 = 1_000_000;
+
+/// Most passes of [`Calc::refresh_tables`]: a table whose formulas read another table's results
+/// is calculated after it, in the next pass when it comes first.
+const MAX_TABLE_PASSES: usize = 64;
+
+/// Calculates one data table's body: `(cell, value)` for every result cell.
+fn compute_table(wb: &Workbook, calc: &Calc, si: usize, t: &gridcraft_model::DataTable) -> Vec<(CellRef, Value)> {
+    let Some(sh) = wb.sheet(si) else { return vec![] };
+    let mut trial = Trial::new(wb, calc);
+    let mut out = Vec::new();
+    for tt in t.trials() {
+        let sets: Vec<(usize, CellRef, Value)> = tt.inputs.iter().map(|(input, from)| (si, *input, sh.value(*from))).collect();
+        let reads: Vec<(usize, CellRef)> = tt.outputs.iter().map(|(f, _)| (si, *f)).collect();
+        let values = trial.run(&sets, &reads);
+        out.extend(tt.outputs.iter().map(|(_, o)| *o).zip(values));
+    }
+    out
+}
+
+impl Calc {
+    /// The data tables a refresh calculates, as `(sheet, table, circular)`: valid ones, within the
+    /// cell budget, flagged when the table's edge cells depend on its own results (directly or
+    /// through other tables). Like any circular reference, those give `#CIRC!`. Dependencies
+    /// through references only known while evaluating (INDIRECT, OFFSET) aren't followed here;
+    /// [`MAX_TABLE_PASSES`] bounds those loops.
+    fn table_plan(&self, wb: &Workbook) -> Vec<(usize, gridcraft_model::DataTable, bool)> {
+        let mut tables: Vec<(usize, gridcraft_model::DataTable)> = Vec::new();
+        let mut budget = MAX_REFRESH_CELLS;
+        for (si, sh) in wb.sheets.iter().enumerate() {
+            for t in sh.data_tables.iter().filter(|t| t.is_valid()) {
+                let Some(rest) = t.body().and_then(|b| budget.checked_sub(b.count())) else { continue };
+                budget = rest;
+                tables.push((si, t.clone()));
+            }
+        }
+        // feeds[i]: the tables whose edge formulas read table i's results.
+        let feeds: Vec<Vec<usize>> = tables
+            .iter()
+            .map(|(si, t)| {
+                let seeds: Vec<Key> = t.body().map(|b| b.iter().map(|c| (*si, c)).collect()).unwrap_or_default();
+                let reach = self.closure(&seeds, false);
+                (0..tables.len()).filter(|&j| tables.get(j).is_some_and(|(sj, u)| reach.iter().any(|(s, c)| s == sj && u.is_edge(*c)))).collect()
+            })
+            .collect();
+        let circular = |i: usize| -> bool {
+            let mut seen = vec![false; tables.len()];
+            let mut stack: Vec<usize> = feeds.get(i).cloned().unwrap_or_default();
+            while let Some(j) = stack.pop() {
+                if j == i {
+                    return true;
+                }
+                if let Some(s) = seen.get_mut(j)
+                    && !*s
+                {
+                    *s = true;
+                    stack.extend(feeds.get(j).into_iter().flatten().copied());
+                }
+            }
+            false
+        };
+        let flags: Vec<bool> = (0..tables.len()).map(circular).collect();
+        tables.into_iter().zip(flags).map(|((si, t), c)| (si, t, c)).collect()
+    }
+
+    /// Calculates data tables: all of them (`trigger = None`), or those with an edge cell (input
+    /// value or formula) in `trigger`. Results are written as values and their dependents
+    /// recalculated; tables that read other tables' results are calculated again in later passes.
+    fn refresh_tables(&mut self, wb: &mut Workbook, trigger: Option<HashSet<Key>>) {
+        if self.in_trial {
+            return;
+        }
+        let triggered = |si: usize, t: &gridcraft_model::DataTable, tr: &HashSet<Key>| tr.iter().any(|(s, c)| *s == si && t.is_edge(*c));
+        if let Some(tr) = &trigger
+            && !wb.sheets.iter().enumerate().any(|(si, sh)| sh.data_tables.iter().any(|t| triggered(si, t, tr)))
+        {
+            return;
+        }
+        let plan = self.table_plan(wb);
+        let mut trigger = trigger;
+        let circ = Value::Error(CellError::Circ);
+        for pass in 0..plan.len().clamp(1, MAX_TABLE_PASSES) {
+            let mut written: Vec<Key> = Vec::new();
+            for (si, t, circular) in &plan {
+                let si = *si;
+                // Whether a table is in a loop can change with an edit of another table's
+                // formulas: circular tables, and tables that were circular, are checked whenever
+                // a refresh runs.
+                let was_circular =
+                    || pass == 0 && t.body().is_some_and(|b| wb.sheet(si).is_some_and(|sh| sh.cells.iter_range(b).any(|(_, x)| x.value == circ)));
+                if !*circular && trigger.as_ref().is_some_and(|tr| !triggered(si, t, tr)) && !was_circular() {
+                    continue;
+                }
+                let results = match t.body() {
+                    Some(body) if *circular => body.iter().map(|c| (c, circ.clone())).collect(),
+                    _ => compute_table(wb, self, si, t),
+                };
+                let Some(sh) = wb.sheet_mut(si) else { continue };
+                for (c, v) in results {
+                    if sh.value(c) != v || sh.cell(c).is_some_and(|x| x.formula.is_some()) {
+                        let style = sh.style_id(c);
+                        sh.set_cell(c, gridcraft_model::Cell { value: v, formula: None, style });
+                        written.push((si, c));
+                    }
+                }
+            }
+            if written.is_empty() {
+                break;
+            }
+            let dirty = self.dirty_closure(wb, &written);
+            let next: HashSet<Key> = written.iter().chain(dirty.iter()).copied().collect();
+            self.run(wb, dirty, false);
+            trigger = Some(next);
+        }
+    }
 }
 
 /// Evaluates a formula in the context of a cell without storing it (conditional formats, data

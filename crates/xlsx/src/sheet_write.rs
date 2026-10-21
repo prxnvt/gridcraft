@@ -261,6 +261,10 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     keys.extend(sheet.cell_pictures.keys().copied());
     keys.extend(extra.keys().copied());
     keys.extend(overrides.keys().copied());
+    // Each data table's `<f t="dataTable">` is on its first result cell.
+    let table_at: BTreeMap<CellRef, &gridcraft_model::DataTable> =
+        sheet.data_tables.iter().filter(|t| t.is_valid()).filter_map(|t| t.body().map(|b| (b.start, t))).collect();
+    keys.extend(table_at.keys().copied());
     let mut rows: BTreeMap<u32, Vec<CellRef>> = BTreeMap::new();
     for k in keys {
         rows.entry(k.row).or_default().push(k);
@@ -299,6 +303,10 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let cell = sheet.cells.get(*c);
             let ov = overrides.get(c);
             let ex = extra.get(c);
+            if let Some(t) = table_at.get(c) {
+                write_table_cell(&mut s, *c, cell, t, &sid, out);
+                continue;
+            }
             let array = dynamic.get(c).copied().or_else(|| {
                 let f = cell?.formula.as_ref()?;
                 (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
@@ -697,6 +705,63 @@ fn write_cell(
             let _ = write!(s, " t=\"e\"><v>{}</v></c>", e.as_str());
         }
     }
+}
+
+/// A data table's first result cell: the `dataTable` formula that describes the whole table, and
+/// the cell's cached result. The other result cells are written as values.
+fn write_table_cell(
+    s: &mut String,
+    c: CellRef,
+    cell: Option<&Cell>,
+    t: &gridcraft_model::DataTable,
+    sid: &dyn Fn(gridcraft_model::StyleId) -> u32,
+    out: &mut Out,
+) {
+    let style = cell.map(|x| sid(x.style)).unwrap_or(0);
+    let _ = write!(s, "<c r=\"{}\"", c.a1());
+    if style != 0 {
+        let _ = write!(s, " s=\"{style}\"");
+    }
+    let value = match cell.map(|x| x.value.scalar()).unwrap_or(Value::Empty) {
+        Value::Error(CellError::Circ) => Value::Number(0.0),
+        Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
+        v => v,
+    };
+    s.push_str(match &value {
+        Value::Text(_) => " t=\"str\"",
+        Value::Bool(_) => " t=\"b\"",
+        Value::Error(_) => " t=\"e\"",
+        _ => "",
+    });
+    let body = t.body().unwrap_or(RangeRef::cell(c));
+    let (two, row, r1, r2) = match (t.row_input, t.col_input) {
+        (Some(r), Some(col)) => (true, false, Some(r), Some(col)),
+        (Some(r), None) => (false, true, Some(r), None),
+        (None, col) => (false, false, col, None),
+    };
+    let _ = write!(s, "><f t=\"dataTable\" ref=\"{}\" dt2D=\"{}\" dtr=\"{}\"", body.a1(), u8::from(two), u8::from(row));
+    for (k, r) in [("r1", r1), ("r2", r2)] {
+        if let Some(r) = r {
+            let _ = write!(s, " {k}=\"{}\"", r.a1());
+        }
+    }
+    s.push_str("/>");
+    match &value {
+        Value::Number(n) => {
+            let _ = write!(s, "<v>{}</v>", num(*n));
+        }
+        Value::Text(x) => {
+            let _ = write!(s, "<v>{}</v>", esc(&encode_xstring(x)));
+        }
+        Value::Bool(b) => {
+            let _ = write!(s, "<v>{}</v>", *b as u8);
+        }
+        Value::Error(e) => {
+            let _ = write!(s, "<v>{}</v>", e.as_str());
+        }
+        _ => out.needs_calc = true,
+    }
+    s.push_str("</c>");
 }
 
 fn cfvo_xml(v: &CfValueKind) -> String {

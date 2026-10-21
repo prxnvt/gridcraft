@@ -69,6 +69,10 @@ fn active_input(app: &SheetApp) -> String {
     if let Some(picture) = sh.cell_pictures.get(&a) {
         return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
     }
+    // A data table's results show its {=TABLE()} formula.
+    if let Some(t) = sh.data_table_at(a) {
+        return if gridcraft_engine::display::formula_hidden(&d.wb, sh, a) { String::new() } else { format!("{{={}}}", t.formula_text()) };
+    }
     if let Some(c) = sh.cell(a) {
         if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();

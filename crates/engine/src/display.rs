@@ -63,13 +63,14 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 }
 
 /// Whether `c` has a formula that must not be shown: its cell is formatted Hidden on a
-/// protected sheet. A spilled cell follows its anchor.
+/// protected sheet. A spilled cell follows its anchor; a data table's result cell has the table's formula.
 pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
     if !sheet.is_protected() {
         return false;
     }
     let at = match sheet.cell(c) {
         Some(x) if x.formula.is_some() => c,
+        _ if sheet.data_table_at(c).is_some() => c,
         _ => match sheet.spill_ranges.iter().find(|(_, r)| r.contains(c)) {
             Some((anchor, _)) => *anchor,
             None => return false,
@@ -80,11 +81,13 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
 
 /// The text a cell shows (full precision General; the grid narrows General to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
-    if sheet.show_formulas
-        && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
-        && !formula_hidden(wb, sheet, c)
-    {
-        return format!("={}", f.text);
+    if sheet.show_formulas && !formula_hidden(wb, sheet, c) {
+        if let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref()) {
+            return format!("={}", f.text);
+        }
+        if let Some(t) = sheet.data_table_at(c) {
+            return format!("{{={}}}", t.formula_text());
+        }
     }
     value_text(wb, sheet, c)
 }

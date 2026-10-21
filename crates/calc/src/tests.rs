@@ -968,3 +968,155 @@ fn trim_references() {
     t.set("K20", "=SUM(Q1:.Q9)");
     assert_eq!(t.get("K20"), Value::Error(CellError::Calc));
 }
+
+fn table(range: &str, row_input: Option<&str>, col_input: Option<&str>) -> gridcraft_model::DataTable {
+    gridcraft_model::DataTable { range: gridcraft_core::RangeRef::parse(range).unwrap(), row_input: row_input.map(c), col_input: col_input.map(c) }
+}
+
+#[test]
+fn data_tables_recalculate_with_their_inputs_and_formulas() {
+    let mut t = T::new();
+    // Rate B1, amount B2; a one-variable table with amounts down D3:D5 and two formulas.
+    t.set("B1", "0.1");
+    t.set("B2", "1000");
+    for (cell, v) in [("D3", "100"), ("D4", "200"), ("D5", "300")] {
+        t.set(cell, v);
+    }
+    t.set("E2", "=B2*(1+B1)");
+    t.set("F2", "=B2*2");
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("D2:F5", None, Some("B2")));
+    t.set("H1", "=SUM(E3:E5)");
+    t.calc.recalc_all(&mut t.wb);
+    assert!((t.num("E3") - 110.0).abs() < 1e-9);
+    assert_eq!(t.num("F5"), 600.0);
+    assert!((t.num("H1") - 660.0).abs() < 1e-9, "formulas over the results recalculate");
+    assert_eq!(t.num("B2"), 1000.0, "the input cell keeps its value");
+    // A precedent of the formulas changes: the results and their dependents follow.
+    t.set("B1", "0.5");
+    assert_eq!(t.num("E4"), 300.0);
+    assert_eq!(t.num("H1"), 900.0);
+    // So does an input value on the edge.
+    t.set("D3", "1000");
+    assert_eq!(t.num("E3"), 1500.0);
+    // And a formula on the edge.
+    t.set("F2", "=B2*3");
+    assert_eq!(t.num("F4"), 600.0);
+    // Two-variable: rates across the top (row input B1), amounts down the side (column input B2).
+    t.set("J1", "=B2*B1");
+    for (cell, v) in [("K1", "1"), ("L1", "2"), ("J2", "10"), ("J3", "20")] {
+        t.set(cell, v);
+    }
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("J1:L3", Some("B1"), Some("B2")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("K2"), t.num("L2"), t.num("K3"), t.num("L3")), (10.0, 20.0, 20.0, 40.0));
+    t.set("J1", "=B2*B1+1");
+    assert_eq!(t.num("L3"), 41.0);
+    t.set("L1", "3");
+    assert_eq!(t.num("L3"), 61.0);
+    // Row-oriented one-variable table: rates across the top, a formula down the left column.
+    t.set("N2", "=B2*B1");
+    for (cell, v) in [("O1", "1"), ("P1", "3")] {
+        t.set(cell, v);
+    }
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("N1:P2", Some("B1"), None));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("O2"), t.num("P2")), (1000.0, 3000.0));
+}
+
+#[test]
+fn data_tables_wait_for_f9_in_except_tables_and_manual_modes() {
+    for mode in [gridcraft_model::CalcMode::AutomaticExceptTables, gridcraft_model::CalcMode::Manual] {
+        let mut t = T::new();
+        t.set("B1", "2");
+        t.set("E1", "=B1*10");
+        t.set("D2", "1");
+        t.set("D3", "2");
+        t.wb.sheet_mut(0).unwrap().data_tables.push(table("D1:E3", None, Some("B1")));
+        t.calc.recalc_all(&mut t.wb);
+        assert_eq!(t.num("E3"), 20.0);
+        t.wb.calc.mode = mode;
+        t.set("E1", "=B1*100");
+        assert_eq!(t.num("E3"), 20.0, "{mode:?}");
+        t.calc.recalc_all(&mut t.wb);
+        assert_eq!(t.num("E3"), 200.0, "{mode:?}");
+    }
+}
+
+#[test]
+fn data_tables_that_read_their_own_results_are_circular() {
+    let mut t = T::new();
+    // A formula on the edge reads the table's own results: a circular reference.
+    t.set("B1", "1");
+    t.set("E1", "=B1+SUM(E2:E3)");
+    t.set("D2", "1");
+    t.set("D3", "2");
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("D1:E3", None, Some("B1")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("E2"), Value::Error(CellError::Circ));
+    t.set("B1", "5");
+    assert_eq!(t.get("E3"), Value::Error(CellError::Circ));
+    // So do two tables that read each other's results.
+    t.set("E1", "=B1+SUM(H2:H3)");
+    t.set("H1", "=B2+SUM(E2:E3)");
+    t.set("G2", "1");
+    t.set("G3", "2");
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("G1:H3", None, Some("B2")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.get("E2"), t.get("H3")), (Value::Error(CellError::Circ), Value::Error(CellError::Circ)));
+    // Breaking the loop calculates both again.
+    t.set("H1", "=B2*2");
+    assert_eq!((t.num("H3"), t.num("E2")), (4.0, 7.0));
+}
+
+#[test]
+fn data_tables_that_read_tables_follow_them() {
+    let mut t = T::new();
+    t.set("B1", "5");
+    // A second table whose formula reads the first table's results follows it.
+    t.set("D2", "1");
+    t.set("D3", "2");
+    t.set("G1", "=E2*B1");
+    t.set("H1", "=SUM(E2:E3)");
+    t.set("F2", "1");
+    t.set("F3", "2");
+    t.set("E1", "=B1*10");
+    // Listed first, so it waits for the second pass.
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("F1:H3", None, Some("B2")));
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("D1:E3", None, Some("B1")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("H2"), 30.0);
+    t.set("E1", "=B1*100");
+    assert_eq!((t.num("E3"), t.num("H3")), (200.0, 300.0));
+}
+
+#[test]
+fn hostile_data_tables_are_not_calculated() {
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("B1", "=A1");
+    let sh = t.wb.sheet_mut(0).unwrap();
+    // Too many result cells, no input cell, an input cell inside the table, a one-cell range.
+    sh.data_tables.push(table("A10:XFD1048576", None, Some("A1")));
+    sh.data_tables.push(table("A2:B3", None, None));
+    sh.data_tables.push(table("C2:D3", None, Some("D3")));
+    sh.data_tables.push(table("F2:F2", None, Some("A1")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("B20"), Value::Empty);
+    assert_eq!(t.get("D3"), Value::Empty);
+    t.set("A1", "2");
+    assert_eq!(t.num("B1"), 2.0);
+}
+
+#[test]
+fn data_tables_over_indirect_references_are_calculated() {
+    let mut t = T::new();
+    t.set("B1", "2");
+    t.set("E1", "=INDIRECT(\"B1\")*10");
+    t.set("D2", "1");
+    t.set("D3", "3");
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("D1:E3", None, Some("B1")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("E2"), t.num("E3")), (10.0, 30.0));
+    t.set("D3", "4");
+    assert_eq!(t.num("E3"), 40.0);
+}

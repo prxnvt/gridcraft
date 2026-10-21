@@ -22,7 +22,7 @@ use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Cell, DefinedName, Workbook};
 use serde_json::{Value as Json, json};
 
-use super::whatif::Trial;
+use super::whatif::{Trial, trial};
 use super::*;
 
 const CMD: &str = "data.solver";
@@ -1218,7 +1218,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     let sh = d.wb.sheet(model.sheet).ok_or(EngineError::NoDocument)?;
     let x0: Vec<f64> = model.vars.iter().map(|c| as_num(&sh.value(*c))).map(|v| if v.is_finite() { v } else { 0.0 }).collect();
     let mut ev = Evaluator {
-        trial: Trial::new(d),
+        trial: trial(d),
         sheet: model.sheet,
         vars: model.vars.clone(),
         objective: model.objective,

@@ -8,9 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gridcraft_calc::Calc;
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, Cell, DefinedName, Sheet, StyleId, Workbook};
+use gridcraft_model::{CalcMode, Cell, DefinedName, MAX_DATA_TABLE_CELLS, Sheet, StyleId, Workbook};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
@@ -61,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Data Table…",
             ["Data", "Forecast", "What-If Analysis"],
             None,
-            "{range: \"D2:E10\", rowInput?: \"B1\", columnInput?: \"B2\"} one-variable (values down the first column with columnInput, or across the top row with rowInput; formulas in the other edge) or two-variable (formula in the top-left corner). Computes every result by substitution and writes static values (a snapshot, not a live {=TABLE()}); ≤100,000 cells.",
+            "{range: \"D2:E10\", rowInput?: \"B1\", columnInput?: \"B2\", static?: bool} → {range, cells, mode, formula, static}. Creates a live data table {=TABLE(rowInput,columnInput)} over the results: one-variable (values down the first column with columnInput, or across the top row with rowInput; formulas along the other edge) or two-variable (formula in the top-left corner). Input cells are on the table's sheet, outside it. The results recalculate with the workbook (in Automatic Except for Data Tables mode, on F9); editing part of them is refused, clearing all of them removes the table. `static: true` instead writes the results once as values (input cells on any sheet). ≤100,000 result cells.",
             has_doc,
             data_table
         ),
@@ -180,34 +179,12 @@ fn value_json(v: &Value) -> Json {
 
 // ---------------------------------------------------------------- trials
 
-/// Evaluates a workbook with some input cells replaced, without touching the document.
-pub(crate) struct Trial {
-    base: Workbook,
-    calc: Calc,
-}
+/// What-if trials (shared with data tables, in calc, and Solver).
+pub(crate) use gridcraft_calc::Trial;
 
-impl Trial {
-    pub(crate) fn new(d: &DocState) -> Trial {
-        let mut base = (*d.wb).clone();
-        // What-if analysis always recalculates, even in manual mode.
-        base.calc.mode = CalcMode::Automatic;
-        Trial { base, calc: d.calc.clone() }
-    }
-
-    /// Sets `sets` to constants, recalculates their dependents and reads `reads`.
-    pub(crate) fn run(&mut self, sets: &[(usize, CellRef, Value)], reads: &[(usize, CellRef)]) -> Vec<Value> {
-        let mut wb = self.base.clone();
-        let mut keys = Vec::with_capacity(sets.len());
-        for (si, c, v) in sets {
-            if let Some(sh) = wb.sheet_mut(*si) {
-                let style = sh.style_id(*c);
-                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style });
-                keys.push((*si, *c));
-            }
-        }
-        self.calc.cells_changed(&mut wb, &keys);
-        reads.iter().map(|(si, c)| wb.sheet(*si).map(|s| s.value(*c)).unwrap_or_default()).collect()
-    }
+/// A trial on the document's workbook.
+pub(crate) fn trial(d: &DocState) -> Trial {
+    Trial::new(&d.wb, &d.calc)
 }
 
 // ---------------------------------------------------------------- goal seek
@@ -322,7 +299,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let x0 = d.wb.sheet(csi).map(|sh| sh.value(chg)).and_then(|v| v.as_f64()).unwrap_or(0.0);
     let (max_iter, tol) = (d.wb.calc.max_iterations, d.wb.calc.max_change);
-    let mut trial = Trial::new(d);
+    let mut trial = trial(d);
     let mut f = |x: f64| -> f64 {
         trial.run(&[(csi, chg, Value::number(x))], &[(ssi, set)]).first().and_then(Value::as_f64).map(|v| v - target).unwrap_or(f64::NAN)
     };
@@ -550,7 +527,7 @@ fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let current: Vec<Value> = changing.iter().map(|c| sh.value(*c)).collect();
     let current_results: Vec<Value> = results.iter().map(|c| sh.value(*c)).collect();
-    let mut trial = Trial::new(d);
+    let mut trial = trial(d);
     let reads: Vec<(usize, CellRef)> = results.iter().map(|c| (si, *c)).collect();
     let scenario_results: Vec<Vec<Value>> = per
         .iter()
@@ -624,9 +601,153 @@ fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- data tables
 
-const MAX_TABLE_CELLS: u64 = 100_000;
+/// Excel's message for an edit of some, not all, of a data table's results.
+pub(crate) const DATA_TABLE_PART: &str = "Cannot change part of a data table.";
+
+/// Excel's message for an input cell that can't be used.
+const BAD_INPUT: &str = "Input cell reference is not valid.";
 
 fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "data.dataTable";
+    if bool_param(p, "static").unwrap_or(false) {
+        return data_table_static(s, p);
+    }
+    let (si, r) = range_arg(s, p, "range", CMD)?;
+    let input = |key: &str| -> Result<Option<CellRef>> {
+        if !p.get(key).and_then(Json::as_str).is_some_and(|t| !t.trim().is_empty()) {
+            return Ok(None);
+        }
+        let (isi, c) = cell_arg(s, p, key, CMD)?;
+        // A live table substitutes into a cell of its own sheet, outside the table.
+        if isi != si || r.contains(c) {
+            return Err(EngineError::Other(BAD_INPUT.into()));
+        }
+        Ok(Some(c))
+    };
+    let (row_input, col_input) = (input("rowInput")?, input("columnInput")?);
+    if row_input.is_none() && col_input.is_none() {
+        return Err(bad(CMD, "give `rowInput`, `columnInput` or both"));
+    }
+    if r.height() < 2 || r.width() < 2 {
+        return Err(bad(CMD, "the table needs at least two rows and two columns"));
+    }
+    let table = gridcraft_model::DataTable { range: r, row_input, col_input };
+    let Some(body) = table.body().filter(|b| b.count() <= MAX_DATA_TABLE_CELLS) else {
+        return Err(bad(CMD, format!("the table body is too large ({MAX_DATA_TABLE_CELLS} cells max)")));
+    };
+    let d = s.doc()?;
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    if sh.data_tables.iter().any(|t| t.range != r && t.range.intersects(&r)) {
+        return Err(EngineError::Other(DATA_TABLE_PART.into()));
+    }
+    let same = sh.data_tables.contains(&table);
+    let mode = match (row_input, col_input) {
+        (Some(_), Some(_)) => "twoVariable",
+        (Some(_), None) => "row",
+        _ => "column",
+    };
+    let formula = format!("{{={}}}", table.formula_text());
+    // Outside automatic calculation the edit alone wouldn't calculate the new table.
+    let full = d.wb.calc.mode != CalcMode::Automatic;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(si)?;
+        // Data Table over a table's own range replaces that table.
+        sh.data_tables.retain(|t| t.range != r);
+        if !same {
+            // The results replace what the body held.
+            for c in body.iter() {
+                let style = sh.style_id(c);
+                sh.set_cell(c, Cell { value: Value::Empty, formula: None, style });
+            }
+        }
+        sh.data_tables.push(table);
+        for c in r.iter() {
+            cx.touch(si, c);
+        }
+        cx.structural = full;
+        Ok(())
+    })?;
+    Ok(json!({"range": body.a1(), "cells": body.count(), "mode": mode, "formula": formula, "static": false}))
+}
+
+/// Refuses an edit that changed what some, not all, of a data table's result cells hold, or that
+/// left two tables overlapping. An edit that empties all of a table's results (Clear Contents over
+/// them) removes the table. Tables the edit added, moved or replaced are the command's own and
+/// their results aren't checked.
+pub(crate) fn check_data_tables(old: &Workbook, new: &mut Workbook) -> Result<()> {
+    for si in 0..new.sheets.len() {
+        let Some(after) = new.sheets.get(si) else { continue };
+        if after.data_tables.is_empty() {
+            continue;
+        }
+        let Some(before) = old.sheet_index(&after.name).and_then(|i| old.sheets.get(i)) else { continue };
+        if std::sync::Arc::ptr_eq(before, after) {
+            continue;
+        }
+        // A cut and paste can bring one table onto another.
+        if after.data_tables != before.data_tables
+            && after.data_tables.iter().enumerate().any(|(i, t)| after.data_tables.iter().skip(i + 1).any(|u| u.range.intersects(&t.range)))
+        {
+            return Err(EngineError::Other(DATA_TABLE_PART.into()));
+        }
+        let changed: Vec<CellRef> = before.cells.diff(&after.cells).into_iter().filter(|c| !same_content(before.cell(*c), after.cell(*c))).collect();
+        if changed.is_empty() {
+            continue;
+        }
+        let mut cleared: Vec<RangeRef> = Vec::new();
+        for t in after.data_tables.iter().filter(|t| before.data_tables.contains(t)) {
+            let Some(body) = t.body() else { continue };
+            if !changed.iter().any(|c| body.contains(*c)) {
+                continue;
+            }
+            if after.cells.iter_range(body).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+                return Err(EngineError::Other(DATA_TABLE_PART.into()));
+            }
+            cleared.push(t.range);
+        }
+        if !cleared.is_empty()
+            && let Some(sh) = new.sheet_mut(si)
+        {
+            sh.data_tables.retain(|t| !cleared.contains(&t.range));
+        }
+    }
+    Ok(())
+}
+
+/// Moves a sheet's data tables with a structural edit or a cut on it: the range and the input
+/// cells follow the cells. A table whose input cell is deleted, moves to another sheet or into the
+/// table keeps its results as values; so does one the edit reshapes (the commands refuse those
+/// edits first).
+pub(crate) fn adjust_data_tables(sh: &mut Sheet, e: &gridcraft_formula::adjust::Edit) {
+    if sh.data_tables.is_empty() {
+        return;
+    }
+    let map = |r: RangeRef| -> Option<RangeRef> {
+        match e {
+            gridcraft_formula::adjust::Edit::MoveToSheet { from, .. } => (!from.intersects(&r)).then_some(r),
+            _ => super::sheet::map_range(r, e),
+        }
+    };
+    let cell = |c: Option<CellRef>| -> Option<Option<CellRef>> {
+        match c {
+            Some(c) => map(RangeRef::cell(c)).map(|r| Some(r.start)),
+            None => Some(None),
+        }
+    };
+    sh.data_tables = std::mem::take(&mut sh.data_tables)
+        .into_iter()
+        .filter_map(|t| {
+            let range = map(t.range).filter(|n| n.width() == t.range.width() && n.height() == t.range.height())?;
+            Some(gridcraft_model::DataTable { range, row_input: cell(t.row_input)?, col_input: cell(t.col_input)? })
+        })
+        // An input cell moved into the table, or the table moved over it.
+        .filter(gridcraft_model::DataTable::is_valid)
+        .collect();
+}
+
+/// The static form: every result is computed once by substitution and written as a value (a
+/// snapshot, not a live table). Input cells may be on any sheet.
+fn data_table_static(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.dataTable";
     let (si, r) = range_arg(s, p, "range", CMD)?;
     let row_in = if p.get("rowInput").and_then(Json::as_str).is_some_and(|t| !t.is_empty()) { Some(cell_arg(s, p, "rowInput", CMD)?) } else { None };
@@ -639,8 +760,8 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(CMD, "the table needs at least two rows and two columns"));
     }
     let body = RangeRef::new(CellRef::new(r.start.row + 1, r.start.col + 1), r.end);
-    if body.count() > MAX_TABLE_CELLS {
-        return Err(bad(CMD, format!("the table body is too large ({MAX_TABLE_CELLS} cells max)")));
+    if body.count() > MAX_DATA_TABLE_CELLS {
+        return Err(bad(CMD, format!("the table body is too large ({MAX_DATA_TABLE_CELLS} cells max)")));
     }
     for input in [row_in, col_in].into_iter().flatten() {
         if input.0 == si && r.contains(input.1) {
@@ -650,7 +771,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let (r0, c0) = (r.start.row, r.start.col);
-    let mut trial = Trial::new(d);
+    let mut trial = trial(d);
     let mut out: Vec<(CellRef, Value)> = Vec::with_capacity(body.count() as usize);
     let mode = match (row_in, col_in) {
         (None, Some((isi, ic))) => {
@@ -691,6 +812,8 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let n = out.len();
     edit(s, |cx| {
+        // A snapshot over a live table's range replaces the table.
+        cx.sheet_mut(si)?.data_tables.retain(|t| t.range != r);
         for (c, v) in out {
             let sh = cx.sheet_mut(si)?;
             let style = sh.style_id(c);
@@ -1277,6 +1400,213 @@ mod tests {
         assert!(s.execute("data.dataTable", json!({"range": "L1:N3"})).is_err());
         assert!(s.execute("data.dataTable", json!({"range": "A1:XFD100000", "columnInput": "B2"})).is_err());
         assert!(s.execute("data.dataTable", json!({"range": "L1:N3", "columnInput": "M2"})).is_err());
+    }
+
+    fn tables(s: &Session) -> Vec<gridcraft_model::DataTable> {
+        s.doc().unwrap().wb.active().unwrap().data_tables.clone()
+    }
+
+    /// Rate B1, amount B2; amounts down D3:D5 and a formula in E2 (column input B2).
+    fn loan(s: &mut Session) {
+        s.execute("range.setValues", json!({"range": "B1", "values": [[0.05], [1000]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D3", "values": [[100], [200], [300]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "E2", "input": "=B2*(1+B1)"})).unwrap();
+        s.execute("cell.set", json!({"cell": "H1", "input": "=SUM(E3:E5)"})).unwrap();
+    }
+
+    #[test]
+    fn data_tables_are_live() {
+        let mut s = s();
+        loan(&mut s);
+        let r = s.execute("data.dataTable", json!({"range": "$D$2:$E$5", "columnInput": "$B$2"})).unwrap();
+        assert_eq!((r["formula"].as_str(), r["static"].as_bool(), r["cells"].as_u64()), (Some("{=TABLE(,B2)}"), Some(false), Some(3)));
+        assert!((n(&s, "H1") - 630.0).abs() < 1e-9);
+        // A precedent of the formula changes: the results and the formulas over them follow.
+        s.execute("cell.set", json!({"cell": "B1", "input": "0.1"})).unwrap();
+        assert!((n(&s, "E3") - 110.0).abs() < 1e-9);
+        assert!((n(&s, "H1") - 660.0).abs() < 1e-9);
+        // So do an input value and the formula itself.
+        s.execute("cell.set", json!({"cell": "D5", "input": "1000"})).unwrap();
+        assert!((n(&s, "E5") - 1100.0).abs() < 1e-9);
+        s.execute("cell.set", json!({"cell": "E2", "input": "=B2*2"})).unwrap();
+        assert_eq!(n(&s, "E4"), 400.0);
+        assert_eq!(n(&s, "B2"), 1000.0, "the input cell keeps its value");
+        let got = s.execute("cell.get", json!({"cell": "E4"})).unwrap();
+        assert_eq!(got["formula"], "{=TABLE(,B2)}");
+        // Undo goes back through the edits, then removes the table.
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!((n(&s, "E4") - 220.0).abs() < 1e-9);
+        s.execute("edit.undo", json!({"steps": 3})).unwrap();
+        assert!(tables(&s).is_empty());
+        assert_eq!(v(&s, "E4"), Value::Empty);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(tables(&s).len(), 1);
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9);
+
+        // Two-variable: rates across the top (row input B1), amounts down the side (column input B2).
+        s.execute("cell.set", json!({"cell": "L1", "input": "=B2*(1+B1)"})).unwrap();
+        s.execute("range.setValues", json!({"range": "M1", "values": [[0.5, 1]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "L2", "values": [[10], [20]]})).unwrap();
+        let r = s.execute("data.dataTable", json!({"range": "L1:N3", "rowInput": "B1", "columnInput": "B2"})).unwrap();
+        assert_eq!((r["mode"].as_str(), r["formula"].as_str()), (Some("twoVariable"), Some("{=TABLE(B1,B2)}")));
+        assert_eq!((n(&s, "M2"), n(&s, "N3")), (15.0, 40.0));
+        s.execute("cell.set", json!({"cell": "L1", "input": "=B2*B1"})).unwrap();
+        assert_eq!((n(&s, "M2"), n(&s, "N3")), (5.0, 20.0));
+        s.execute("cell.set", json!({"cell": "N1", "input": "3"})).unwrap();
+        assert_eq!(n(&s, "N3"), 60.0);
+        // Running Data Table again over the same range keeps one table.
+        s.execute("data.dataTable", json!({"range": "L1:N3", "rowInput": "B1", "columnInput": "B2"})).unwrap();
+        assert_eq!(tables(&s).len(), 2);
+        assert_eq!(n(&s, "N3"), 60.0);
+        s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "M2"})).unwrap()["text"], "{=TABLE(B1,B2)}");
+    }
+
+    #[test]
+    fn data_table_results_cannot_be_edited_in_part() {
+        let mut s = s();
+        loan(&mut s);
+        s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2"})).unwrap();
+        let part = |r: crate::Result<serde_json::Value>| matches!(r, Err(crate::EngineError::Other(m)) if m == super::DATA_TABLE_PART);
+        assert!(part(s.execute("cell.set", json!({"cell": "E4", "input": "5"}))));
+        assert!(part(s.execute("range.setValues", json!({"range": "E4", "values": [[1], [2]]}))));
+        assert!(part(s.execute("edit.clearContents", json!({"range": "E3:E4"}))));
+        assert!(part(s.execute("data.sortDescending", json!({"range": "D3:E5"}))));
+        assert!(part(s.execute("data.dataTable", json!({"range": "E3:F6", "columnInput": "B1"}))), "overlaps a table");
+        assert!(s.execute("cell.set", json!({"cell": "K1", "input": "=TABLE(B1,B2)"})).is_err());
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9);
+        // Formatting results, and editing the edges, are fine.
+        s.execute("home.bold", json!({"range": "E3:E5"})).unwrap();
+        s.execute("cell.set", json!({"cell": "D4", "input": "400"})).unwrap();
+        assert!((n(&s, "E4") - 420.0).abs() < 1e-9);
+        // Rows and cells: cutting through the table is refused; above it, table and input move.
+        assert!(part(s.execute("home.insertRows", json!({"rows": "4:4"}))));
+        assert!(part(s.execute("home.deleteRows", json!({"rows": "4:5"}))));
+        assert!(part(s.execute("home.insertCells", json!({"range": "E3", "shift": "down"}))));
+        assert!(part(s.execute("home.deleteCells", json!({"range": "D1:D2", "shift": "up"}))));
+        s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+        let t = tables(&s);
+        assert_eq!((t[0].range.a1(), t[0].col_input.map(|c| c.a1())), ("D3:E6".to_string(), Some("B3".to_string())));
+        s.execute("cell.set", json!({"cell": "B2", "input": "0.2"})).unwrap();
+        assert!((n(&s, "E4") - 120.0).abs() < 1e-9);
+        // Cutting the whole table moves it.
+        s.execute("edit.cut", json!({"range": "D3:E6"})).unwrap();
+        s.execute("edit.paste", json!({"at": "G3"})).unwrap();
+        assert_eq!(tables(&s)[0].range.a1(), "G3:H6");
+        s.execute("cell.set", json!({"cell": "B2", "input": "0.5"})).unwrap();
+        assert!((n(&s, "H4") - 150.0).abs() < 1e-9);
+        // Clearing every result removes the table; the cells then take values again.
+        s.execute("edit.clearContents", json!({"range": "H4:H6"})).unwrap();
+        assert!(tables(&s).is_empty());
+        s.execute("cell.set", json!({"cell": "H5", "input": "7"})).unwrap();
+        s.execute("edit.undo", json!({"steps": 2})).unwrap();
+        assert_eq!(tables(&s).len(), 1);
+        // Deleting the input cell leaves the results as values.
+        s.execute("home.deleteCells", json!({"range": "B3", "shift": "up"})).unwrap();
+        assert!(tables(&s).is_empty());
+        assert!((n(&s, "H4") - 150.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn data_tables_that_read_their_results_are_circular() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "B1", "values": [[1]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D2", "values": [[1], [2]]})).unwrap();
+        // The formula reads the table's own results.
+        s.execute("cell.set", json!({"cell": "E1", "input": "=B1+SUM(E2:E3)"})).unwrap();
+        s.execute("data.dataTable", json!({"range": "D1:E3", "columnInput": "B1"})).unwrap();
+        assert_eq!(v(&s, "E2"), Value::Error(gridcraft_core::CellError::Circ));
+        s.execute("cell.set", json!({"cell": "B1", "input": "2"})).unwrap();
+        assert_eq!(v(&s, "E3"), Value::Error(gridcraft_core::CellError::Circ));
+        // Breaking the loop calculates the table again.
+        s.execute("cell.set", json!({"cell": "E1", "input": "=B1*3"})).unwrap();
+        assert_eq!(n(&s, "E3"), 6.0);
+        // An input cell that is also one of the table's results is refused.
+        assert!(s.execute("data.dataTable", json!({"range": "G1:H3", "columnInput": "H2"})).is_err());
+    }
+
+    #[test]
+    fn data_tables_wait_for_f9_in_automatic_except_tables_mode() {
+        let mut s = s();
+        loan(&mut s);
+        s.execute("formulas.calculationOptions", json!({"mode": "automaticExceptTables"})).unwrap();
+        // A new table is calculated when it is made.
+        s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2"})).unwrap();
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9);
+        s.execute("cell.set", json!({"cell": "B1", "input": "0.5"})).unwrap();
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9);
+        s.execute("formulas.calculateNow", json!({})).unwrap();
+        assert!((n(&s, "E4") - 300.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hostile_data_tables_are_refused() {
+        let mut s = s();
+        loan(&mut s);
+        s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        for p in [
+            json!({}),
+            json!({"range": "D2:E5"}),
+            json!({"range": "D2:E5", "columnInput": "E3"}),
+            json!({"range": "D2:E5", "columnInput": "Sheet2!B2"}),
+            json!({"range": "D2:E5", "columnInput": "B2:B3"}),
+            json!({"range": "D2:E5", "columnInput": "nonsense"}),
+            json!({"range": "D2:D5", "columnInput": "B2"}),
+            json!({"range": "A1:XFD1048576", "columnInput": "B2"}),
+            json!({"range": "D2:E100003", "columnInput": "B2"}),
+        ] {
+            assert!(s.execute("data.dataTable", p.clone()).is_err(), "{p}");
+        }
+        assert!(tables(&s).is_empty());
+        // The largest table allowed is calculated.
+        s.execute("data.dataTable", json!({"range": "D2:E100002", "columnInput": "B2"})).unwrap();
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn data_tables_stay_live_through_xlsx() {
+        let mut s = s();
+        loan(&mut s);
+        s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2"})).unwrap();
+        s.execute("cell.set", json!({"cell": "G1", "input": "=B2*B1"})).unwrap();
+        s.execute("range.setValues", json!({"range": "H1", "values": [[1, 2]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "G2", "values": [[10], [20]]})).unwrap();
+        s.execute("data.dataTable", json!({"range": "G1:I3", "rowInput": "B1", "columnInput": "B2"})).unwrap();
+        let before = tables(&s);
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "dt.xlsx", "base64": b64})).unwrap();
+        let mut after = tables(&s);
+        after.sort_by_key(|t| t.range.start.col);
+        assert_eq!(after, before);
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9);
+        assert_eq!(n(&s, "I3"), 40.0);
+        assert_eq!(s.execute("cell.get", json!({"cell": "H2"})).unwrap()["formula"], "{=TABLE(B1,B2)}");
+        // Still live after reopening.
+        s.execute("cell.set", json!({"cell": "B1", "input": "1"})).unwrap();
+        assert_eq!(n(&s, "E4"), 400.0);
+        assert_eq!(n(&s, "I3"), 40.0);
+        s.execute("cell.set", json!({"cell": "G1", "input": "=B2*B1*2"})).unwrap();
+        assert_eq!(n(&s, "I3"), 80.0);
+    }
+
+    #[test]
+    fn static_data_tables_write_values() {
+        let mut s = s();
+        loan(&mut s);
+        let r = s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2", "static": true})).unwrap();
+        assert_eq!(r["static"], true);
+        assert!(tables(&s).is_empty());
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9);
+        s.execute("cell.set", json!({"cell": "B1", "input": "0.5"})).unwrap();
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9, "a snapshot doesn't recalculate");
+        s.execute("cell.set", json!({"cell": "E4", "input": "1"})).unwrap();
+        // A snapshot over a live table's range replaces the table.
+        s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2"})).unwrap();
+        assert_eq!(tables(&s).len(), 1);
+        s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2", "static": true})).unwrap();
+        assert!(tables(&s).is_empty());
+        assert_eq!(n(&s, "E4"), 300.0);
     }
 
     #[test]

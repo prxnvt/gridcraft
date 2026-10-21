@@ -2,6 +2,7 @@
 
 mod array_export;
 mod csv_tests;
+mod data_table_tests;
 mod encrypted_tests;
 mod fixtures;
 mod malformed;

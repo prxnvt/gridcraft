@@ -151,6 +151,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         let expr = parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
         let expr = wb.name_call_case(expr);
         check_arg_counts(&expr)?;
+        check_no_table(&expr)?;
         let mut cell = Cell::formula(Formula::from_expr(expr));
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().
@@ -211,6 +212,19 @@ fn check_arg_counts(expr: &gridcraft_formula::Expr) -> Result<()> {
         Some(msg) => Err(EngineError::Other(msg)),
         None => Ok(()),
     }
+}
+
+/// TABLE() is only made by What-If Analysis › Data Table; Excel refuses it typed into a cell.
+fn check_no_table(expr: &gridcraft_formula::Expr) -> Result<()> {
+    let mut table = false;
+    expr.walk(&mut |e| {
+        if let gridcraft_formula::Expr::Call(name, _) = e
+            && name.eq_ignore_ascii_case("TABLE")
+        {
+            table = true;
+        }
+    });
+    if table { Err(EngineError::Other("That function isn't valid.".into())) } else { Ok(()) }
 }
 
 fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1211,6 +1225,12 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             let new = gridcraft_formula::adjust::adjust(expr, "\u{0}", target, e);
             n.formula = gridcraft_formula::print(&new);
         }
+    }
+    // Data tables ({=TABLE()}) are formulas of the target sheet too.
+    if let Some(i) = wb.sheet_index(target).filter(|&i| wb.sheet(i).is_some_and(|s| !s.data_tables.is_empty()))
+        && let Some(sh) = wb.sheet_mut(i)
+    {
+        super::whatif::adjust_data_tables(sh, e);
     }
 }
 

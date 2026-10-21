@@ -96,6 +96,9 @@ pub struct Sheet {
     /// PivotTables whose output lives on this sheet.
     #[serde(default)]
     pub pivots: Vec<PivotTable>,
+    /// What-If data tables (`{=TABLE()}`) whose results are on this sheet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_tables: Vec<DataTable>,
     pub protection: Option<SheetProtection>,
     /// Allow Edit Ranges (meaningful while the sheet is protected).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -151,6 +154,7 @@ impl Sheet {
             sparklines: vec![],
             slicers: vec![],
             pivots: vec![],
+            data_tables: vec![],
             protection: None,
             edit_ranges: vec![],
             print: PrintSettings::default(),
@@ -159,6 +163,11 @@ impl Sheet {
             view: SheetViewMode::Normal,
             preserved: None,
         }
+    }
+
+    /// The data table whose results area contains `c`.
+    pub fn data_table_at(&self, c: CellRef) -> Option<&DataTable> {
+        self.data_tables.iter().find(|t| t.body().is_some_and(|b| b.contains(c)))
     }
 
     pub fn cell(&self, c: CellRef) -> Option<&Cell> {

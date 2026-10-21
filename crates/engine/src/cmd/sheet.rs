@@ -251,6 +251,7 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
     check_lines_protection(s, p, axis, at, count, true)?;
     let sheet = target_sheet(s, p)?;
+    check_data_table_lines(s, sheet, &Edit::Insert { axis, at, count })?;
     // Refuse to push data off the sheet.
     let limit = if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
@@ -292,6 +293,7 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
     check_lines_protection(s, p, axis, at, count, false)?;
     let sheet = target_sheet(s, p)?;
+    check_data_table_lines(s, sheet, &Edit::Delete { axis, at, count })?;
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         cx.protection_checked = true;
@@ -338,6 +340,8 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     }
     check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1()}), Axis::Cols, before, count, true)?;
     check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1()}), Axis::Cols, from, count, false)?;
+    check_data_table_lines(s, sheet, &Edit::Insert { axis: Axis::Cols, at: before, count })?;
+    check_data_table_lines(s, sheet, &Edit::Delete { axis: Axis::Cols, at: from, count })?;
 
     let moved_from = if before <= from { from + count } else { from };
     if moved_from.checked_add(count).is_none_or(|end| end > MAX_COLS) {
@@ -427,6 +431,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
+        check_data_table_shift(sh, &e)?;
     }
     let right = shift == "right";
     let out = edit(s, |cx| {
@@ -458,6 +463,7 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
+        check_data_table_shift(sh, &e)?;
     }
     let left = shift == "left";
     let out = edit(s, |cx| {
@@ -997,6 +1003,42 @@ fn shift_table_columns(t: &mut gridcraft_model::Table, at: u32, count: u32, inse
             t.columns.drain(a..b);
         }
     }
+}
+
+fn check_data_table_lines(s: &Session, sheet: usize, e: &Edit) -> Result<()> {
+    match s.doc()?.wb.sheet(sheet) {
+        Some(sh) => check_data_table_shift(sh, e),
+        None => Ok(()),
+    }
+}
+
+/// Like Excel, a structural edit never cuts through a data table: the table moves whole, or is
+/// deleted whole. Inserting or deleting lines through it, and Insert/Delete Cells that shift part
+/// of it, are refused.
+pub(crate) fn check_data_table_shift(sh: &Sheet, e: &Edit) -> Result<()> {
+    for t in &sh.data_tables {
+        let tr = t.range;
+        let reshaped = map_range(tr, e).is_some_and(|n| n.width() != tr.width() || n.height() != tr.height());
+        let partly_shifted = match *e {
+            Edit::InsertCells { axis: Axis::Rows, range: r } | Edit::DeleteCells { axis: Axis::Rows, range: r } => {
+                tr.end.row >= r.start.row
+                    && tr.start.col <= r.end.col
+                    && tr.end.col >= r.start.col
+                    && (r.start.col > tr.start.col || r.end.col < tr.end.col)
+            }
+            Edit::InsertCells { axis: Axis::Cols, range: r } | Edit::DeleteCells { axis: Axis::Cols, range: r } => {
+                tr.end.col >= r.start.col
+                    && tr.start.row <= r.end.row
+                    && tr.end.row >= r.start.row
+                    && (r.start.row > tr.start.row || r.end.row < tr.end.row)
+            }
+            _ => false,
+        };
+        if reshaped || partly_shifted {
+            return Err(EngineError::Other(super::whatif::DATA_TABLE_PART.into()));
+        }
+    }
+    Ok(())
 }
 
 /// Like Excel, Insert/Delete Cells never shifts part of a table: cells shifted up or down must
