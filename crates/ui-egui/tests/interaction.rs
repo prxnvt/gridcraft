@@ -430,6 +430,43 @@ fn data_analysis_dialog_runs_a_tool_and_asks_before_overwriting() {
 }
 
 #[test]
+fn data_analysis_dialog_opens_every_tool_form() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [2, 4], [3, 6]]})).unwrap();
+    let mut h = harness(s);
+    for (id, label) in gridcraft_engine::cmd::analysis::TOOLS {
+        h.state_mut().open_dialog("analysisToolPak", json!({"tool": id}));
+        h.run_steps(2);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.title.clone()).as_deref(), Some(*label), "{id}");
+        h.state_mut().dialog = None;
+    }
+    // The z-Test form runs with the known variances typed in.
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "zTest"}));
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in [("range1", "A1:A3"), ("range2", "B1:B3"), ("variance1", "1"), ("variance2", "4"), ("outputTo", "range"), ("output", "D1")] {
+            d.values.insert(k.into(), json!(v));
+        }
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "OK runs the tool and closes the dialog");
+    assert_eq!(value(&h, "D1"), Value::from("z-Test: Two Sample for Means"));
+    // Random Number Generation draws from the chosen distribution with the typed seed.
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "randomNumberGeneration"}));
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        for (k, v) in [("count", "3"), ("distribution", "bernoulli"), ("seed", "1"), ("outputTo", "range"), ("output", "H1")] {
+            d.values.insert(k.into(), json!(v));
+        }
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(matches!(value(&h, "H3"), Value::Number(x) if x == 0.0 || x == 1.0));
+}
+
+#[test]
 fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {
