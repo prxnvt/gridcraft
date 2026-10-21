@@ -890,6 +890,18 @@ mod cpython_tests {
         let o = w.run_blocking("{1, 2}", &mut cells);
         let out = o.result.clone().unwrap_or_default();
         assert_eq!((out.type_name.as_str(), out.preview.as_str(), out.convertible), ("set", "{1, 2}", false));
+        // Labels with sizes, and tables with the result (the same as the built-in Python's).
+        let label = |w: &mut PyWorker, code: &str| w.run_blocking(code, &mut cells).result.unwrap_or_default();
+        assert_eq!((label(&mut w, "{1, 2}").label.as_str(), label(&mut w, "{1, 2}").tabular), ("set 2", false));
+        let o = label(&mut w, "list(range(12))");
+        assert_eq!((o.label.as_str(), o.tabular, o.headers), ("list 12", true, false));
+        assert_eq!(label(&mut w, "{'a': 1, 'b': 2, 'c': 3, 'd': 4}").label, "dict 4 keys");
+        assert_eq!(label(&mut w, "'a\\nb\\nc\\nd\\ne'").label, "str 5 lines");
+        assert_eq!(label(&mut w, "'abc'").label, "str");
+        let o = label(&mut w, "{'a': [1, 2], 'b': ['x', 'y']}");
+        assert_eq!((o.label.as_str(), o.tabular, o.headers), ("dict 2 keys", true, true));
+        assert_eq!(o.table, Array::new(3, 2, vec!["a".into(), "b".into(), 1.0.into(), "x".into(), 2.0.into(), "y".into()]).map(Value::from));
+        assert_eq!(label(&mut w, "{'a': [1, 2], 'b': [3]}").table, None);
         if i.pandas.is_none() {
             // Without pandas a range is a list of rows, as in the built-in Python.
             let o = w.run_blocking("t = xl('T', headers=True)\n[r['score'] for r in t]", &mut cells);
@@ -1070,5 +1082,14 @@ mod cpython_tests {
             Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).map(Value::from).unwrap_or_default()
         );
         assert_eq!(value(&w.run_blocking("pd.Timestamp('2024-01-01')", &mut cells)), Value::Number(45292.0));
+        // Object-mode labels and tables.
+        let out = |w: &mut PyWorker, code: &str| w.run_blocking(code, &mut cells).result.unwrap_or_default();
+        let o = out(&mut w, "pd.DataFrame({'a': range(6), 'b': 1.5, 'c': 'x', 'd': True})");
+        assert_eq!((o.label.as_str(), o.tabular, o.headers), ("DataFrame 6\u{d7}4", true, true));
+        let o = out(&mut w, "pd.Series(range(40))");
+        assert_eq!((o.label.as_str(), o.tabular, o.headers), ("Series 40", true, false));
+        assert_eq!(out(&mut w, "np.eye(3)").label, "ndarray 3\u{d7}3");
+        assert_eq!(out(&mut w, "np.arange(5)").label, "ndarray 5");
+        assert!(!out(&mut w, "np.zeros((2, 2, 2))").tabular);
     }
 }

@@ -123,6 +123,17 @@ pub struct Output {
     pub preview: String,
     /// Whether `value` is the result converted to cells (false: only the preview is).
     pub convertible: bool,
+    /// What an object-mode cell shows: the type with its size (`DataFrame 6×4`, `list 12`,
+    /// `dict 4 keys`, `str 5 lines`), or just the type name.
+    pub label: String,
+    /// The result is a table (a DataFrame, Series, 1-D or 2-D ndarray, list, list of lists, or
+    /// dict), so the app can show and export it without running the code again.
+    pub tabular: bool,
+    /// The table's first row is a header row (a DataFrame's columns, a dict of columns' keys).
+    pub headers: bool,
+    /// The table, when it isn't `value` itself (a dict of equal-length lists: one column per
+    /// key, under its key), capped like `value`.
+    pub table: Option<Value>,
 }
 
 /// Characters of a result's `repr` kept as its preview.
@@ -188,6 +199,9 @@ mod tests {
                 type_name: "list".into(),
                 preview: "[1.5, '#DIV/0!']".into(),
                 convertible: true,
+                label: "list 2".into(),
+                tabular: true,
+                ..Output::default()
             }),
             stdout: "hi\n".into(),
             ..Done::default()

@@ -456,6 +456,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Python 单元格。单击可关闭此单元格的 Python (然后按 Enter 使其成为普通单元格；撤消可恢复代码)"
         }
+        "Python Output" => "Python 输出",
+        "Python Output (Ctrl+Alt+Shift+M)" => "Python 输出 (Ctrl+Alt+Shift+M)",
+        "Select a Python cell to change its output" => "请选择要更改输出的 Python 单元格",
+        "Copy as CSV" => "复制为 CSV",
+        "Copy as Markdown" => "复制为 Markdown",
+        "Save as .csv…" => "另存为 .csv…",
+        "Spill Here" => "在此溢出",
+        "Show the result as cell values, spilling from this cell" => "将结果显示为单元格值，从此单元格开始溢出",
+        "Copied {count} rows as CSV" => "已将 {count} 行复制为 CSV",
+        "Copied {count} rows as Markdown" => "已将 {count} 行复制为 Markdown",
+        "Showing {shown} of {rows} rows and {cols} of {all} columns; Copy and Save include them all." => {
+            "显示 {rows} 行中的 {shown} 行、{all} 列中的 {cols} 列；复制和保存包含全部内容。"
+        }
         _ => return None,
     })
 }

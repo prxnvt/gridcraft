@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (Python cells in xlsx and native JSON) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (Python cells: object-output tables and one line per row) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -65,11 +65,11 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Where | GridCraft | Notes |
 |---|---|---|
-| `.xlsx` | read and write | A Python cell is written as the formula `PY("…"&"…",0|1)` (string literals of at most 255 characters; 1 for a Python object result, 0 for values) with its cached value; a spilling result is written as a dynamic array with its spilled values cached. Read back from that form, with or without `_xlfn.`. Other applications show the cached values, and `#NAME?` if they recalculate. Excel's own file form for Python cells is not publicly documented, so files are not exchanged with Excel's Python in Excel |
+| `.xlsx` | read and write | A Python cell is written as the formula `PY("…"&"…",0|1)` (string literals of at most 255 characters; 1 for a Python object result, 0 for values) with its cached value; a spilling result is written as a dynamic array with its spilled values cached. Read back from that form, with or without `_xlfn.`. A value-mode cell whose multi-line text spills one line per row is listed in a hidden name, since `PY()` has no place for that choice. Other applications show the cached values, and `#NAME?` if they recalculate. Excel's own file form for Python cells is not publicly documented, so files are not exchanged with Excel's Python in Excel |
 | `.xls`, `.xlsb`, `.ods` | read | A `PY("…",0|1)` formula read from any format becomes a Python cell; the `.xlsb` and `.ods` imports keep values only, so Python cells there come in as their cached values |
-| GridCraft JSON | read and write | The whole Python cell: code, output mode, the last result and the exact error |
+| GridCraft JSON | read and write | The whole Python cell: code, output mode, the one-line-per-row choice, the last result (with its label and, for a tabular object, its table) and the exact error |
 | Initialization code | read and write | Kept in the workbook's hidden data names |
-| Limits on open | — | More than 7,000 characters of code: the cell keeps only its cached value, with a warning. A kept result that is not a well-formed array of at most 1,000,000 cells is dropped. Opening runs nothing |
+| Limits on open | — | More than 7,000 characters of code: the cell keeps only its cached value, with a warning. A kept result, or a kept table, that is not a well-formed array of at most 1,000,000 cells is dropped. The list of one-line-per-row cells is read for at most 100,000 entries, and entries that name no Python cell are ignored. Opening runs nothing |
 
 ## Work (76–114 h)
 
@@ -88,6 +88,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python cells: object-mode tables in GridCraft JSON; the one-line-per-row choice in xlsx (a hidden name) and JSON |
 | 2026-10-12 | minor | Python cells: xlsx `PY("…",0|1)` formulas with cached values and spills, GridCraft JSON, initialization code, limits on open |
 | 2026-10-12 | minor | CSV: saving a file opened as CSV keeps its detected separator (`;` files were rewritten with `,`) |
 | 2026-10-11 | minor | XLSX: cell/shared/array formulas read through the file→model conversion (`_xlpm.` LET/LAMBDA parameter prefixes stripped); table column names keep line breaks; table names may start with `\` |

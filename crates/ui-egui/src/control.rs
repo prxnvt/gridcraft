@@ -213,6 +213,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("ui.pane", "Task Pane", "{name?: comments|watch|selection|formatChart|pythonDiagnostics} shows a task pane; no name closes it"),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
+                (
+                    "python.saveCsv",
+                    "Save Python Result as CSV",
+                    "{cell?, path?} → {saved, path?, csv?, rows}: a Python cell's tabular result as CSV, written to `path`, or returned as `csv` without one",
+                ),
             ] {
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }

@@ -466,6 +466,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Ячейка Python. Щелкните, чтобы отключить Python для этой ячейки (затем Enter делает ее обычной ячейкой; отмена возвращает код)"
         }
+        "Python Output" => "Вывод Python",
+        "Python Output (Ctrl+Alt+Shift+M)" => "Вывод Python (Ctrl+Alt+Shift+M)",
+        "Select a Python cell to change its output" => "Выберите ячейку Python, чтобы изменить ее вывод",
+        "Copy as CSV" => "Копировать как CSV",
+        "Copy as Markdown" => "Копировать как Markdown",
+        "Save as .csv…" => "Сохранить как .csv…",
+        "Spill Here" => "Разлить здесь",
+        "Show the result as cell values, spilling from this cell" => "Показать результат как значения ячеек, разливаемые от этой ячейки",
+        "Copied {count} rows as CSV" => "Скопировано строк в формате CSV: {count}",
+        "Copied {count} rows as Markdown" => "Скопировано строк в формате Markdown: {count}",
+        "Showing {shown} of {rows} rows and {cols} of {all} columns; Copy and Save include them all." => {
+            "Показано строк: {shown} из {rows}, столбцов: {cols} из {all}; копирование и сохранение включают все."
+        }
         _ => return None,
     })
 }

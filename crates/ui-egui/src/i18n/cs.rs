@@ -464,6 +464,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Buňka Pythonu. Kliknutím vypnete Python pro tuto buňku (Enter z ní pak udělá normální buňku; zpět vrátí kód)"
         }
+        "Python Output" => "Výstup Pythonu",
+        "Python Output (Ctrl+Alt+Shift+M)" => "Výstup Pythonu (Ctrl+Alt+Shift+M)",
+        "Select a Python cell to change its output" => "Vyberte buňku Pythonu, jejíž výstup chcete změnit",
+        "Copy as CSV" => "Kopírovat jako CSV",
+        "Copy as Markdown" => "Kopírovat jako Markdown",
+        "Save as .csv…" => "Uložit jako .csv…",
+        "Spill Here" => "Přelít sem",
+        "Show the result as cell values, spilling from this cell" => "Zobrazit výsledek jako hodnoty buněk přelité od této buňky",
+        "Copied {count} rows as CSV" => "Zkopírované řádky ve formátu CSV: {count}",
+        "Copied {count} rows as Markdown" => "Zkopírované řádky ve formátu Markdown: {count}",
+        "Showing {shown} of {rows} rows and {cols} of {all} columns; Copy and Save include them all." => {
+            "Zobrazeno řádků: {shown} z {rows}, sloupců: {cols} z {all}; kopírování a uložení zahrnují všechny."
+        }
         _ => return None,
     })
 }

@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells, user interface) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells, object output) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-12 | Python object output: an object-mode cell shows its type with its size (`DataFrame 6×4`, `list 12`), and a tabular result keeps its table, which the preview card shows as a small grid with Copy as CSV, Copy as Markdown, Save as .csv… (`python.saveCsv`) and Spill Here; the output toggle on Ctrl+Alt+Shift+M, in the PY badge's menu, Insert Python's menu and the cell menu; multi-line text stays wrapped in its cell or spills one line per row (`python.output {lines}`, kept in xlsx and JSON) |
 | 2026-10-12 | Python in cells (user interface): Python mode in the formula bar (=PY then Tab or Enter, Ctrl+Alt+Shift+P or Formulas › Insert Python; Enter adds an indented line, Ctrl+Enter or Cmd+Enter commits, Esc cancels), Python colours, `xl()` pointing and reference outlines, the PY badge and a Run / Stop / Re-run button; PY tags, stale cells and preview cards on the grid; background runs with `#BUSY!`, Stop in the status bar and Esc; a Formulas › Python group (Insert Python, Reset, Diagnostics) that folds into one button when the tab is too wide; the Python Diagnostics pane, Initialization and Python Options dialogs, the Enable Python bar for workbooks from files, a status-bar note of which Python runs cells; `python.run`, `python.clearDiagnostics`, `ui.pane`, and `engine.execute {wait}` on the control channel |
 | 2026-10-12 | Python import-aware time limits (engine): on CPython, time spent importing modules not loaded yet does not count against a cell's time limit, up to `importSeconds` (60 s by default), with `Extend` heartbeats that move the parent's deadline; a stop mid-import names the module and replaces the worker; a cell stopped mid-import or on its first run on a new worker runs once more on a fresh one before it is refused; numpy and pandas load before a worker reports ready; installs end with a warm-up import and uv installs compile bytecode |
 | 2026-10-12 | Python packages (engine): GridCraft keeps one Python environment of its own, made from the CPython it found with uv or venv in the app's data folder (`GRIDCRAFT_PYTHON_ENV` or `python.options {environment}` move it), and `python.install` installs packages only after the exact list is approved, into the person's own venv or conda environment when that runs cells and otherwise into GridCraft's, never into a system Python; requirements are checked strictly (names, extras and versions only, at most 32); installs use uv or pip with `--only-binary` from an argument list in the background with a 10-minute deadline, `python.stop` cancels them, failures say why, and every outcome is a Diagnostics row and an app log record; cells run again on the new environment; workbooks declare their packages (`python.packages`, kept in xlsx); `python.environment` creates, lists and deletes the environment |
@@ -182,6 +183,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python object output; progress log row |
 | 2026-10-12 | minor | Python in cells (user interface); progress log row |
 | 2026-10-12 | minor | Python import-aware time limits; progress log row |
 | 2026-10-12 | minor | Python package installs; progress log row |

@@ -45,8 +45,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "python.output",
             "Python Output",
             [],
-            None,
-            "{cell?, mode: object|value} shows the result as a Python object or converts it to cell values",
+            Some("Ctrl+Alt+Shift+M"),
+            "{cell?, mode?: object|value, lines?: cell|rows} → {cell, value, mode, lines}: shows the result as a Python object or converts it to cell values; `lines` keeps a multi-line text result in the cell, wrapped, or spills one line per row",
             has_doc,
             output
         ),
@@ -231,13 +231,28 @@ fn clear(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn output(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, at) = target_cell(s, p)?;
-    let object = output_mode(p, "mode")?.ok_or_else(|| bad("python.output", "missing `mode` (object or value)"))?;
+    let object = output_mode(p, "mode")?;
+    let lines = match str_param(p, "lines") {
+        None => None,
+        Some(l) if l.eq_ignore_ascii_case("rows") => Some(true),
+        Some(l) if l.eq_ignore_ascii_case("cell") => Some(false),
+        Some(l) => return Err(bad("python.output", format!("`lines` is `cell` or `rows`, not `{l}`"))),
+    };
+    if object.is_none() && lines.is_none() {
+        return Err(bad("python.output", "missing `mode` (object or value) or `lines` (cell or rows)"));
+    }
     let Some(mut py) = existing(s, sheet, at)? else { return Err(EngineError::Other(format!("{} is not a Python cell", at.a1()))) };
-    if py.object != object {
-        py.object = object;
+    let changed = object.is_some_and(|o| o != py.object) || lines.is_some_and(|l| l != py.lines);
+    if changed {
+        py.object = object.unwrap_or(py.object);
+        py.lines = lines.unwrap_or(py.lines);
         put(s, sheet, at, py)?;
     }
-    result(s, sheet, at)
+    let mut r = result(s, sheet, at)?;
+    let py = existing(s, sheet, at)?.unwrap_or_default();
+    r["mode"] = json!(if py.object { "object" } else { "value" });
+    r["lines"] = json!(if py.lines { "rows" } else { "cell" });
+    Ok(r)
 }
 
 fn reset(s: &mut Session, p: &Json) -> Result<Json> {

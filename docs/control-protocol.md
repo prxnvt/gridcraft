@@ -55,6 +55,15 @@ namespace; it goes through the same background run, so `wait: true` works with i
 on macOS) commits it, as does the formula bar's Run button (Stop while the cell runs or waits,
 Re-run once it has a result).
 
+`python.output {cell?, mode?, lines?}` switches a Python cell between a Python object
+(`mode: "object"`) and cell values (`"value"`), and chooses whether a multi-line text result in
+value mode stays in its cell, wrapped (`lines: "cell"`, the default), or spills one line per row
+(`"rows"`); it answers with the cell's value and both settings. `cell.get` on a Python cell
+reports `python.output`, `python.lines`, `python.label` (the type with its size, which an
+object-mode cell shows) and `python.tabular` (whether the result is a table). The UI command
+`python.saveCsv {cell?, path?}` writes a tabular result to `path` as CSV, or, without a path,
+returns it as `csv`; it never opens a dialog.
+
 Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
 to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.
 System follows live OS appearance changes and falls back to Light when the platform supplies no preference.

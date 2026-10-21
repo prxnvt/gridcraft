@@ -383,3 +383,105 @@ pub fn options(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, confirm: &mut bo
         }
     }
 }
+
+/// The Python cell `cell` (A1 on the active sheet; the active cell when `None`) as a table of
+/// texts with whether its first row is a header, when its result is tabular.
+pub fn cell_table(app: &SheetApp, cell: Option<&str>) -> Option<(Vec<Vec<String>>, bool)> {
+    let d = app.session.active()?;
+    let at = match cell {
+        Some(c) => gridcraft_engine::core::CellRef::parse(c)?,
+        None => d.selection.active,
+    };
+    let py = d.wb.active()?.cell(at)?.py.clone()?;
+    let (table, headers) = py.table()?;
+    Some((gridcraft_engine::python::table_text(table), headers))
+}
+
+/// `python.saveCsv {cell?, path?}`: a Python cell's tabular result as CSV. With `path` it is
+/// written to that file (`.csv` added when the name has no extension); without one the reply
+/// carries the text as `csv`. It never opens a dialog: the preview card's Save as .csv… asks
+/// for the path first (see [`save_csv_as`]).
+pub fn save_csv(app: &mut SheetApp, p: &Json) -> Result<Json, String> {
+    let cell = p.get("cell").and_then(Json::as_str);
+    let (rows, _) = cell_table(app, cell).ok_or("The cell isn't a Python cell with a table result")?;
+    let csv = gridcraft_engine::python::to_csv(&rows);
+    let Some(path) = p.get("path").and_then(Json::as_str) else {
+        return Ok(json!({"saved": false, "csv": csv, "rows": rows.len()}));
+    };
+    let path = if std::path::Path::new(path).extension().is_none() { format!("{path}.csv") } else { path.to_string() };
+    write_file(&path, csv.as_bytes())?;
+    Ok(json!({"saved": true, "path": path, "rows": rows.len()}))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
+    std::fs::write(path, bytes).map_err(|e| format!("Couldn't save {path}: {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write_file(_path: &str, _bytes: &[u8]) -> Result<(), String> {
+    Err("The web version has no file system; omit `path` to get the CSV text".into())
+}
+
+/// Save as .csv… in the preview card: asks the host's save dialog for a path, then runs
+/// `python.saveCsv`; on the web, where there is no dialog, the CSV is downloaded.
+pub fn save_csv_as(app: &mut SheetApp, cell: &str) {
+    if let Some(pick) = &app.services.pick_save {
+        if let Some(path) = pick("python-result.csv") {
+            app.run_or_alert("python.saveCsv", json!({"cell": cell, "path": path}));
+        }
+        return;
+    }
+    match app.run("python.saveCsv", json!({"cell": cell})) {
+        Ok(r) => {
+            if let (Some(download), Some(csv)) = (&app.services.download, r.get("csv").and_then(Json::as_str)) {
+                download("python-result.csv", csv.as_bytes());
+            }
+        }
+        Err(e) => app.message = Some(("Save as .csv".into(), crate::clean_error(&e))),
+    }
+}
+
+/// The tabular result in the preview card: a small scrollable grid with headers (a numbered
+/// header when the table has none). Only the cells shown are turned into text, so a large
+/// result costs no more than a small one.
+pub fn table_view(ui: &mut Ui, table: &gridcraft_engine::core::Array, headers: bool) {
+    const MAX_ROWS: usize = 200;
+    const MAX_COLS: usize = 30;
+    const MAX_CHARS: usize = 40;
+    let lang = crate::i18n::current(ui.ctx());
+    let t = Tokens::get(ui.ctx());
+    let cols = table.cols.min(MAX_COLS);
+    let first = usize::from(headers && table.rows > 0);
+    let body = table.rows.saturating_sub(first);
+    let text = |r: usize, c: usize| {
+        let s = table.get(r, c).map(gridcraft_engine::core::Value::display).unwrap_or_default();
+        if s.chars().count() > MAX_CHARS { format!("{}…", s.chars().take(MAX_CHARS).collect::<String>()) } else { s }
+    };
+    egui::ScrollArea::both().id_salt("py_card.table").max_height(220.0).max_width(520.0).auto_shrink([true, true]).show(ui, |ui| {
+        egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.separator)).show(ui, |ui| {
+            egui::Grid::new("py_card.table.grid").striped(true).spacing(vec2(12.0, 3.0)).show(ui, |ui| {
+                for c in 0..cols {
+                    let head = if first == 1 { text(0, c) } else { c.to_string() };
+                    ui.label(RichText::new(head).font(theme::ui_bold(12.0)).color(t.text));
+                }
+                ui.end_row();
+                for r in (first..table.rows).take(MAX_ROWS) {
+                    for c in 0..cols {
+                        ui.label(RichText::new(text(r, c)).font(theme::ui_font(12.0)).color(t.text));
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+    });
+    if body > MAX_ROWS || table.cols > MAX_COLS {
+        let text = lang
+            .tr("Showing {shown} of {rows} rows and {cols} of {all} columns; Copy and Save include them all.")
+            .replace("{shown}", &body.min(MAX_ROWS).to_string())
+            .replace("{rows}", &body.to_string())
+            .replace("{cols}", &cols.to_string())
+            .replace("{all}", &table.cols.to_string());
+        ui.label(RichText::new(text).color(t.text_dim).font(theme::ui_font(11.5)));
+    }
+}

@@ -89,6 +89,7 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
 fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let (mut wb, mut warnings) = read_plain(name, bytes)?;
     adopt_python(&mut wb);
+    crate::python::load_line_names(&mut wb);
     warnings.extend(enforce_python_limits(&mut wb));
     Ok((wb, warnings))
 }
@@ -128,7 +129,7 @@ pub fn adopt_python(wb: &mut Workbook) {
             let Some(array) = gridcraft_core::Array::new(range.height() as usize, range.width() as usize, data) else { continue };
             if let Some(py) = sh.cells.get_mut(anchor).and_then(|x| x.py.as_mut()) {
                 std::sync::Arc::make_mut(py).output =
-                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), preview: String::new(), convertible: true });
+                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), convertible: true, ..Default::default() });
             }
         }
     }
@@ -153,7 +154,7 @@ pub fn enforce_python_limits(wb: &mut Workbook) -> Vec<String> {
             if py.code.chars().nth(max).is_some() {
                 long.push(format!("{}!{}", sh.name, c.a1()));
                 over.push(c);
-            } else if py.output.as_ref().is_some_and(|o| !sane_python_output(&o.value)) {
+            } else if py.output.as_ref().is_some_and(|o| !sane_python_output(&o.value) || o.table.as_ref().is_some_and(|t| !sane_python_output(t))) {
                 bad_output.push(c);
             }
         }
@@ -260,8 +261,13 @@ pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
     let sheet = wb.active_sheet;
     match FileKind::from_path(path).unwrap_or(FileKind::Xlsx) {
         // The extension picks the package kind; only the macro-enabled kinds (.xlsm, .xltm) carry
-        // the VBA project, so any other name saves without it, as Excel does.
-        FileKind::Xlsx => gridcraft_xlsx::write_xlsx_as(wb, gridcraft_xlsx::XlsxKind::from_path(path)).map_err(|e| EngineError::Other(e.to_string())),
+        // the VBA project, so any other name saves without it, as Excel does. Python cells'
+        // one-line-per-row choices, which `PY()` has no place for, travel in a hidden name.
+        FileKind::Xlsx => {
+            let named = crate::python::with_line_names(wb)?;
+            gridcraft_xlsx::write_xlsx_as(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path))
+                .map_err(|e| EngineError::Other(e.to_string()))
+        }
         FileKind::Xls => {
             Err(EngineError::Other("Excel 97-2003 (.xls) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }

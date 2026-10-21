@@ -2030,6 +2030,7 @@ fn python_group(app: &mut SheetApp, ui: &mut Ui) {
         if menu_item(app, ui, "Insert xl() Reference") {
             app.point_python();
         }
+        output_items(app, ui);
         ui.separator();
         if menu_item(app, ui, "Initialization…") {
             app.open_dialog("pythonInitialization", json!({}));
@@ -2065,6 +2066,20 @@ fn python_group(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// "Output as Python Object" and "Output as Cell Values" for the active Python cell (shown
+/// only on one), with the current choice marked; Ctrl+Alt+Shift+M switches too.
+fn output_items(app: &mut SheetApp, ui: &mut Ui) {
+    let Some(object) = app.session.active().and_then(|d| d.wb.active()?.cell(d.selection.active)?.py.as_ref().map(|p| p.object)) else { return };
+    ui.separator();
+    for (label, as_object) in [("Output as Python Object", true), ("Output as Cell Values", false)] {
+        let mark = if object == as_object { "• " } else { "   " };
+        let b = ui.add(egui::Button::new(format!("{mark}{}", app.ui.language.tr(label))).frame(false).min_size(vec2(220.0, 22.0)));
+        if b.on_hover_text("Ctrl+Alt+Shift+M").clicked() && object != as_object {
+            app.toggle_python_output();
+        }
+    }
+}
+
 /// The Python group folded into one button.
 fn python_menu(app: &mut SheetApp, ui: &mut Ui) {
     if menu_item(app, ui, "Insert Python") {
@@ -2073,6 +2088,7 @@ fn python_menu(app: &mut SheetApp, ui: &mut Ui) {
     if menu_item(app, ui, "Insert xl() Reference") {
         app.point_python();
     }
+    output_items(app, ui);
     if menu_item(app, ui, "Initialization…") {
         app.open_dialog("pythonInitialization", json!({}));
     }

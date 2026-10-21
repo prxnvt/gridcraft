@@ -48,7 +48,7 @@ fn output_mode_switches_between_object_and_values() {
     py(&mut s, "A1", "[10, 20]");
     assert_eq!(v(&s, "A2"), Value::Number(20.0));
     s.execute("python.output", json!({"cell": "A1", "mode": "object"})).unwrap();
-    assert_eq!(v(&s, "A1"), Value::text("list"));
+    assert_eq!(v(&s, "A1"), Value::text("list 2"), "the type with its size");
     assert_eq!(v(&s, "A2"), Value::Empty, "an object doesn't spill");
     assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["python"]["output"], "object");
     s.execute("python.output", json!({"cell": "A1", "mode": "value"})).unwrap();

@@ -466,6 +466,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Celda de Python. Haga clic para desactivar Python en esta celda (Entrar la convierte en una celda normal; deshacer recupera el código)"
         }
+        "Python Output" => "Salida de Python",
+        "Python Output (Ctrl+Alt+Shift+M)" => "Salida de Python (Ctrl+Alt+Mayús+M)",
+        "Select a Python cell to change its output" => "Seleccione una celda de Python para cambiar su salida",
+        "Copy as CSV" => "Copiar como CSV",
+        "Copy as Markdown" => "Copiar como Markdown",
+        "Save as .csv…" => "Guardar como .csv…",
+        "Spill Here" => "Desbordar aquí",
+        "Show the result as cell values, spilling from this cell" => "Mostrar el resultado como valores de celda, desbordados desde esta celda",
+        "Copied {count} rows as CSV" => "Se copiaron {count} filas como CSV",
+        "Copied {count} rows as Markdown" => "Se copiaron {count} filas como Markdown",
+        "Showing {shown} of {rows} rows and {cols} of {all} columns; Copy and Save include them all." => {
+            "Se muestran {shown} de {rows} filas y {cols} de {all} columnas; Copiar y Guardar las incluyen todas."
+        }
         _ => return None,
     })
 }

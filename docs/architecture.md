@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells: package installs and import-aware time limits) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells: object output) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -72,6 +72,12 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
 A Python cell (`Cell::py`, `model/python.rs`) holds code, an output mode (cell values or a Python
 object) and its last result; its `value` is the cached result, so formulas, display and files read
 it like any other cell. Code is written with `python.set`, never by typing `=PY(`.
+`python.output {mode, lines}` switches the output mode, and chooses whether a multi-line text
+result in value mode stays in its cell or spills one line per row (`PyCode::lines`). In object
+mode the cell shows the result's label, its type with its size (`DataFrame 6×4`, `list 12`,
+`dict 4 keys`, `str 5 lines`); a tabular result (a DataFrame, Series, 1-D or 2-D ndarray, list,
+list of lists or dict) keeps its table on the cell (`PyOutput::table`, `PyCode::table`), so it can
+be shown and exported without running the code again.
 
 - **Worker processes.** Code never runs in the GridCraft process. Each workbook gets a worker
   the first time one of its cells runs: the user's CPython 3.11 or newer when the search in
@@ -85,7 +91,8 @@ it like any other cell. Code is written with `python.set`, never by typing `=PY(
   application that is not Rust.
 - **Protocol** (`python/protocol.rs`). One JSON object per line. The parent sends `Init`, `Run`,
   `XlValue` and `Reset`; the worker answers `Ready`, `Xl` (a request for cell values) and `Done`
-  (value, printed output, error and line, time), and the CPython shim also sends `Extend` while
+  (value, label, whether it is a table and its table, printed output, error and line, time),
+  and the CPython shim also sends `Extend` while
   it imports a module not loaded yet (see time limits below). Worker frames start with a marker,
   so stray output is never taken for a frame. Values travel as `gridcraft_core::Value`.
 - **Built-in and CPython.** Monty has no ambient access: file, environment and network
@@ -135,7 +142,8 @@ it like any other cell. Code is written with `python.set`, never by typing `=PY(
 - **Trust gate.** A `FromFile` workbook runs no Python: opening shows the cached values, and new
   code there shows `#BLOCKED!` until `python.enable` makes the workbook `Trusted`.
 - **Files.** xlsx stores a Python cell as `PY("…"&"…",0|1)` with its cached value (a spill as a
-  dynamic array); `engine/io.rs` adopts `PY(…)` formulas from every format and drops Python content
+  dynamic array), and the cells whose text spills one line per row in the hidden name
+  `py_lines`, read back into the cells on open; `engine/io.rs` adopts `PY(…)` formulas from every format and drops Python content
   over its limits (7,000 characters of code, results over 1,000,000 cells).
 - **Web.** `python/client_web.rs` stands in for the client on wasm32 with the same API; there is
   no worker, and Python cells show `#BLOCKED!`.
@@ -192,6 +200,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2; no Python cells). Relea
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python in cells: object-mode labels and tables, `python.output {lines}` |
 | 2026-10-12 | minor | Python in cells: import-aware time limits (`Extend` heartbeats, `importSeconds`, one retry, install warm-up) |
 | 2026-10-12 | minor | Python in cells: GridCraft's own Python environment and package installs the person approves |
 | 2026-10-12 | minor | Python in cells: the `python` crate (L1), worker processes, protocol, built-in and CPython backends, the engine runtime, the trust gate, files and the web build |

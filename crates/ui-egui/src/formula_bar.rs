@@ -308,8 +308,52 @@ pub fn take_python_shortcut(i: &mut egui::InputState) -> bool {
     found
 }
 
+/// Ctrl+Alt+Shift+M (also with Cmd on macOS), taken from this frame's input: switch the active
+/// Python cell between a Python object and cell values.
+pub fn take_output_shortcut(i: &mut egui::InputState) -> bool {
+    let hit = |e: &egui::Event| matches!(e, egui::Event::Key { key: Key::M, pressed: true, modifiers: m, .. } if m.shift && m.alt && (m.ctrl || m.mac_cmd || m.command));
+    let found = i.events.iter().any(hit);
+    if found {
+        // The key, and the character Option+Shift+M types on macOS.
+        i.events.retain(|e| !hit(e) && !matches!(e, egui::Event::Text(t) if t == "\u{c2}"));
+    }
+    found
+}
+
+/// The PY badge's menu (the arrow beside it, or a right-click on it): the active Python cell's
+/// output, as a Python object or as cell values.
+fn output_menu(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens, badge: &egui::Response) {
+    let Some(object) = app.session.active().and_then(|d| d.wb.active()?.cell(d.selection.active)?.py.as_ref().map(|p| p.object)) else { return };
+    let lang = app.ui.language;
+    let arrow = crate::widgets::icon_button(ui, Icon::Chevron, t.text_dim, lang.tr("Python Output (Ctrl+Alt+Shift+M)"), vec2(14.0, 24.0));
+    let mut pick: Option<bool> = None;
+    for anchor in [&arrow, badge] {
+        let menu = if std::ptr::eq(anchor, &arrow) { egui::Popup::menu(anchor) } else { egui::Popup::context_menu(anchor) };
+        menu.show(|ui| {
+            ui.label(egui::RichText::new(lang.tr("Python Output")).color(t.text_dim).font(theme::ui_font(11.5)));
+            for (label, as_object) in [("Output as Python Object", true), ("Output as Cell Values", false)] {
+                let mark = if object == as_object { "• " } else { "   " };
+                if ui.add(egui::Button::new(format!("{mark}{}", lang.tr(label))).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
+                    pick = Some(as_object);
+                }
+            }
+        });
+    }
+    if let Some(as_object) = pick
+        && as_object != object
+    {
+        app.toggle_python_output();
+    }
+}
+
 /// The badge slot: paints `app.formula_badge`, if any, and returns its rect.
 fn badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
+    let (rect, resp) = badge_pill(app, ui, t)?;
+    output_menu(app, ui, t, &resp);
+    Some(rect)
+}
+
+fn badge_pill(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<(Rect, egui::Response)> {
     let b = app.formula_badge.as_mut()?;
     let font = theme::ui_bold(11.0);
     let text = ui.painter().layout_no_wrap(b.label.clone(), font, t.on_badge);
@@ -323,7 +367,7 @@ fn badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
     if resp.clicked() {
         b.clicked = true;
     }
-    Some(rect)
+    Some((rect, resp))
 }
 
 fn active_input(app: &SheetApp) -> String {
@@ -722,6 +766,7 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
         let empty = ed.text.is_empty();
         let keys = ui.input_mut(|i| {
             let shortcut = take_python_shortcut(i);
+            let output = take_output_shortcut(i);
             let commit = i.consume_key(Modifiers::COMMAND, Key::Enter) || i.consume_key(Modifiers::CTRL, Key::Enter);
             let enter = i.consume_key(Modifiers::NONE, Key::Enter);
             let shift_tab = i.consume_key(Modifiers::SHIFT, Key::Tab);
@@ -731,9 +776,12 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
             // F4 (anchors) is a formula key; it does nothing to code.
             i.consume_key(Modifiers::NONE, Key::F4);
             let backspace = empty && i.consume_key(Modifiers::NONE, Key::Backspace);
-            (shortcut, commit, enter, tab, shift_tab, esc, f2, backspace)
+            (shortcut, commit, enter, tab, shift_tab, esc, f2, backspace, output)
         });
-        let (shortcut, commit_key, enter, tab, shift_tab, esc, f2, backspace) = keys;
+        let (shortcut, commit_key, enter, tab, shift_tab, esc, f2, backspace, output) = keys;
+        if output {
+            app.toggle_python_output();
+        }
         commit = commit_key;
         cancel = esc;
         leave = shortcut || backspace;

@@ -643,6 +643,20 @@ const JAPANESE: &[(&str, &str)] = &[
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)",
         "Python セル。クリックすると、このセルの Python をオフにします (Enter で通常のセルになり、元に戻すとコードが戻ります)",
     ),
+    ("Python Output", "Python の出力"),
+    ("Python Output (Ctrl+Alt+Shift+M)", "Python の出力 (Ctrl+Alt+Shift+M)"),
+    ("Select a Python cell to change its output", "出力を変更する Python セルを選択してください"),
+    ("Copy as CSV", "CSV としてコピー"),
+    ("Copy as Markdown", "Markdown としてコピー"),
+    ("Save as .csv…", ".csv として保存…"),
+    ("Spill Here", "ここにスピル"),
+    ("Show the result as cell values, spilling from this cell", "結果をこのセルからスピルするセルの値として表示します"),
+    ("Copied {count} rows as CSV", "{count} 行を CSV としてコピーしました"),
+    ("Copied {count} rows as Markdown", "{count} 行を Markdown としてコピーしました"),
+    (
+        "Showing {shown} of {rows} rows and {cols} of {all} columns; Copy and Save include them all.",
+        "{rows} 行中 {shown} 行、{all} 列中 {cols} 列を表示しています。コピーと保存にはすべて含まれます。",
+    ),
 ];
 
 #[cfg(test)]

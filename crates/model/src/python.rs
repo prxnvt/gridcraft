@@ -23,6 +23,9 @@ pub struct PyCode {
     /// The cell's inputs changed while calculation was manual: its value is out of date until
     /// the workbook is calculated.
     pub stale: bool,
+    /// A multi-line text result in value mode spills one line per row (true) instead of staying
+    /// in the cell, wrapped (false).
+    pub lines: bool,
 }
 
 /// A Python result kept on the cell.
@@ -37,7 +40,18 @@ pub struct PyOutput {
     pub preview: String,
     /// Whether `value` is the result converted to cells.
     pub convertible: bool,
+    /// The type with its size (`DataFrame 6×4`, `list 12`), shown in object mode.
+    pub label: String,
+    /// The result is a table the app can show and export.
+    pub tabular: bool,
+    /// The table's first row is a header row.
+    pub headers: bool,
+    /// The table, when it isn't `value` (a dict of equal-length lists).
+    pub table: Option<Value>,
 }
+
+/// Lines a multi-line text result may spill into.
+pub const MAX_LINES: usize = 1_000_000;
 
 impl PyCode {
     pub fn new(code: &str) -> PyCode {
@@ -48,8 +62,35 @@ impl PyCode {
     /// Python object, its type name. `None` before the code has run.
     pub fn result_value(&self) -> Option<Value> {
         let out = self.output.as_ref()?;
-        let scalar = !matches!(out.value, Value::Array(_)) && out.convertible;
-        Some(if self.object && !scalar { Value::text(out.type_name.as_str()) } else { out.value.clone() })
+        let multiline = matches!(&out.value, Value::Text(t) if t.contains('\n'));
+        let scalar = !matches!(out.value, Value::Array(_)) && out.convertible && !multiline;
+        if self.object && !scalar {
+            let label = if out.label.is_empty() { out.type_name.as_str() } else { out.label.as_str() };
+            return Some(Value::text(label));
+        }
+        if !self.object
+            && self.lines
+            && multiline
+            && let Value::Text(t) = &out.value
+        {
+            let lines: Vec<Value> = t.split('\n').take(MAX_LINES).map(|l| Value::text(l.strip_suffix('\r').unwrap_or(l))).collect();
+            let n = lines.len();
+            return Some(gridcraft_core::Array::new(n, 1, lines).map(Value::from).unwrap_or(Value::Error(CellError::Calc)));
+        }
+        Some(out.value.clone())
+    }
+
+    /// The result as a table (rows of cells) with whether its first row is a header, for
+    /// showing and exporting an object-mode result. `None` when the result isn't tabular.
+    pub fn table(&self) -> Option<(&gridcraft_core::Array, bool)> {
+        let out = self.output.as_ref()?;
+        if !out.tabular {
+            return None;
+        }
+        match out.table.as_ref().unwrap_or(&out.value) {
+            Value::Array(a) => Some((a.as_ref(), out.headers)),
+            _ => None,
+        }
     }
 
     /// The formula a file stores the cell as (without `=`): `PY("…"&"…",0)`, with the code in
@@ -295,12 +336,13 @@ mod tests {
     #[test]
     fn result_values() {
         let arr = gridcraft_core::Array::new(2, 1, vec![1.0.into(), 2.0.into()]).map(Value::from).unwrap();
-        let out = PyOutput { value: arr.clone(), type_name: "list".into(), preview: "[1, 2]".into(), convertible: true };
+        let out = PyOutput { value: arr.clone(), type_name: "list".into(), preview: "[1, 2]".into(), convertible: true, ..PyOutput::default() };
         let mut py = PyCode { output: Some(out), ..PyCode::new("[1, 2]") };
         assert_eq!(py.result_value(), Some(arr));
         py.object = true;
         assert_eq!(py.result_value(), Some(Value::text("list")));
-        py.output = Some(PyOutput { value: Value::Number(3.0), type_name: "int".into(), preview: "3".into(), convertible: true });
+        py.output =
+            Some(PyOutput { value: Value::Number(3.0), type_name: "int".into(), preview: "3".into(), convertible: true, ..PyOutput::default() });
         assert_eq!(py.result_value(), Some(Value::Number(3.0)), "scalars show as values in object mode too");
         py.output = None;
         assert_eq!(py.result_value(), None);

@@ -466,6 +466,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
             "Python 셀입니다. 클릭하면 이 셀의 Python이 꺼집니다(Enter를 누르면 일반 셀이 되고, 실행 취소하면 코드가 돌아옵니다)"
         }
+        "Python Output" => "Python 출력",
+        "Python Output (Ctrl+Alt+Shift+M)" => "Python 출력(Ctrl+Alt+Shift+M)",
+        "Select a Python cell to change its output" => "출력을 변경할 Python 셀을 선택하세요",
+        "Copy as CSV" => "CSV로 복사",
+        "Copy as Markdown" => "Markdown으로 복사",
+        "Save as .csv…" => ".csv로 저장…",
+        "Spill Here" => "여기에 분산",
+        "Show the result as cell values, spilling from this cell" => "이 셀부터 분산되는 셀 값으로 결과를 표시합니다",
+        "Copied {count} rows as CSV" => "{count}개 행을 CSV로 복사했습니다",
+        "Copied {count} rows as Markdown" => "{count}개 행을 Markdown으로 복사했습니다",
+        "Showing {shown} of {rows} rows and {cols} of {all} columns; Copy and Save include them all." => {
+            "{rows}개 행 중 {shown}개, {all}개 열 중 {cols}개를 표시합니다. 복사와 저장에는 모두 포함됩니다."
+        }
         _ => return None,
     })
 }
