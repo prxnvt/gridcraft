@@ -133,6 +133,18 @@ pub enum Icon {
     OpenFolder,
     Info,
     Print,
+    /// Python in cells: a "Py" tag (deliberately not the Python Software Foundation logo).
+    Python,
+    /// Reset (a runtime): a circular arrow.
+    Reset,
+    /// Diagnostics: a pulse line on a page.
+    Diagnostics,
+    /// Run a Python cell (the formula bar): a play triangle, in the colour given.
+    RunCell,
+    /// Stop Python (the formula bar): a rounded square, in the colour given.
+    StopCell,
+    /// Re-run a Python cell (the formula bar): a circular arrow.
+    Rerun,
 }
 
 struct G<'a> {
@@ -738,6 +750,40 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.line(&[(4.0, 11.5), (1.5, 11.5), (1.5, 5.5), (14.5, 5.5), (14.5, 11.5), (12.0, 11.5)], c, 1.1);
             g.line(&[(4.5, 9.0), (4.5, 14.5), (11.5, 14.5), (11.5, 9.0), (4.5, 9.0)], c, 1.1);
             g.circle(12.3, 7.6, 0.6, Some(c), None);
+        }
+        Icon::Python => {
+            g.p.rect_filled(Rect::from_min_max(g.pt(1.5, 3.5), g.pt(14.5, 12.5)), 2.5 * g.s, green);
+            g.text(8.0, 8.0, "Py", 7.5, paper, true, false);
+        }
+        Icon::Reset => {
+            let pts: Vec<(f32, f32)> = (0..=12)
+                .map(|i| {
+                    let a = (-50.0 + i as f32 * 25.0).to_radians();
+                    (8.0 + 5.0 * a.cos(), 8.5 + 5.0 * a.sin())
+                })
+                .collect();
+            g.line(&pts, c, 1.2);
+            // The arrow head at the start of the arc, pointing back along it.
+            g.poly(&[(9.6, 1.6), (13.6, 3.6), (10.6, 6.0)], c);
+        }
+        Icon::Diagnostics => {
+            g.rect(2.0, 2.5, 12.0, 11.0, Some(paper), Some(c));
+            g.line(&[(3.0, 8.5), (5.5, 8.5), (7.0, 5.0), (8.8, 11.5), (10.3, 7.0), (11.2, 8.5), (13.0, 8.5)], red, 1.3);
+        }
+        Icon::RunCell => g.poly(&[(4.5, 2.5), (13.0, 8.0), (4.5, 13.5)], c),
+        Icon::StopCell => {
+            g.p.rect_filled(Rect::from_min_max(g.pt(3.5, 3.5), g.pt(12.5, 12.5)), 1.5 * g.s, c);
+        }
+        Icon::Rerun => {
+            // Most of a circle, clockwise from the top right, with the head at its end.
+            let pts: Vec<(f32, f32)> = (0..=14)
+                .map(|i| {
+                    let a = (-60.0 + i as f32 * 21.0).to_radians();
+                    (8.0 + 5.2 * a.cos(), 8.5 + 5.2 * a.sin())
+                })
+                .collect();
+            g.line(&pts, c, 1.4);
+            g.poly(&[(10.2, 0.9), (13.9, 4.6), (9.0, 5.6)], c);
         }
     }
 }

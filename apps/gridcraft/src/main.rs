@@ -159,6 +159,11 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        pick_program: Some(Box::new(|| {
+            let dialog = rfd::FileDialog::new().set_title("Choose Python 3.11 or newer");
+            let dialog = if cfg!(windows) { dialog.add_filter("Programs", &["exe"]) } else { dialog };
+            dialog.pick_file().and_then(|p| p.to_str().map(str::to_string))
+        })),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])

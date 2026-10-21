@@ -32,7 +32,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::calc::Calc;
 use gridcraft_engine::model::{CalcMode, Formula, Sheet, Workbook};
 use gridcraft_engine::{EngineError, Session, command_specs, find_command, io};
@@ -422,8 +422,25 @@ fn same_value(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// How an XLSX file caches a value: the file format has no code for #SPILL!, #CALC! or the Python
+/// errors, so the writer caches them as #VALUE!, as Excel does.
+fn as_cached(v: &Value) -> Value {
+    match v {
+        Value::Error(CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked) => {
+            Value::Error(CellError::Value)
+        }
+        v => v.clone(),
+    }
+}
+
 /// The first cell whose displayed value (own value or spilled) differs between two workbooks.
 fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
+    value_diff_with(a, b, what, false)
+}
+
+/// [`value_diff`]; with `cached`, `b` was read back from a file, so a Python cell's error may come
+/// back as #VALUE!.
+fn value_diff_with(a: &Workbook, b: &Workbook, what: &str, cached: bool) -> Option<String> {
     for (x, y) in a.sheets.iter().zip(&b.sheets) {
         let mut keys: BTreeSet<CellRef> = BTreeSet::new();
         for s in [x, y] {
@@ -432,7 +449,8 @@ fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
         }
         for c in keys {
             let (va, vb) = (x.value(c), y.value(c));
-            if !same_value(&va, &vb) {
+            let python = x.cell(c).is_some_and(|cell| cell.py.is_some());
+            if !same_value(&va, &vb) && !(cached && python && same_value(&as_cached(&va), &vb)) {
                 let f = x.cell(c).and_then(|c| c.formula.as_ref()).map(|f| format!(" (formula ={})", f.text)).unwrap_or_default();
                 return Some(format!("{}!{c}{f}: {va:?} in memory, {vb:?} after {what}", x.name));
             }
@@ -475,7 +493,7 @@ fn roundtrip_diff(wb: &Workbook) -> Result<(), String> {
         }
     }
     if wb.calc.mode == CalcMode::Automatic && !wb.calc.iterative {
-        value_diff(wb, &back, "an XLSX save and reload").map_or(Ok(()), Err)?;
+        value_diff_with(wb, &back, "an XLSX save and reload", true).map_or(Ok(()), Err)?;
     }
     Ok(())
 }

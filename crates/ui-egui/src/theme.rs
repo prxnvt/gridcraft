@@ -57,6 +57,9 @@ pub struct Tokens {
     pub notice_info_border: Color32,
     /// Text and glyphs drawn on an `accent` fill (primary buttons, switched-on toggles).
     pub on_accent: Color32,
+    /// The PY badge fill (formula bar, Python cells) and its text.
+    pub badge_py: Color32,
+    pub on_badge: Color32,
     /// The category palette, indexed by [`Cat`]: the coloured parts of icons, gallery highlights.
     pub cat: [Color32; 8],
     /// The page colour inside icons (documents, cells, clipboards).
@@ -80,6 +83,8 @@ pub struct Tokens {
     pub sheet_control_text: Color32,
     /// A placeholder fill on the sheet (a picture that has not loaded).
     pub sheet_track: Color32,
+    /// Text of a stale (not yet recalculated) Python cell, drawn on the sheet.
+    pub stale_text: Color32,
 }
 
 /// The eight category colours, in the order of [`Tokens::cat`].
@@ -125,6 +130,7 @@ const SHEET_CONTROL_BG: Color32 = rgb(0xF3F3F3);
 const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
 const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
 const SHEET_TRACK: Color32 = rgb(0xD6D6D6);
+const STALE_TEXT: Color32 = rgb(0x767676);
 
 impl Tokens {
     pub fn light() -> Tokens {
@@ -167,6 +173,8 @@ impl Tokens {
             notice_info_bg: Color32::from_rgb(0xEA, 0xF2, 0xFB),
             notice_info_border: Color32::from_rgb(0xB9, 0xD2, 0xEC),
             on_accent: Color32::WHITE,
+            badge_py: rgb(0x1E7A45),
+            on_badge: Color32::WHITE,
             cat: [rgb(0x2F6FCF), rgb(0x1E8A4C), rgb(0xC8601A), rgb(0xC8372D), rgb(0x8350C8), rgb(0x13808A), rgb(0x9C6C00), rgb(0x5A6B7D)],
             paper: Color32::WHITE,
             ref_colors: SHEET_REF_COLORS,
@@ -180,6 +188,7 @@ impl Tokens {
             sheet_control_border: SHEET_CONTROL_BORDER,
             sheet_control_text: SHEET_CONTROL_TEXT,
             sheet_track: SHEET_TRACK,
+            stale_text: STALE_TEXT,
         }
     }
 
@@ -223,6 +232,8 @@ impl Tokens {
             notice_info_bg: Color32::from_rgb(0x24, 0x33, 0x44),
             notice_info_border: Color32::from_rgb(0x3B, 0x55, 0x72),
             on_accent: rgb(0x0F2A1A),
+            badge_py: rgb(0x1F6B40),
+            on_badge: Color32::WHITE,
             cat: [rgb(0x6EA8F7), rgb(0x5CC587), rgb(0xF0965A), rgb(0xF07B6E), rgb(0xB394EE), rgb(0x4CC7CF), rgb(0xF2C14E), rgb(0xA9B6C4)],
             paper: rgb(0x454545),
             ref_colors: [rgb(0x6FA3F5), rgb(0xF27C7C), rgb(0xB394EE), rgb(0x6CCB85), rgb(0xF0A061), rgb(0x5CC9DA), rgb(0xE77FC4), rgb(0xD4C25A)],
@@ -236,6 +247,7 @@ impl Tokens {
             sheet_control_border: SHEET_CONTROL_BORDER,
             sheet_control_text: SHEET_CONTROL_TEXT,
             sheet_track: SHEET_TRACK,
+            stale_text: STALE_TEXT,
         }
     }
 
@@ -931,6 +943,7 @@ mod contrast_tests {
         }
         add("icon stroke on paper", t.text, t.paper, GLYPH);
         add("on_accent on accent", t.on_accent, t.accent, TEXT);
+        add("PY badge text", t.on_badge, t.badge_py, TEXT);
         add("warning glyph", t.on_warning, t.warning, TEXT);
         add("notice text (warning)", t.text, t.notice_warn_bg, TEXT);
         add("notice text (info)", t.text, t.notice_info_bg, TEXT);
@@ -945,6 +958,7 @@ mod contrast_tests {
         }
         // On the sheet.
         add("cell text", t.cell_text, t.grid_bg, TEXT);
+        add("stale cell text", t.stale_text, t.grid_bg, TEXT);
         for (i, c) in t.sheet_ref_colors.iter().enumerate() {
             add(&format!("sheet reference {i}"), *c, t.grid_bg, TEXT);
         }

@@ -19,7 +19,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 
 | Method | Params | What it does |
 |---|---|---|
-| `engine.execute` | `{command, params}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`) |
+| `engine.execute` | `{command, params, wait?, waitSeconds?}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`); with `wait: true` the reply waits until Python cells finish (see below) |
 | `engine.commands` | `{search?}` | Every command: id, label, ribbon path, shortcut, params doc, enabled; `search` keeps those whose id, label or ribbon path contains it (case-insensitive) |
 | `engine.journal` | | Commands run so far (replayable). Passwords (`password`, `…Password` params) are left out, so a replayed Protect Sheet has no password |
 | `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |
@@ -35,10 +35,25 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.backstage` (via `engine.execute`) | `{page?: home\|new\|open\|info\|saveAs\|print\|export\|options\|close}` | Open the File tab's Backstage view on a page, or close it (`ui.inspect` reports the open page as `backstage`) |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
+| `ui.pane` (through `engine.execute`) | `{name?}` | Show a task pane (`comments`, `watch`, `selection`, `formatChart`, `pythonDiagnostics`); no name closes it |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
 | `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
+
+Python cells run in the background in the app, so `python.set` answers at once and the cells it
+starts show `#BUSY!` until they finish. `ui.inspect` reports `pythonBusy: true` while any are
+running or waiting; poll it (or `cell.get`) for the results, or pass `wait: true` to
+`engine.execute`: the reply then waits, without holding up the window, until Python is idle or
+`waitSeconds` pass (default: the Python time limit, plus the time allowed for imports, plus one
+second). A result with a `cell` and its `value` (such as `python.set`'s) then carries the cell's
+final value, and the reply has `pythonBusy: false` (true when the wait ran out). `python.stop`
+(or `ui.key {key: "Escape"}` with no editor open) stops them. `python.run {cell?}` runs a Python
+cell again (the active cell by default) and the Python cells after it, which share its
+namespace; it goes through the same background run, so `wait: true` works with it too.
+`editor.python` is true while the formula bar edits a Python cell's code; Ctrl+Enter (Cmd+Enter
+on macOS) commits it, as does the formula bar's Run button (Stop while the cell runs or waits,
+Re-run once it has a result).
 
 Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
 to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.

@@ -65,7 +65,7 @@ impl Dialog {
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -468,6 +468,8 @@ impl Dialog {
                 d
             }
             "solverResults" => Dialog::custom("solverResults", "Solver Results", params.clone()),
+            "pythonInitialization" => return crate::python_ui::open_initialization(app),
+            "pythonOptions" => return Some(crate::python_ui::open_options(app)),
             "subtotal" => Dialog::form(
                 "subtotal",
                 "Subtotal",
@@ -889,6 +891,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "pythonInitialization" => 560.0,
+        "pythonOptions" => 540.0,
         _ => 380.0,
     };
     let window = egui::Window::new(d.title.clone())
@@ -916,6 +920,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
+                "pythonInitialization" => crate::python_ui::initialization(app, ui, &mut d, &mut confirm, &mut open),
+                "pythonOptions" => crate::python_ui::options(app, ui, &mut d, &mut confirm, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");

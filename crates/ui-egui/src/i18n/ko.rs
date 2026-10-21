@@ -393,6 +393,79 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "Running Python…" => "Python 실행 중…",
+        "Stop" => "중지",
+        "Stop the Python cells that are running (Esc)" => "실행 중인 Python 셀을 중지합니다(Esc)",
+        "Output as Python Object" => "Python 개체로 출력",
+        "Output as Cell Values" => "셀 값으로 출력",
+        "Show Preview Card" => "미리 보기 카드 표시",
+        "Convert to Normal Cell" => "일반 셀로 변환",
+        "No result yet" => "아직 결과가 없습니다",
+        "Insert\nPython" => "Python\n삽입",
+        "Insert Python" => "Python 삽입",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Python 삽입(Ctrl+Alt+Shift+P)",
+        "Python Cell" => "Python 셀",
+        "Insert xl() Reference" => "xl() 참조 삽입",
+        "Initialization…" => "초기화…",
+        "Python in GridCraft" => "GridCraft의 Python",
+        "Reset" => "다시 설정",
+        "Reset Runtime" => "런타임 다시 설정",
+        "Reset Runtime: start Python afresh and run every Python cell again" => {
+            "런타임 다시 설정: Python을 새로 시작하고 모든 Python 셀을 다시 실행합니다"
+        }
+        "Reset and Clear Diagnostics" => "다시 설정하고 진단 지우기",
+        "Stop (Esc)" => "중지(Esc)",
+        "Diagnostics" => "진단",
+        "Python Diagnostics: every run, its output and errors" => "Python 진단: 모든 실행과 그 출력 및 오류",
+        "Python" => "Python",
+        "This sheet" => "이 시트",
+        "Errors only" => "오류만",
+        "Options…" => "옵션…",
+        "Python Options: which Python runs cells, and the time limit" => "Python 옵션: 셀을 실행하는 Python과 시간 제한",
+        "Python Options…" => "Python 옵션…",
+        "No Python runs yet." => "아직 Python 실행이 없습니다.",
+        "Initialization" => "초기화",
+        "OK" => "확인",
+        "Cancel" => "취소",
+        "Error" => "오류",
+        "Time limit" => "시간 제한",
+        "Memory limit" => "메모리 제한",
+        "Stopped" => "중지됨",
+        "Turned off" => "꺼짐",
+        "Cycle" => "순환",
+        "Output" => "출력",
+        "Errors" => "오류 출력",
+        "Show Diagnostics" => "진단 표시",
+        "Python cells are turned off for this workbook." => "이 통합 문서의 Python 셀이 꺼져 있습니다.",
+        "Python cells run with your Python at {path}, with full access to your files and network. Enable only for workbooks you trust." => {
+            "Python 셀은 {path}의 Python으로 실행되며 파일과 네트워크에 완전히 액세스할 수 있습니다. 신뢰하는 통합 문서에서만 사용하도록 설정하세요."
+        }
+        "Python runs in a sandbox with no file or network access." => "Python은 파일이나 네트워크에 액세스할 수 없는 샌드박스에서 실행됩니다.",
+        "Enable Python" => "Python 사용",
+        "Dismiss this message" => "이 메시지 닫기",
+        "Version" => "버전",
+        "Program" => "프로그램",
+        "Found in" => "찾은 위치",
+        "not installed" => "설치되지 않음",
+        "Python interpreter" => "Python 인터프리터",
+        "Detect Again" => "다시 검색",
+        "Look for Python again (after installing Python or a package)" => "Python을 다시 찾습니다(Python 또는 패키지를 설치한 후)",
+        "Time limit per cell" => "셀당 시간 제한",
+        "Not used ({count})" => "사용 안 함({count})",
+        "This code runs first, before any Python cell, each time Python starts. Put imports and shared definitions here." => {
+            "이 코드는 Python이 시작될 때마다 모든 Python 셀보다 먼저 실행됩니다. 가져오기와 공유 정의를 여기에 넣으세요."
+        }
+        "Py: built-in" => "Py: 기본 제공",
+        "Py: off" => "Py: 꺼짐",
+        "Run Python cell" => "Python 셀 실행",
+        "Stop Python" => "Python 중지",
+        "Re-run Python cell" => "Python 셀 다시 실행",
+        "Run Python cell: Python is turned off for this workbook. Choose Enable Python in the message bar to run it" => {
+            "Python 셀 실행: 이 통합 문서에서 Python이 꺼져 있습니다. 실행하려면 메시지 표시줄에서 Python 사용을 선택하세요"
+        }
+        "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
+            "Python 셀입니다. 클릭하면 이 셀의 Python이 꺼집니다(Enter를 누르면 일반 셀이 되고, 실행 취소하면 코드가 돌아옵니다)"
+        }
         _ => return None,
     })
 }

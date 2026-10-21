@@ -394,6 +394,79 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Cálculo da pasta de trabalho",
         "Enable iterative calculation" => "Habilitar cálculo iterativo",
         "Calculation settings are saved with the workbook." => "As configurações de cálculo são salvas com a pasta de trabalho.",
+        "Running Python…" => "Executando Python…",
+        "Stop" => "Parar",
+        "Stop the Python cells that are running (Esc)" => "Parar as células Python em execução (Esc)",
+        "Output as Python Object" => "Saída como Objeto Python",
+        "Output as Cell Values" => "Saída como Valores de Célula",
+        "Show Preview Card" => "Mostrar Cartão de Visualização",
+        "Convert to Normal Cell" => "Converter em Célula Normal",
+        "No result yet" => "Ainda não há resultado",
+        "Insert\nPython" => "Inserir\nPython",
+        "Insert Python" => "Inserir Python",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Inserir Python (Ctrl+Alt+Shift+P)",
+        "Python Cell" => "Célula Python",
+        "Insert xl() Reference" => "Inserir Referência xl()",
+        "Initialization…" => "Inicialização…",
+        "Python in GridCraft" => "Python no GridCraft",
+        "Reset" => "Redefinir",
+        "Reset Runtime" => "Redefinir Runtime",
+        "Reset Runtime: start Python afresh and run every Python cell again" => {
+            "Redefinir Runtime: reiniciar o Python e executar novamente todas as células Python"
+        }
+        "Reset and Clear Diagnostics" => "Redefinir e Limpar Diagnósticos",
+        "Stop (Esc)" => "Parar (Esc)",
+        "Diagnostics" => "Diagnósticos",
+        "Python Diagnostics: every run, its output and errors" => "Diagnósticos do Python: cada execução, sua saída e erros",
+        "Python" => "Python",
+        "This sheet" => "Esta planilha",
+        "Errors only" => "Somente erros",
+        "Options…" => "Opções…",
+        "Python Options: which Python runs cells, and the time limit" => "Opções do Python: qual Python executa as células e o limite de tempo",
+        "Python Options…" => "Opções do Python…",
+        "No Python runs yet." => "Ainda não há execuções do Python.",
+        "Initialization" => "Inicialização",
+        "OK" => "OK",
+        "Cancel" => "Cancelar",
+        "Error" => "Erro",
+        "Time limit" => "Limite de tempo",
+        "Memory limit" => "Limite de memória",
+        "Stopped" => "Parado",
+        "Turned off" => "Desativado",
+        "Cycle" => "Ciclo",
+        "Output" => "Saída",
+        "Errors" => "Erros",
+        "Show Diagnostics" => "Mostrar Diagnósticos",
+        "Python cells are turned off for this workbook." => "As células Python estão desativadas nesta pasta de trabalho.",
+        "Python cells run with your Python at {path}, with full access to your files and network. Enable only for workbooks you trust." => {
+            "As células Python são executadas com o seu Python em {path}, com acesso total aos seus arquivos e à rede. Habilite apenas para pastas de trabalho confiáveis."
+        }
+        "Python runs in a sandbox with no file or network access." => "O Python é executado em uma área restrita, sem acesso a arquivos ou à rede.",
+        "Enable Python" => "Habilitar Python",
+        "Dismiss this message" => "Fechar esta mensagem",
+        "Version" => "Versão",
+        "Program" => "Programa",
+        "Found in" => "Encontrado em",
+        "not installed" => "não instalado",
+        "Python interpreter" => "Interpretador Python",
+        "Detect Again" => "Detectar Novamente",
+        "Look for Python again (after installing Python or a package)" => "Procurar o Python novamente (após instalar o Python ou um pacote)",
+        "Time limit per cell" => "Limite de tempo por célula",
+        "Not used ({count})" => "Não usados ({count})",
+        "This code runs first, before any Python cell, each time Python starts. Put imports and shared definitions here." => {
+            "Este código é executado primeiro, antes de qualquer célula Python, sempre que o Python é iniciado. Coloque aqui as importações e as definições compartilhadas."
+        }
+        "Py: built-in" => "Py: integrado",
+        "Py: off" => "Py: desativado",
+        "Run Python cell" => "Executar célula Python",
+        "Stop Python" => "Parar Python",
+        "Re-run Python cell" => "Executar novamente a célula Python",
+        "Run Python cell: Python is turned off for this workbook. Choose Enable Python in the message bar to run it" => {
+            "Executar célula Python: o Python está desativado nesta pasta de trabalho. Escolha Habilitar Python na barra de mensagens para executá-la"
+        }
+        "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
+            "Célula Python. Clique para desativar o Python nesta célula (Enter a torna uma célula normal; desfazer restaura o código)"
+        }
         _ => return None,
     })
 }

@@ -393,6 +393,79 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        "Running Python…" => "Выполняется Python…",
+        "Stop" => "Остановить",
+        "Stop the Python cells that are running (Esc)" => "Остановить выполняемые ячейки Python (Esc)",
+        "Output as Python Object" => "Вывод как объект Python",
+        "Output as Cell Values" => "Вывод как значения ячеек",
+        "Show Preview Card" => "Показать карточку предпросмотра",
+        "Convert to Normal Cell" => "Преобразовать в обычную ячейку",
+        "No result yet" => "Результата пока нет",
+        "Insert\nPython" => "Вставить\nPython",
+        "Insert Python" => "Вставить Python",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Вставить Python (Ctrl+Alt+Shift+P)",
+        "Python Cell" => "Ячейка Python",
+        "Insert xl() Reference" => "Вставить ссылку xl()",
+        "Initialization…" => "Инициализация…",
+        "Python in GridCraft" => "Python в GridCraft",
+        "Reset" => "Сброс",
+        "Reset Runtime" => "Сбросить среду выполнения",
+        "Reset Runtime: start Python afresh and run every Python cell again" => {
+            "Сбросить среду выполнения: запустить Python заново и снова выполнить все ячейки Python"
+        }
+        "Reset and Clear Diagnostics" => "Сбросить и очистить диагностику",
+        "Stop (Esc)" => "Остановить (Esc)",
+        "Diagnostics" => "Диагностика",
+        "Python Diagnostics: every run, its output and errors" => "Диагностика Python: все запуски, их вывод и ошибки",
+        "Python" => "Python",
+        "This sheet" => "Этот лист",
+        "Errors only" => "Только ошибки",
+        "Options…" => "Параметры…",
+        "Python Options: which Python runs cells, and the time limit" => "Параметры Python: какой Python выполняет ячейки и ограничение времени",
+        "Python Options…" => "Параметры Python…",
+        "No Python runs yet." => "Запусков Python пока нет.",
+        "Initialization" => "Инициализация",
+        "OK" => "ОК",
+        "Cancel" => "Отмена",
+        "Error" => "Ошибка",
+        "Time limit" => "Ограничение времени",
+        "Memory limit" => "Ограничение памяти",
+        "Stopped" => "Остановлено",
+        "Turned off" => "Отключено",
+        "Cycle" => "Цикл",
+        "Output" => "Вывод",
+        "Errors" => "Ошибки",
+        "Show Diagnostics" => "Показать диагностику",
+        "Python cells are turned off for this workbook." => "Ячейки Python в этой книге отключены.",
+        "Python cells run with your Python at {path}, with full access to your files and network. Enable only for workbooks you trust." => {
+            "Ячейки Python выполняются вашим Python ({path}) с полным доступом к файлам и сети. Включайте только для книг, которым доверяете."
+        }
+        "Python runs in a sandbox with no file or network access." => "Python выполняется в изолированной среде без доступа к файлам и сети.",
+        "Enable Python" => "Включить Python",
+        "Dismiss this message" => "Закрыть это сообщение",
+        "Version" => "Версия",
+        "Program" => "Программа",
+        "Found in" => "Найден в",
+        "not installed" => "не установлен",
+        "Python interpreter" => "Интерпретатор Python",
+        "Detect Again" => "Найти снова",
+        "Look for Python again (after installing Python or a package)" => "Снова найти Python (после установки Python или пакета)",
+        "Time limit per cell" => "Ограничение времени на ячейку",
+        "Not used ({count})" => "Не используются ({count})",
+        "This code runs first, before any Python cell, each time Python starts. Put imports and shared definitions here." => {
+            "Этот код выполняется первым, перед любой ячейкой Python, при каждом запуске Python. Поместите сюда импорты и общие определения."
+        }
+        "Py: built-in" => "Py: встроенный",
+        "Py: off" => "Py: выкл.",
+        "Run Python cell" => "Выполнить ячейку Python",
+        "Stop Python" => "Остановить Python",
+        "Re-run Python cell" => "Повторно выполнить ячейку Python",
+        "Run Python cell: Python is turned off for this workbook. Choose Enable Python in the message bar to run it" => {
+            "Выполнить ячейку Python: Python в этой книге отключен. Чтобы выполнить ячейку, выберите «Включить Python» на панели сообщений"
+        }
+        "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
+            "Ячейка Python. Щелкните, чтобы отключить Python для этой ячейки (затем Enter делает ее обычной ячейкой; отмена возвращает код)"
+        }
         _ => return None,
     })
 }

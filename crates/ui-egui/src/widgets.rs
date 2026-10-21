@@ -25,6 +25,8 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
+    let name = tr(ui, tip);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -55,6 +57,8 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
     }
     icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
     paint_big_label(ui, rect, &lines, dropdown);
+    let name = label.replace('\n', " ");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
     resp.on_hover_text(tr(ui, tip))
 }
 
@@ -149,7 +153,44 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
             t.text_dim,
         );
     }
+    let name = if label.is_empty() { tr(ui, tip) } else { label };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
     resp.on_hover_text(tr(ui, tip))
+}
+
+/// Small split button (Formulas › Python › Reset): the icon and label run the default action, the
+/// arrow opens a menu. Returns the (main, arrow) responses; their accessible names are the label
+/// and "<label> options".
+pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Response, Response) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(12.5);
+    let label = tr(ui, label);
+    let tw = if label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0 };
+    let (rect, _) = ui.allocate_exact_size(vec2(24.0 + tw + 14.0, 23.0), Sense::hover());
+    let main_rect = Rect::from_min_max(rect.min, pos2(rect.right() - 14.0, rect.bottom()));
+    let arrow_rect = Rect::from_min_max(pos2(main_rect.right(), rect.top()), rect.max);
+    let main = ui.interact(main_rect, ui.id().with((label, "small-split-main")), Sense::click());
+    let arrow = ui.interact(arrow_rect, ui.id().with((label, "small-split-arrow")), Sense::click());
+    if main.hovered() || arrow.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+        ui.painter()
+            .line_segment([pos2(main_rect.right(), rect.top() + 3.0), pos2(main_rect.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
+    }
+    for (part, r) in [(&main, main_rect), (&arrow, arrow_rect)] {
+        if part.is_pointer_button_down_on() {
+            ui.painter().rect_filled(r, 4.0, t.pressed);
+        }
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    if !label.is_empty() {
+        ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(arrow_rect.center() + vec2(0.0, 1.0), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    let enabled = ui.is_enabled();
+    main.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, format!("{label} options")));
+    let tip = tr(ui, tip);
+    (main.on_hover_text(tip), arrow.on_hover_text(tip))
 }
 
 /// A split button: main part runs the default action, the arrow opens a menu.

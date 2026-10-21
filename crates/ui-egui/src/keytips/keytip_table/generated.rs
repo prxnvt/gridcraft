@@ -220,6 +220,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("PTHB", Entry::Finish(Action::Command("pageLayout.theme"))), // Excel: Browse Themes; containment(Themes)
     ("PVG", Entry::Finish(Action::Command("view.gridlines"))),  // Excel: View Gridlines
     ("PVH", Entry::Finish(Action::Command("view.headings"))),   // Excel: View Headings
+    ("M1", Entry::Finish(Action::Control("python.diagnostics"))), // Excel: Diagnostics; Python group: opens the Python Diagnostics pane
     ("MA", Entry::Continue),                                    // Excel: Remove Arrows Menu; group level: containment(Remove Arrows)
     ("MAA", Entry::Finish(Action::Command("formulas.removeArrows"))), // Excel: Remove All Arrows; landed in the catalog; live since T7 probe
     ("MAP", Entry::Finish(Action::Pending("formulas.removePrecedentArrows"))), // pending; Excel: Remove Precedent Arrows; Remove Precedent Arrows; reserved until the command lands
@@ -257,6 +258,8 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MXA", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Automatic Calculation; Calculation options: Automatic
     ("MXM", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Manual Calculation; Calculation options: Manual
     ("MXP", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Partial Calculation; Calculation options: Partial
+    ("MY", Entry::Finish(Action::Control("python.insert"))),   // Excel: Insert Python Menu; Python group: opens the Insert Python menu
+    ("MZ", Entry::Finish(Action::Control("python.reset"))),    // Excel: Reset Menu; Python group: opens the Reset menu
     ("AB", Entry::Finish(Action::Dialog("subtotal"))),         // Excel: Subtotal
     ("AC", Entry::Finish(Action::Command("data.clearFilter"))), // Excel: Clear Filter
     ("AD", Entry::Finish(Action::Command("data.consolidate"))), // Excel: Consolidate

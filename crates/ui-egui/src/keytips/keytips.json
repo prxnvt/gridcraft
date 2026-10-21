@@ -1462,6 +1462,13 @@
    "note": ""
   },
   {
+   "seq": "M1",
+   "kind": "control",
+   "target": "python.diagnostics",
+   "excel": "Diagnostics",
+   "note": "Python group: opens the Python Diagnostics pane"
+  },
+  {
    "seq": "MA",
    "kind": "continue",
    "excel": "Remove Arrows Menu",
@@ -1714,6 +1721,20 @@
    "target": "formulas.calculationOptions",
    "excel": "Partial Calculation",
    "note": "Calculation options: Partial"
+  },
+  {
+   "seq": "MY",
+   "kind": "control",
+   "target": "python.insert",
+   "excel": "Insert Python Menu",
+   "note": "Python group: opens the Insert Python menu"
+  },
+  {
+   "seq": "MZ",
+   "kind": "control",
+   "target": "python.reset",
+   "excel": "Reset Menu",
+   "note": "Python group: opens the Reset menu"
   },
   {
    "seq": "AB",

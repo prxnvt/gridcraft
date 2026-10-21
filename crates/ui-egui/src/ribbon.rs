@@ -8,7 +8,7 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -1863,6 +1863,8 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         });
     }
     sep(ui);
+    python_section(app, ui);
+    sep(ui);
     let __k = big_button(ui, Icon::Name, "Name\nManager", "Name Manager", false);
     control_keytip(app, ui, &__k, "dialog:nameManager");
     if __k.clicked() {
@@ -1956,6 +1958,151 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
 }
+
+/// Width of the Python group folded into one button.
+const PYTHON_FOLDED_WIDTH: f32 = 64.0;
+
+/// Whether the Python group was folded last pass, and its expanded width.
+#[derive(Clone, Copy, Debug, Default)]
+struct PythonFold {
+    /// The pass these were measured in.
+    pass: u64,
+    width: f32,
+    folded: bool,
+}
+
+/// Formulas › Python, or, when the tab is wider than the ribbon card, the same commands in one
+/// dropdown button, so the Python group does not push the groups after it out of view. Only this
+/// group folds; the expanded width is remembered so the decision does not change from frame to
+/// frame, and a keytip of the folded group opens its menu.
+fn python_section(app: &mut SheetApp, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let id = egui::Id::new("ribbon.formulas.python_fold");
+    let last: PythonFold = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
+    let pass = ctx.cumulative_pass_nr();
+    // Measurements count only if the Formulas tab was showing in the previous pass.
+    let fresh = last.pass.saturating_add(1) == pass;
+    let o = RibbonOverflow::get(&ctx);
+    let full = o.content + if last.folded { (last.width - PYTHON_FOLDED_WIDTH).max(0.0) } else { 0.0 };
+    let fold = fresh && o.visible > 0.0 && last.width > 0.0 && full > o.visible + 0.5;
+    let width = if fold {
+        let targets = ["python.insert", "python.reset", "python.diagnostics"];
+        let r = big_button(ui, Icon::Python, "Python", "Python", true);
+        anchor_keytip(app, ui, &r, &targets);
+        let mut forced = false;
+        for target in targets {
+            forced |= invoke(app, target);
+        }
+        egui::Popup::menu(&r).open_memory(popup_command(forced, r.clicked())).show(|ui| python_menu(app, ui));
+        last.width
+    } else {
+        ui.scope(|ui| python_group(app, ui)).response.rect.width()
+    };
+    ctx.data_mut(|d| d.insert_temp(id, PythonFold { pass, width, folded: fold }));
+}
+
+/// A plain menu item, translated.
+fn menu_item(app: &SheetApp, ui: &mut Ui, label: &str) -> bool {
+    ui.add(egui::Button::new(app.ui.language.tr(label)).frame(false).min_size(vec2(220.0, 22.0))).clicked()
+}
+
+/// Stop (Esc), enabled while Python cells run.
+fn python_stop_item(app: &mut SheetApp, ui: &mut Ui) {
+    let label = app.ui.language.tr("Stop (Esc)");
+    if ui.add_enabled(app.session.python_busy(), egui::Button::new(label).frame(false).min_size(vec2(220.0, 22.0))).clicked() {
+        act(app, "python.stop", json!({}));
+    }
+}
+
+/// Formulas › Python: a big Insert Python split button, then Reset and Diagnostics as labelled
+/// small buttons.
+fn python_group(app: &mut SheetApp, ui: &mut Ui) {
+    let (main, arrow) = big_split_button(ui, Icon::Python, "Insert\nPython", "Insert Python (Ctrl+Alt+Shift+P)");
+    if main.clicked() {
+        app.begin_python_edit();
+    }
+    control_keytip(app, ui, &arrow, "python.insert");
+    let forced = invoke(app, "python.insert");
+    egui::Popup::menu(&arrow).open_memory(popup_command(forced, arrow.clicked())).show(|ui| {
+        if menu_item(app, ui, "Python Cell") {
+            app.begin_python_edit();
+        }
+        if menu_item(app, ui, "Insert xl() Reference") {
+            app.point_python();
+        }
+        ui.separator();
+        if menu_item(app, ui, "Initialization…") {
+            app.open_dialog("pythonInitialization", json!({}));
+        }
+        if menu_item(app, ui, "Python Options…") {
+            app.open_dialog("pythonOptions", json!({}));
+        }
+        if menu_item(app, ui, "Python in GridCraft") {
+            app.message = Some((app.ui.language.tr("Python in GridCraft").into(), PYTHON_HELP.into()));
+        }
+    });
+    ui.vertical(|ui| {
+        let (reset, menu) = small_split_button(ui, Icon::Reset, "Reset", "Reset Runtime: start Python afresh and run every Python cell again");
+        if reset.clicked() {
+            act(app, "python.reset", json!({}));
+        }
+        control_keytip(app, ui, &menu, "python.reset");
+        let forced = invoke(app, "python.reset");
+        egui::Popup::menu(&menu).open_memory(popup_command(forced, menu.clicked())).show(|ui| {
+            menu_items(
+                app,
+                ui,
+                &[("Reset Runtime", "python.reset", json!({})), ("Reset and Clear Diagnostics", "python.reset", json!({"clearDiagnostics": true}))],
+            );
+            ui.separator();
+            python_stop_item(app, ui);
+        });
+        let diagnostics = small_button(ui, Icon::Diagnostics, "Diagnostics", "Python Diagnostics: every run, its output and errors", false);
+        control_keytip(app, ui, &diagnostics, "python.diagnostics");
+        if diagnostics.clicked() || invoke(app, "python.diagnostics") {
+            app.grid.pane = Some("pythonDiagnostics".into());
+        }
+    });
+}
+
+/// The Python group folded into one button.
+fn python_menu(app: &mut SheetApp, ui: &mut Ui) {
+    if menu_item(app, ui, "Insert Python") {
+        app.begin_python_edit();
+    }
+    if menu_item(app, ui, "Insert xl() Reference") {
+        app.point_python();
+    }
+    if menu_item(app, ui, "Initialization…") {
+        app.open_dialog("pythonInitialization", json!({}));
+    }
+    if menu_item(app, ui, "Python Options…") {
+        app.open_dialog("pythonOptions", json!({}));
+    }
+    ui.separator();
+    menu_items(
+        app,
+        ui,
+        &[("Reset Runtime", "python.reset", json!({})), ("Reset and Clear Diagnostics", "python.reset", json!({"clearDiagnostics": true}))],
+    );
+    python_stop_item(app, ui);
+    if menu_item(app, ui, "Diagnostics") {
+        app.grid.pane = Some("pythonDiagnostics".into());
+    }
+    ui.separator();
+    if menu_item(app, ui, "Python in GridCraft") {
+        app.message = Some((app.ui.language.tr("Python in GridCraft").into(), PYTHON_HELP.into()));
+    }
+}
+
+const PYTHON_HELP: &str = "A Python cell holds Python code instead of a formula. Type =PY and press Tab, press Ctrl+Alt+Shift+P, or choose Insert Python. \
+In Python mode, Enter starts a new line and Ctrl+Enter (Cmd+Enter on a Mac) puts the code in the cell. \
+xl(\"A1:B5\") reads cells (click or drag on the sheet to insert one; F2 turns that off and on); headers=True gives a header row. \
+The last expression is the cell's result: a list, a list of lists or a pandas DataFrame spills into the cells around it. \
+Python cells share one namespace and run in order, row by row and sheet by sheet. \
+When Python 3.11 or newer is installed, cells run on it, with its packages (pandas, numpy) and full access to your files and network; \
+otherwise they run on the built-in Python, a sandboxed subset with no packages. Python Options shows which one and lets you choose. \
+Each cell may run for 5 seconds (a setting in Python Options). Esc stops cells that are running.";
 
 fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);

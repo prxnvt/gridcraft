@@ -385,6 +385,77 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        "Running Python…" => "正在运行 Python…",
+        "Stop" => "停止",
+        "Stop the Python cells that are running (Esc)" => "停止正在运行的 Python 单元格 (Esc)",
+        "Output as Python Object" => "输出为 Python 对象",
+        "Output as Cell Values" => "输出为单元格值",
+        "Show Preview Card" => "显示预览卡",
+        "Convert to Normal Cell" => "转换为普通单元格",
+        "No result yet" => "尚无结果",
+        "Insert\nPython" => "插入\nPython",
+        "Insert Python" => "插入 Python",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "插入 Python (Ctrl+Alt+Shift+P)",
+        "Python Cell" => "Python 单元格",
+        "Insert xl() Reference" => "插入 xl() 引用",
+        "Initialization…" => "初始化…",
+        "Python in GridCraft" => "GridCraft 中的 Python",
+        "Reset" => "重置",
+        "Reset Runtime" => "重置运行时",
+        "Reset Runtime: start Python afresh and run every Python cell again" => "重置运行时: 重新启动 Python 并再次运行每个 Python 单元格",
+        "Reset and Clear Diagnostics" => "重置并清除诊断",
+        "Stop (Esc)" => "停止 (Esc)",
+        "Diagnostics" => "诊断",
+        "Python Diagnostics: every run, its output and errors" => "Python 诊断: 每次运行及其输出和错误",
+        "Python" => "Python",
+        "This sheet" => "此工作表",
+        "Errors only" => "仅错误",
+        "Options…" => "选项…",
+        "Python Options: which Python runs cells, and the time limit" => "Python 选项: 运行单元格的 Python 及时间限制",
+        "Python Options…" => "Python 选项…",
+        "No Python runs yet." => "尚无 Python 运行记录。",
+        "Initialization" => "初始化",
+        "OK" => "确定",
+        "Cancel" => "取消",
+        "Error" => "错误",
+        "Time limit" => "时间限制",
+        "Memory limit" => "内存限制",
+        "Stopped" => "已停止",
+        "Turned off" => "已关闭",
+        "Cycle" => "循环",
+        "Output" => "输出",
+        "Errors" => "错误输出",
+        "Show Diagnostics" => "显示诊断",
+        "Python cells are turned off for this workbook." => "此工作簿的 Python 单元格已关闭。",
+        "Python cells run with your Python at {path}, with full access to your files and network. Enable only for workbooks you trust." => {
+            "Python 单元格使用位于 {path} 的 Python 运行，可完全访问你的文件和网络。仅对你信任的工作簿启用。"
+        }
+        "Python runs in a sandbox with no file or network access." => "Python 在无法访问文件或网络的沙盒中运行。",
+        "Enable Python" => "启用 Python",
+        "Dismiss this message" => "关闭此消息",
+        "Version" => "版本",
+        "Program" => "程序",
+        "Found in" => "查找位置",
+        "not installed" => "未安装",
+        "Python interpreter" => "Python 解释器",
+        "Detect Again" => "重新检测",
+        "Look for Python again (after installing Python or a package)" => "重新查找 Python (安装 Python 或包之后)",
+        "Time limit per cell" => "每个单元格的时间限制",
+        "Not used ({count})" => "未使用 ({count})",
+        "This code runs first, before any Python cell, each time Python starts. Put imports and shared definitions here." => {
+            "每次 Python 启动时，此代码都会在任何 Python 单元格之前运行。请将导入和共享定义放在这里。"
+        }
+        "Py: built-in" => "Py: 内置",
+        "Py: off" => "Py: 关闭",
+        "Run Python cell" => "运行 Python 单元格",
+        "Stop Python" => "停止 Python",
+        "Re-run Python cell" => "重新运行 Python 单元格",
+        "Run Python cell: Python is turned off for this workbook. Choose Enable Python in the message bar to run it" => {
+            "运行 Python 单元格: 此工作簿的 Python 已关闭。若要运行，请在消息栏中选择“启用 Python”"
+        }
+        "Python cell. Click to turn Python off for this cell (Enter then makes it a normal cell; undo brings the code back)" => {
+            "Python 单元格。单击可关闭此单元格的 Python (然后按 Enter 使其成为普通单元格；撤消可恢复代码)"
+        }
         _ => return None,
     })
 }

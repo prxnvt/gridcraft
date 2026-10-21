@@ -216,3 +216,13 @@ fn options_and_diagnostics_report_the_python_that_runs_cells() {
     let o = s.execute("python.options", json!({"interpreter": "", "detect": true})).unwrap();
     assert_eq!(o["interpreter"], "");
 }
+
+#[test]
+fn clear_diagnostics_empties_the_log_and_keeps_the_values() {
+    let mut s = py_session();
+    py(&mut s, "A1", "6 * 7");
+    assert!(!s.execute("python.diagnostics", json!({})).unwrap()["runs"].as_array().unwrap().is_empty());
+    assert_eq!(s.execute("python.clearDiagnostics", json!({})).unwrap()["runs"], 0);
+    assert!(s.execute("python.diagnostics", json!({})).unwrap()["runs"].as_array().unwrap().is_empty());
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+}
