@@ -3,7 +3,8 @@
 //! The parent writes [`ToWorker`] lines to the worker's standard input; the worker writes
 //! [`FromWorker`] lines to its standard output, each after [`FRAME_MARK`] so the parent can tell
 //! frames from anything else that reaches the stream. Cell values travel as
-//! [`gridcraft_core::Value`].
+//! [`gridcraft_core::Value`]; dates and times travel as serial numbers in the 1900 date system,
+//! with [`DateCell`]s saying which numbers they are (the engine converts a 1904 workbook's).
 
 use gridcraft_core::Value;
 use serde::{Deserialize, Serialize};
@@ -72,6 +73,29 @@ pub enum XlReply {
     Value(Value),
     /// The reference doesn't name cells (the message becomes a Python exception).
     Error(String),
+    /// Cells some of which hold numbers formatted as dates or times: `dates` says which. The
+    /// user's Python receives those as `datetime` values; the built-in Python as numbers.
+    Dated { value: Value, dates: Vec<DateCell> },
+}
+
+/// What a number formatted as a date or time stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DateKind {
+    /// A calendar date (`datetime.date`).
+    Date,
+    /// A time of day (`datetime.time`).
+    Time,
+    /// A date and a time of day (`datetime.datetime`).
+    DateTime,
+}
+
+/// A date or time among values: its position (row-major in an array; 0 for a single value) and
+/// its kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DateCell {
+    pub at: u32,
+    pub kind: DateKind,
 }
 
 /// Worker to parent.
@@ -123,6 +147,10 @@ pub struct Output {
     pub preview: String,
     /// Whether `value` is the result converted to cells (false: only the preview is).
     pub convertible: bool,
+    /// The numbers in `value` that were dates or times in Python (`datetime`, `date`, `time`,
+    /// pandas `Timestamp`), which the cells show with a date or time format.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dates: Vec<DateCell>,
 }
 
 /// Characters of a result's `repr` kept as its preview.
@@ -188,6 +216,7 @@ mod tests {
                 type_name: "list".into(),
                 preview: "[1.5, '#DIV/0!']".into(),
                 convertible: true,
+                dates: Vec::new(),
             }),
             stdout: "hi\n".into(),
             ..Done::default()
@@ -203,6 +232,21 @@ mod tests {
         let reply = ToWorker::XlValue { id: 3, reply: XlReply::Error("no such sheet".into()) };
         assert_eq!(parse_to_worker(&to_worker_line(&reply)), Some(reply));
         assert_eq!(parse_to_worker("garbage"), None);
+        // Dates: which numbers they are, both ways.
+        let reply = ToWorker::XlValue {
+            id: 4,
+            reply: XlReply::Dated { value: Value::Number(45292.5), dates: vec![DateCell { at: 0, kind: DateKind::DateTime }] },
+        };
+        assert_eq!(
+            to_worker_line(&reply),
+            "{\"type\":\"xlValue\",\"id\":4,\"reply\":{\"dated\":{\"value\":{\"t\":\"Number\",\"v\":45292.5},\"dates\":[{\"at\":0,\"kind\":\"dateTime\"}]}}}\n"
+        );
+        assert_eq!(parse_to_worker(&to_worker_line(&reply)), Some(reply));
+        let line = format!(
+            "{FRAME_MARK}{{\"type\":\"done\",\"id\":5,\"output\":{{\"value\":{{\"t\":\"Number\",\"v\":0.5}},\"typeName\":\"time\",\"preview\":\"\",\"convertible\":true,\"dates\":[{{\"at\":0,\"kind\":\"time\"}}]}}}}"
+        );
+        let Some(FromWorker::Done(done)) = parse_from_worker(&line) else { panic!("{line}") };
+        assert_eq!(done.output.map(|o| o.dates), Some(vec![DateCell { at: 0, kind: DateKind::Time }]));
         // The shim's heartbeat while it imports, with and without a module.
         let extend = FromWorker::Extend { id: 9, ms: 1_250, module: Some("sklearn".into()) };
         assert_eq!(parse_from_worker(&frame_line(&extend)), Some(extend));

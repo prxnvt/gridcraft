@@ -27,7 +27,12 @@ ERRORS = {
     "Calc": "#CALC!", "Circ": "#CIRC!", "Python": "#PYTHON!", "Busy": "#BUSY!",
     "Timeout": "#TIMEOUT!", "Blocked": "#BLOCKED!",
 }
+# Dates travel as serial numbers in the 1900 date system: days since 1899-12-30, except that,
+# as in Excel, serial 60 is the fictitious 1900-02-29 and earlier serials are one day lower.
 EPOCH = _dt.datetime(1899, 12, 30)
+# Serial 2958465 is 9999-12-31, the last day Excel shows.
+LAST_DAY = 2958465
+DAY_MS = 86400000
 
 # Frames get a private copy of standard output; the real one now goes to standard error, so text
 # that C code or child processes print can't break a frame.
@@ -142,12 +147,29 @@ def _number(x):
     return {"t": "Number", "v": x} if math.isfinite(x) else _error("Num")
 
 
+def _leap_bug(days):
+    # Days since 1899-12-30 as a serial: before 1900-03-01, one lower (serial 60 is 1900-02-29).
+    return days - 1 if days < 61 else days
+
+
+def _dated(x, kind):
+    # A date's serial as a cell, marked with its kind; a date before 1900 has no serial that
+    # Excel shows, so it stays a plain number.
+    cell = _number(x)
+    if cell["t"] == "Number" and (kind == "time" or cell["v"] >= 1):
+        cell["k"] = kind
+    return cell
+
+
 def _serial(v):
     if isinstance(v, _dt.datetime):
         if v.tzinfo is not None:
             v = v.replace(tzinfo=None)
-        return _number((v - EPOCH).total_seconds() / 86400.0)
-    return _number((v - EPOCH.date()).days)
+        return _dated(_leap_bug((v - EPOCH).total_seconds() / 86400.0), "dateTime")
+    if isinstance(v, _dt.date):
+        return _dated(_leap_bug((v - EPOCH.date()).days), "date")
+    seconds = v.hour * 3600 + v.minute * 60 + v.second + v.microsecond / 1e6
+    return _dated(seconds / 86400.0, "time")
 
 
 def _scalar(v):
@@ -164,7 +186,7 @@ def _scalar(v):
         if isinstance(v, np.datetime64):
             if np.isnat(v):
                 return {"t": "Empty"}
-            return _number((v - np.datetime64("1899-12-30")) / np.timedelta64(1, "D"))
+            return _dated(_leap_bug(float((v - np.datetime64("1899-12-30")) / np.timedelta64(1, "D"))), "dateTime")
         if isinstance(v, np.str_):
             return {"t": "Text", "v": str(v)}
         return None
@@ -172,7 +194,7 @@ def _scalar(v):
         return _number(v)
     if isinstance(v, str):
         return {"t": "Text", "v": v}
-    if isinstance(v, (_dt.datetime, _dt.date)):
+    if isinstance(v, (_dt.datetime, _dt.date, _dt.time)):
         pd = sys.modules.get("pandas")
         if pd is not None and v is pd.NaT:
             return {"t": "Empty"}
@@ -255,6 +277,21 @@ def _table(v):
     return None
 
 
+def _take_dates(value):
+    # The positions of the cells marked as dates, with their kinds; the marks are removed.
+    dates = []
+    if value.get("t") == "Array":
+        for i, cell in enumerate(value["v"]["data"]):
+            kind = cell.pop("k", None)
+            if kind:
+                dates.append({"at": i, "kind": kind})
+    else:
+        kind = value.pop("k", None)
+        if kind:
+            dates.append({"at": 0, "kind": kind})
+    return dates
+
+
 def _output(v):
     preview = _repr(v)
     value = _scalar(v)
@@ -267,7 +304,8 @@ def _output(v):
     convertible = value is not None
     if value is None:
         value = {"t": "Text", "v": preview}
-    return {"value": value, "typeName": type(v).__name__, "preview": preview, "convertible": convertible}
+    dates = _take_dates(value)
+    return {"value": value, "typeName": type(v).__name__, "preview": preview, "convertible": convertible, "dates": dates}
 
 
 # Cells to Python values.
@@ -288,8 +326,67 @@ def _py(v):
     return None
 
 
-def _xl_value(value, headers):
-    v = _py(value)
+def _from_serial(x, kind):
+    # A serial as a datetime.date, datetime.datetime or datetime.time, to the millisecond (the
+    # precision of Excel's times). A number that is no such value stays a number: one before
+    # 1900-01-01, the fictitious 1900-02-29, one after 9999-12-31, or, for a time, one of a day
+    # or more. A date with a time of day is a datetime even when only the date is shown.
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x):
+        return x
+    if not (0 <= x < (1 if kind == "time" else LAST_DAY + 1)):
+        return x
+    day = math.floor(x)
+    ms = round((x - day) * DAY_MS)
+    if ms >= DAY_MS:
+        day, ms = day + 1, ms - DAY_MS
+    clock = _dt.time(ms // 3600000, ms // 60000 % 60, ms // 1000 % 60, ms % 1000 * 1000)
+    if kind == "time":
+        return clock if day == 0 else x
+    if day < 1 or day == 60 or day > LAST_DAY:
+        return x
+    date = EPOCH.date() + _dt.timedelta(days=day + 1 if day < 60 else day)
+    if kind == "date" and ms == 0:
+        return date
+    return _dt.datetime.combine(date, clock)
+
+
+def _with_dates(v, dates):
+    # The cells marked as dates or times become datetime values; also returns the columns that
+    # hold dates (pandas makes datetime columns of them).
+    columns = set()
+    if not isinstance(v, list):
+        for d in dates:
+            if isinstance(d, dict) and d.get("at") == 0:
+                return _from_serial(v, d.get("kind")), columns
+        return v, columns
+    cols = max(1, len(v[0]) if v else 1)
+    for d in dates:
+        if not isinstance(d, dict) or not isinstance(d.get("at"), int):
+            continue
+        r, c = divmod(d["at"], cols)
+        if 0 <= r < len(v) and c < len(v[r]):
+            v[r][c] = _from_serial(v[r][c], d.get("kind"))
+            if d.get("kind") != "time":
+                columns.add(c)
+    return v, columns
+
+
+def _date_columns(pd, df, columns):
+    # A column whose values are all dates (or empty) becomes a datetime64 column.
+    for c in sorted(columns):
+        if c >= len(df.columns):
+            continue
+        col = df.iloc[:, c]
+        if all(x is None or isinstance(x, _dt.date) for x in col):
+            try:
+                df.isetitem(c, pd.to_datetime(col))
+            except Exception:  # noqa: BLE001 - the column keeps its values as they are
+                pass
+    return df
+
+
+def _xl_value(value, headers, dates=()):
+    v, columns = _with_dates(_py(value), dates)
     if not isinstance(v, list):
         return v
     if _state["pandas"]:
@@ -297,8 +394,8 @@ def _xl_value(value, headers):
             import pandas as pd
 
             if headers and v:
-                return pd.DataFrame(v[1:], columns=[str(h) for h in v[0]])
-            return pd.DataFrame(v)
+                return _date_columns(pd, pd.DataFrame(v[1:], columns=[str(h) for h in v[0]]), columns)
+            return _date_columns(pd, pd.DataFrame(v), columns)
         except ImportError:
             _state["pandas"] = False
     if headers and v:
@@ -309,7 +406,8 @@ def _xl_value(value, headers):
 
 def xl(reference, headers=False):
     """xl(reference, headers=False): the value of a cell, or a range as a pandas DataFrame (a list
-    of rows without pandas; a list of dicts with headers=True)."""
+    of rows without pandas; a list of dicts with headers=True). Cells formatted as dates or times
+    are datetime values."""
     if not isinstance(reference, str):
         raise TypeError('xl() takes a reference as text, such as xl("A1:B5")')
     run = _state["run"]
@@ -329,6 +427,9 @@ def xl(reference, headers=False):
     reply = msg.get("reply") or {}
     if "error" in reply:
         raise ValueError(reply["error"])
+    if "dated" in reply:
+        dated = reply.get("dated") or {}
+        return _xl_value(dated.get("value") or {"t": "Empty"}, headers, dated.get("dates") or [])
     return _xl_value(reply.get("value") or {"t": "Empty"}, headers)
 
 

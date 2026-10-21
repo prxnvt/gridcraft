@@ -254,6 +254,12 @@ fn dates_and_times() {
     assert_eq!(f("mmss.0", 0.0), "0000.0");
     assert!(NumberFormat::parse("h:mm").is_date());
     assert!(!NumberFormat::parse("0.00").is_date());
+    let parts = |code: &str| (NumberFormat::parse(code).shows_date(), NumberFormat::parse(code).shows_time());
+    assert_eq!(parts("m/d/yyyy"), (true, false));
+    assert_eq!(parts("h:mm AM/PM"), (false, true));
+    assert_eq!(parts("[h]:mm:ss"), (false, true));
+    assert_eq!(parts("m/d/yyyy h:mm"), (true, true));
+    assert_eq!(parts("0.00"), (false, false));
 }
 
 #[test]

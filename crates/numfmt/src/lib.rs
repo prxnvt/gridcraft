@@ -150,6 +150,23 @@ impl NumberFormat {
         self.num_sections().iter().any(|s| s.kind == SecKind::Date)
     }
 
+    /// True when a date or time format shows a year, a month or a day.
+    pub fn shows_date(&self) -> bool {
+        self.date_tokens().any(|d| d.is_calendar())
+    }
+
+    /// True when a date or time format shows hours, minutes, seconds or AM/PM.
+    pub fn shows_time(&self) -> bool {
+        self.date_tokens().any(|d| !d.is_calendar())
+    }
+
+    fn date_tokens(&self) -> impl Iterator<Item = parse::DatePart> + '_ {
+        self.num_sections().iter().filter(|s| s.kind == SecKind::Date).flat_map(|s| s.toks.iter()).filter_map(|t| match t {
+            Tok::Date(d) => Some(*d),
+            _ => None,
+        })
+    }
+
     pub fn is_percent(&self) -> bool {
         self.num_sections().iter().any(|s| s.kind == SecKind::Number && s.percent > 0)
     }

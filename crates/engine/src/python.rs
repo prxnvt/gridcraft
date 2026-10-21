@@ -18,12 +18,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gridcraft_calc::{Area, Key};
-use gridcraft_core::{CellError, CellRef, Value};
+use gridcraft_core::{CellError, CellRef, DateSystem, Value};
 use gridcraft_formula::{BinOp, Expr};
-use gridcraft_model::{CalcMode, PyOutput, Sheet, Workbook};
+use gridcraft_model::{CalcMode, PyOutput, Sheet, StyleId, Workbook};
 use gridcraft_python::client::{Event, Failure, FailureKind, Launcher, PyWorker, RunOutcome};
 use gridcraft_python::interp::{Detection, Detector};
-use gridcraft_python::{Limits, XlReply};
+use gridcraft_python::{DateCell, DateKind, Limits, XlReply};
 use serde::Serialize;
 use serde_json::{Value as Json, json};
 
@@ -361,7 +361,160 @@ fn resolve_xl(wb: &Workbook, si: usize, at: CellRef, reference: &str, max_cells:
     {
         return XlReply::Error(format!("xl(): `{reference}` has more than {max_cells} cells"));
     }
-    XlReply::Value(v)
+    let mut v = v;
+    let dates = date_cells(wb, si, &expr, &mut v);
+    if dates.is_empty() { XlReply::Value(v) } else { XlReply::Dated { value: v, dates } }
+}
+
+/// Days from the 1904 system's serial 0 (1904-01-01) to the same day's serial in the 1900 system.
+const D1904_OFFSET: f64 = 1462.0;
+/// Serials up to 9999-12-31, the last day a date format shows.
+const SERIAL_END: f64 = 2_958_466.0;
+
+/// What a number format shows a number as: a date, a time of day or both; `None` for a format
+/// that isn't a date or time format.
+fn date_kind(code: &str) -> Option<DateKind> {
+    let f = crate::display::number_format(code);
+    if !f.is_date() {
+        return None;
+    }
+    Some(match (f.shows_date(), f.shows_time()) {
+        (true, true) => DateKind::DateTime,
+        (true, false) => DateKind::Date,
+        _ => DateKind::Time,
+    })
+}
+
+/// The numbers in `v` (row-major) that are formatted as dates or times, when `expr` reads one
+/// area: a cell, a range, or a name or table of one range (a reference past the used range reads
+/// its top-left part). Numbers no date can stand for (negative ones, ones past 9999-12-31) are
+/// left out. In a 1904 workbook the dates' serials become the 1900 system's, which the worker
+/// protocol uses.
+fn date_cells(wb: &Workbook, si: usize, expr: &Expr, v: &mut Value) -> Vec<DateCell> {
+    let (areas, _) = gridcraft_calc::precedents(wb, si, expr);
+    let [area] = areas.as_slice() else { return Vec::new() };
+    let Some(sh) = wb.sheet(area.sheet) else { return Vec::new() };
+    let (rows, cols) = match v {
+        Value::Array(a) => (a.rows, a.cols),
+        _ => (1, 1),
+    };
+    if (area.range.height() as usize) < rows || (area.range.width() as usize) < cols {
+        return Vec::new();
+    }
+    let shift = if wb.date_system == DateSystem::D1904 { D1904_OFFSET } else { 0.0 };
+    let mut kinds: HashMap<StyleId, Option<DateKind>> = HashMap::new();
+    let mut out = Vec::new();
+    let mut look = |i: usize, x: &Value| {
+        let Value::Number(n) = x else { return };
+        let (Ok(r), Ok(c), Ok(at)) = (u32::try_from(i / cols.max(1)), u32::try_from(i % cols.max(1)), u32::try_from(i)) else { return };
+        let cell = CellRef::new(area.range.start.row.saturating_add(r), area.range.start.col.saturating_add(c));
+        let id = sh.style_id(cell);
+        let kind = *kinds.entry(id).or_insert_with(|| date_kind(wb.styles.get(id).num_fmt.as_str()));
+        let Some(kind) = kind else { return };
+        let serial = if kind == DateKind::Time { *n } else { n + shift };
+        if *n >= 0.0 && serial < SERIAL_END {
+            out.push(DateCell { at, kind });
+        }
+    };
+    match &*v {
+        Value::Array(a) => a.data.iter().enumerate().for_each(|(i, x)| look(i, x)),
+        x => look(0, x),
+    }
+    if shift != 0.0 && !out.is_empty() {
+        shift_dates(v, &out, shift);
+    }
+    out
+}
+
+/// Adds `by` to the serials of the dates (not the times) among `dates` in `v`.
+fn shift_dates(v: &mut Value, dates: &[DateCell], by: f64) {
+    let add = |x: &mut Value| {
+        if let Value::Number(n) = x {
+            *n += by;
+        }
+    };
+    for d in dates.iter().filter(|d| d.kind != DateKind::Time) {
+        match &mut *v {
+            Value::Array(a) => {
+                if let Some(x) = Arc::make_mut(a).data.get_mut(d.at as usize) {
+                    add(x);
+                }
+            }
+            x if d.at == 0 => add(x),
+            _ => {}
+        }
+    }
+}
+
+/// The dates a Python result holds, for the workbook: positions outside `v` and repeats are
+/// dropped, and in a 1904 workbook the dates' serials (1900 system) are converted to its own.
+fn result_dates(wb: &Workbook, v: &mut Value, dates: &[DateCell]) -> Vec<DateCell> {
+    let len = match v {
+        Value::Array(a) => a.data.len(),
+        _ => 1,
+    };
+    let mut out: Vec<DateCell> = dates.iter().filter(|d| (d.at as usize) < len).copied().collect();
+    out.sort_by_key(|d| d.at);
+    out.dedup_by_key(|d| d.at);
+    if wb.date_system == DateSystem::D1904 {
+        shift_dates(v, &out, -D1904_OFFSET);
+    }
+    out
+}
+
+/// The format a cell in the General format gets for a date or time a Python cell returned (the
+/// formats that `TODAY()`, `NOW()` and `TIME()` give).
+fn date_format(kind: DateKind) -> &'static str {
+    match kind {
+        DateKind::Date => "m/d/yyyy",
+        DateKind::DateTime => "m/d/yyyy h:mm",
+        DateKind::Time => "h:mm AM/PM",
+    }
+}
+
+/// Gives the cells of the Python cell at `key`'s result that hold `dates` a date or time format,
+/// where they are in the General format: the anchor for a single value, the spilled cells for an
+/// array that spilled. Numbers no date can stand for keep the General format.
+fn format_dates(wb: &mut Workbook, (si, anchor): Key, dates: &[DateCell]) {
+    if dates.is_empty() {
+        return;
+    }
+    let Some(sh) = wb.sheet(si) else { return };
+    let width = sh.spill_ranges.get(&anchor).map_or(1, |r| r.width().max(1));
+    let mut targets = Vec::new();
+    for d in dates {
+        let (r, c) = (d.at / width, d.at % width);
+        let cell = CellRef::new(anchor.row.saturating_add(r), anchor.col.saturating_add(c));
+        let shown = if cell == anchor {
+            sh.cell(anchor).map(|x| &x.value)
+        } else if sh.spill_ranges.get(&anchor).is_some_and(|range| range.contains(cell)) {
+            sh.spill.get(&cell)
+        } else {
+            None
+        };
+        let Some(Value::Number(n)) = shown else { continue };
+        if !(0.0..SERIAL_END).contains(n) {
+            continue;
+        }
+        let id = sh.style_id(cell);
+        if wb.styles.get(id).num_fmt.as_str() == "General" {
+            targets.push((cell, id, d.kind));
+        }
+    }
+    let mut derived: HashMap<(StyleId, DateKind), StyleId> = HashMap::new();
+    let targets: Vec<(CellRef, StyleId)> = targets
+        .into_iter()
+        .map(|(cell, id, kind)| {
+            let new =
+                *derived.entry((id, kind)).or_insert_with(|| wb.styles.derive(id, |s| s.num_fmt = gridcraft_model::NumFmt::new(date_format(kind))));
+            (cell, new)
+        })
+        .collect();
+    if let Some(sh) = wb.sheet_mut(si) {
+        for (cell, id) in targets {
+            sh.set_style(cell, id);
+        }
+    }
 }
 
 fn failure_error(kind: FailureKind) -> CellError {
@@ -417,15 +570,17 @@ fn log_entry(wb: &Workbook, (si, c): Key, status: &'static str) -> PyRunLog {
     }
 }
 
-/// Writes `f` into the Python cell at `key` (`None` output: an error value), lays out its spill
-/// and recalculates what depends on it. Returns the positions whose content changed, by sheet.
-fn write_cell(d: &mut DocState, key: Key, f: impl FnOnce(&mut gridcraft_model::PyCode, &mut Value)) -> HashMap<usize, Changes> {
+/// Writes `f` into the Python cell at `key` (`None` output: an error value), lays out its spill,
+/// gives the cells that show `dates` a date format, and recalculates what depends on it. Returns
+/// the positions whose content changed, by sheet.
+fn write_cell(d: &mut DocState, key: Key, dates: &[DateCell], f: impl FnOnce(&mut gridcraft_model::PyCode, &mut Value)) -> HashMap<usize, Changes> {
     let mut wb = (*d.wb).clone();
     let Some(sh) = wb.sheet_mut(key.0) else { return HashMap::new() };
     let Some(cell) = sh.cells.get_mut(key.1) else { return HashMap::new() };
     let Some(py) = cell.py.as_mut() else { return HashMap::new() };
     f(Arc::make_mut(py), &mut cell.value);
     let changed = gridcraft_calc::lay_python_spill(&mut wb, key.0, key.1);
+    format_dates(&mut wb, key, dates);
     d.calc.cells_changed(&mut wb, &changed);
     let old = std::mem::replace(&mut d.wb, Arc::new(wb));
     d.revision += 1;
@@ -454,7 +609,7 @@ fn write_cell(d: &mut DocState, key: Key, f: impl FnOnce(&mut gridcraft_model::P
 
 /// Shows `err` in the Python cell at `key` (its result is cleared).
 fn write_error(d: &mut DocState, key: Key, err: CellError) -> HashMap<usize, Changes> {
-    write_cell(d, key, |py, value| {
+    write_cell(d, key, &[], |py, value| {
         py.output = None;
         py.stale = false;
         *value = Value::Error(err);
@@ -467,15 +622,14 @@ fn write_outcome(d: &mut DocState, key: Key, o: &RunOutcome) -> HashMap<usize, C
     entry.stdout = o.stdout.clone();
     entry.stderr = o.stderr.clone();
     let changed = match &o.result {
-        Ok(out) => write_cell(d, key, |py, _| {
-            py.output = Some(PyOutput {
-                value: out.value.clone(),
-                type_name: out.type_name.clone(),
-                preview: out.preview.clone(),
-                convertible: out.convertible,
-            });
-            py.stale = false;
-        }),
+        Ok(out) => {
+            let mut value = out.value.clone();
+            let dates = result_dates(&d.wb, &mut value, &out.dates);
+            write_cell(d, key, &dates, |py, _| {
+                py.output = Some(PyOutput { value, type_name: out.type_name.clone(), preview: out.preview.clone(), convertible: out.convertible });
+                py.stale = false;
+            })
+        }
         Err(f) => {
             entry.status = failure_status(f.kind);
             entry.error = Some(f.message.clone());
@@ -1076,6 +1230,7 @@ fn finish_run(d: &mut DocState, dp: &mut DocPy, key: Key, replay: bool, first: b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gridcraft_core::Array;
 
     #[test]
     fn xl_references_resolve_against_the_workbook() {
@@ -1089,5 +1244,131 @@ mod tests {
             assert!(matches!(resolve_xl(&wb, 0, CellRef::new(5, 5), bad, max), XlReply::Error(_)), "{bad}");
         }
         assert!(matches!(resolve_xl(&wb, 0, CellRef::new(5, 5), "A1:B2", 3), XlReply::Error(_)));
+    }
+
+    fn styled(wb: &mut Workbook, code: &str) -> StyleId {
+        wb.styles.derive(StyleId::default(), |s| s.num_fmt = gridcraft_model::NumFmt::new(code))
+    }
+
+    fn put(wb: &mut Workbook, at: &str, value: Value, style: StyleId) {
+        let cell = gridcraft_model::Cell { value, formula: None, style, py: None };
+        wb.sheet_mut(0).unwrap().set_cell(CellRef::parse(at).unwrap(), cell);
+    }
+
+    /// Dates in A, plain numbers in B, times in C, dates with times in D; row 3 holds numbers no
+    /// date stands for, and text.
+    fn dated_workbook(system: DateSystem) -> Workbook {
+        let mut wb = Workbook::new();
+        wb.date_system = system;
+        let (date, time, both) = (styled(&mut wb, "m/d/yyyy"), styled(&mut wb, "h:mm"), styled(&mut wb, "yyyy-mm-dd hh:mm"));
+        for (at, text) in [("A1", "When"), ("B1", "Units"), ("C1", "At"), ("D1", "Stamp")] {
+            put(&mut wb, at, Value::text(text), StyleId::default());
+        }
+        put(&mut wb, "A2", Value::Number(45292.0), date);
+        put(&mut wb, "B2", Value::Number(5.0), StyleId::default());
+        put(&mut wb, "C2", Value::Number(0.4375), time);
+        put(&mut wb, "D2", Value::Number(45292.5), both);
+        put(&mut wb, "A3", Value::Number(-1.0), date);
+        put(&mut wb, "B3", Value::Number(6.0), StyleId::default());
+        put(&mut wb, "C3", Value::text("x"), time);
+        put(&mut wb, "D3", Value::Number(3e6), both);
+        wb
+    }
+
+    fn reply(wb: &Workbook, reference: &str) -> (Value, Vec<(u32, DateKind)>) {
+        match resolve_xl(wb, 0, CellRef::new(9, 9), reference, 1_000_000) {
+            XlReply::Value(v) => (v, Vec::new()),
+            XlReply::Dated { value, dates } => (value, dates.iter().map(|d| (d.at, d.kind)).collect()),
+            XlReply::Error(e) => panic!("{e}"),
+        }
+    }
+
+    fn at(v: &Value, i: usize) -> Value {
+        match v {
+            Value::Array(a) => a.data.get(i).cloned().unwrap_or_default(),
+            v => v.clone(),
+        }
+    }
+
+    #[test]
+    fn xl_marks_numbers_formatted_as_dates_and_times() {
+        let wb = dated_workbook(DateSystem::D1900);
+        let (v, dates) = reply(&wb, "A1:D3");
+        // Text, plain numbers, a negative date, text in a time format and a number past
+        // 9999-12-31 are left out.
+        assert_eq!(dates, [(4, DateKind::Date), (6, DateKind::Time), (7, DateKind::DateTime)]);
+        assert_eq!((at(&v, 4), at(&v, 7)), (Value::Number(45292.0), Value::Number(45292.5)));
+        assert_eq!(reply(&wb, "A2"), (Value::Number(45292.0), vec![(0, DateKind::Date)]));
+        assert_eq!(reply(&wb, "B1:B3").1, []);
+        // A whole column reads its top-left part.
+        assert_eq!(reply(&wb, "C:C").1, [(1, DateKind::Time)]);
+        // The 1904 system: dates arrive as the 1900 system's serials; times are unchanged.
+        let wb = dated_workbook(DateSystem::D1904);
+        let (v, dates) = reply(&wb, "A1:D3");
+        assert_eq!(dates, [(4, DateKind::Date), (6, DateKind::Time), (7, DateKind::DateTime)]);
+        assert_eq!((at(&v, 4), at(&v, 6), at(&v, 7)), (Value::Number(46754.0), Value::Number(0.4375), Value::Number(46754.5)));
+        assert_eq!(wb.sheet(0).unwrap().cell(CellRef::parse("A2").unwrap()).unwrap().value, Value::Number(45292.0), "the cell is unchanged");
+    }
+
+    fn num_fmt(wb: &Workbook, at: &str) -> String {
+        let sh = wb.sheet(0).unwrap();
+        wb.styles.get(sh.style_id(CellRef::parse(at).unwrap())).num_fmt.as_str().to_string()
+    }
+
+    /// Lays out a Python result at F1 and formats its dates, as a finished run does.
+    fn write_result(wb: &mut Workbook, value: Value, dates: &[(u32, DateKind)]) {
+        let anchor = CellRef::parse("F1").unwrap();
+        let dates: Vec<DateCell> = dates.iter().map(|&(at, kind)| DateCell { at, kind }).collect();
+        let mut value = value;
+        let dates = result_dates(wb, &mut value, &dates);
+        let output = PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true };
+        let py = gridcraft_model::PyCode { output: Some(output), ..gridcraft_model::PyCode::new("x") };
+        let cell = gridcraft_model::Cell { value: Value::Empty, formula: None, style: StyleId::default(), py: Some(Arc::new(py)) };
+        wb.sheet_mut(0).unwrap().set_cell(anchor, cell);
+        gridcraft_calc::lay_python_spill(wb, 0, anchor);
+        format_dates(wb, (0, anchor), &dates);
+    }
+
+    #[test]
+    fn dates_from_python_get_a_date_format_where_the_cells_have_none() {
+        let mut wb = Workbook::new();
+        let fixed = styled(&mut wb, "0.00");
+        put(&mut wb, "G3", Value::Empty, fixed);
+        let table =
+            Array::new(3, 2, vec!["d".into(), "t".into(), 45292.0.into(), 0.75.into(), (-3.0).into(), 46000.5.into()]).map(Value::from).unwrap();
+        let kinds =
+            [(2, DateKind::Date), (3, DateKind::Time), (4, DateKind::Date), (5, DateKind::DateTime), (5, DateKind::Date), (99, DateKind::Date)];
+        write_result(&mut wb, table, &kinds);
+        assert_eq!(num_fmt(&wb, "F1"), "General", "a header isn't a date");
+        assert_eq!((num_fmt(&wb, "F2"), num_fmt(&wb, "G2")), ("m/d/yyyy".into(), "h:mm AM/PM".into()));
+        assert_eq!(num_fmt(&wb, "F3"), "General", "no date is negative");
+        assert_eq!(num_fmt(&wb, "G3"), "0.00", "a format of the cell's own stays");
+        assert_eq!(wb.sheet(0).unwrap().spill.get(&CellRef::parse("G3").unwrap()), Some(&Value::Number(46000.5)));
+        // A single value formats the Python cell itself.
+        let mut wb = Workbook::new();
+        write_result(&mut wb, Value::Number(45292.5), &[(0, DateKind::DateTime)]);
+        assert_eq!(num_fmt(&wb, "F1"), "m/d/yyyy h:mm");
+        // An array that can't spill formats nothing.
+        let mut wb = Workbook::new();
+        put(&mut wb, "F2", Value::Number(1.0), StyleId::default());
+        write_result(
+            &mut wb,
+            Array::new(2, 1, vec![45292.0.into(), 45293.0.into()]).map(Value::from).unwrap(),
+            &[(0, DateKind::Date), (1, DateKind::Date)],
+        );
+        assert_eq!(wb.sheet(0).unwrap().cell(CellRef::parse("F1").unwrap()).unwrap().value, Value::Error(CellError::Spill));
+        assert_eq!(num_fmt(&wb, "F1"), "General");
+        // The 1904 system: the 1900 system's serials of dates are converted; times aren't.
+        let mut wb = Workbook::new();
+        wb.date_system = DateSystem::D1904;
+        write_result(
+            &mut wb,
+            Array::new(2, 1, vec![46754.0.into(), 0.25.into()]).map(Value::from).unwrap(),
+            &[(0, DateKind::Date), (1, DateKind::Time)],
+        );
+        let sh = wb.sheet(0).unwrap();
+        assert_eq!(sh.cell(CellRef::parse("F1").unwrap()).unwrap().value, Value::Number(45292.0));
+        assert_eq!(sh.spill.get(&CellRef::parse("F2").unwrap()), Some(&Value::Number(0.25)));
+        assert_eq!((num_fmt(&wb, "F1"), num_fmt(&wb, "F2")), ("m/d/yyyy".into(), "h:mm AM/PM".into()));
     }
 }

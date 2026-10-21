@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells: package installs and import-aware time limits) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells: dates and times in `xl()` and in results) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -88,6 +88,21 @@ it like any other cell. Code is written with `python.set`, never by typing `=PY(
   (value, printed output, error and line, time), and the CPython shim also sends `Extend` while
   it imports a module not loaded yet (see time limits below). Worker frames start with a marker,
   so stray output is never taken for a frame. Values travel as `gridcraft_core::Value`.
+- **Dates and times.** An `xl()` reply for one area (a cell, a range, a name or table of one
+  range) marks the numbers whose number format is a date or time format (`XlReply::Dated`, with a
+  `DateCell {at, kind}` per number: `date`, `time` or `dateTime`, from whether the format shows a
+  calendar part, a clock part or both); numbers no date stands for (negative, past 9999-12-31)
+  are not marked. Serials cross the protocol in the 1900 date system, and the engine converts a
+  1904 workbook's in both directions. The shim makes `datetime.date`, `datetime.time` and
+  `datetime.datetime` values of them, to the millisecond, with Excel's fictitious 1900-02-29
+  (serial 60, like serial 0, stays a number, as does a time of a day or more); a date whose serial
+  has a time of day is a `datetime` even under a date-only format. When `xl()` builds a
+  DataFrame, a column whose values are all dates becomes a `datetime64` column. The other way,
+  `date`, `datetime` (with pandas `Timestamp` and numpy `datetime64`) and `time` results become
+  serials marked in `Output::dates`, and the cells that show them get `m/d/yyyy`,
+  `m/d/yyyy h:mm` or `h:mm AM/PM` (the formats `TODAY()`, `NOW()` and `TIME()` give) where their
+  format is General; a spill that is blocked formats nothing. The built-in Python receives the
+  serial numbers, since its results cannot be read back as dates.
 - **Built-in and CPython.** Monty has no ambient access: file, environment and network
   operations suspend to the worker, which refuses them. It lacks most of the standard library and
   every third-party package, so a cell that imports one, or uses a construct Monty's compiler does
@@ -165,6 +180,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2; no Python cells). Relea
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python in cells: dates and times in `xl()` and in results (`XlReply::Dated`, `Output::dates`, the 1904 system) |
 | 2026-10-12 | minor | Python in cells: import-aware time limits (`Extend` heartbeats, `importSeconds`, one retry, install warm-up) |
 | 2026-10-12 | minor | Python in cells: GridCraft's own Python environment and package installs the person approves |
 | 2026-10-12 | minor | Python in cells: the `python` crate (L1), worker processes, protocol, built-in and CPython backends, the engine runtime, the trust gate, files and the web build |

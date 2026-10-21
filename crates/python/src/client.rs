@@ -829,6 +829,7 @@ mod tests {
 #[cfg(not(target_arch = "wasm32"))]
 mod cpython_tests {
     use super::*;
+    use crate::{DateCell, DateKind};
     use gridcraft_core::{Array, CellError, Value};
 
     fn cpython(limits: Limits) -> Option<(PyWorker, crate::interp::Interpreter)> {
@@ -851,8 +852,41 @@ mod cpython_tests {
                     .map(Value::from)
                     .unwrap_or_default(),
             ),
+            // Dates and times as the engine marks them: a table, the edges of the 1900 system
+            // (hostile numbers included), and single cells.
+            "D" => dated(
+                3,
+                3,
+                vec!["when".into(), "n".into(), "at".into(), 45292.0.into(), 1.0.into(), 0.4375.into(), 45323.5.into(), 2.0.into(), 0.75.into()],
+                &[(3, DateKind::Date), (5, DateKind::Time), (6, DateKind::Date), (8, DateKind::Time)],
+            ),
+            "L" => {
+                let serials = [59.0, 60.0, 61.0, 1.0, 0.0, -1.0, 2_958_465.0, 2_958_466.0, 1e300, 0.5, 1.5, -0.25];
+                let mut kinds: Vec<(u32, DateKind)> = (0..9).map(|i| (i, DateKind::Date)).collect();
+                kinds.extend([(9, DateKind::DateTime), (10, DateKind::Time), (11, DateKind::Time)]);
+                dated(serials.len(), 1, serials.iter().map(|&n| Value::Number(n)).collect(), &kinds)
+            }
+            "S" => dated(1, 1, vec![Value::Number(45292.75)], &[(0, DateKind::DateTime)]),
+            "S3" => dated(1, 1, vec![Value::Number(45292.0 + 1.0 / 3.0)], &[(0, DateKind::DateTime)]),
+            "SD" => dated(1, 1, vec![Value::Number(45292.5)], &[(0, DateKind::Date)]),
+            "T2" => dated(1, 1, vec![Value::Number(0.4375)], &[(0, DateKind::Time)]),
+            "X" => XlReply::Dated { value: Value::text("x"), dates: vec![DateCell { at: 0, kind: DateKind::Date }] },
             r => XlReply::Error(format!("`{r}` is not a reference (headers={headers})")),
         }
+    }
+
+    /// A reply with dates: a single value for one cell, an array otherwise.
+    fn dated(rows: usize, cols: usize, data: Vec<Value>, kinds: &[(u32, DateKind)]) -> XlReply {
+        let value = if rows * cols == 1 {
+            data.into_iter().next().unwrap_or_default()
+        } else {
+            Array::new(rows, cols, data).map(Value::from).unwrap_or_default()
+        };
+        XlReply::Dated { value, dates: kinds.iter().map(|&(at, kind)| DateCell { at, kind }).collect() }
+    }
+
+    fn dates(o: &RunOutcome) -> Vec<(u32, DateKind)> {
+        o.result.as_ref().map(|o| o.dates.iter().map(|d| (d.at, d.kind)).collect()).unwrap_or_default()
     }
 
     fn value(o: &RunOutcome) -> Value {
@@ -880,8 +914,9 @@ mod cpython_tests {
         );
         assert_eq!(
             value(&o),
-            col(vec![1.0.into(), 2.5.into(), "a".into(), true.into(), Value::Empty, Value::Error(CellError::Num), 45292.0.into(), 2.5.into()])
+            col(vec![1.0.into(), 2.5.into(), "a".into(), true.into(), Value::Empty, Value::Error(CellError::Num), 45292.0.into(), 1.5.into()])
         );
+        assert_eq!(dates(&o), [(6, DateKind::Date), (7, DateKind::DateTime)]);
         assert_eq!(
             value(&w.run_blocking("{'k': 1}", &mut cells)),
             Array::new(1, 2, vec!["k".into(), 1.0.into()]).map(Value::from).unwrap_or_default()
@@ -918,6 +953,59 @@ mod cpython_tests {
         assert!(failure(&w.run_blocking("x", &mut cells)).message.starts_with("NameError"));
         assert_eq!(value(&w.run_blocking("base", &mut cells)), Value::Number(100.0));
         assert_eq!(w.starts(), 1);
+    }
+
+    /// Serials marked as dates or times become `datetime`, `date` and `time` values, with Excel's
+    /// fictitious 1900-02-29; numbers no such value stands for stay numbers. Python's dates and
+    /// times go back as serials, marked with their kinds.
+    #[test]
+    fn the_shim_converts_dates_and_times_both_ways() {
+        let Some((mut w, _)) = cpython(Limits::default()) else { return };
+        let iso = "def iso(x):\n    return x.isoformat() if hasattr(x, 'isoformat') else x\n";
+        w.run_blocking(iso, &mut cells);
+        let rows = "d = xl('L')\nrows = d.values.tolist() if hasattr(d, 'values') else d\n[iso(r[0]) for r in rows]";
+        let o = w.run_blocking(rows, &mut cells);
+        let expected: Vec<Value> = vec![
+            "1900-02-28".into(),
+            60.0.into(),
+            "1900-03-01".into(),
+            "1900-01-01".into(),
+            0.0.into(),
+            (-1.0).into(),
+            "9999-12-31".into(),
+            2_958_466.0.into(),
+            1e300.into(),
+            0.5.into(),
+            1.5.into(),
+            (-0.25).into(),
+        ];
+        assert_eq!(value(&o), col(expected), "{o:?}");
+        assert_eq!(value(&w.run_blocking("iso(xl('S'))", &mut cells)), Value::text("2024-01-01T18:00:00"));
+        assert_eq!(value(&w.run_blocking("iso(xl('S3'))", &mut cells)), Value::text("2024-01-01T08:00:00"), "to the millisecond");
+        assert_eq!(value(&w.run_blocking("iso(xl('T2'))", &mut cells)), Value::text("10:30:00"));
+        assert_eq!(value(&w.run_blocking("xl('X')", &mut cells)), Value::text("x"), "text marked as a date stays text");
+        // A date-only cell holding a time of day is a datetime, so nothing is lost.
+        assert_eq!(value(&w.run_blocking("iso(xl('SD'))", &mut cells)), Value::text("2024-01-01T12:00:00"));
+        assert_eq!(
+            value(&w.run_blocking(
+                "type(xl('S')).__name__ + ' ' + type(xl('L')[0][0] if isinstance(xl('L'), list) else xl('L')[0][0]).__name__",
+                &mut cells
+            )),
+            Value::text("datetime date")
+        );
+        // Back out: serials in the 1900 system, with their kinds; a date before 1900 is a number.
+        let o = w.run_blocking(
+            "import datetime as dt\n[dt.date(1900, 2, 28), dt.date(1900, 3, 1), dt.datetime(1900, 1, 1, 12), dt.time(18, 0), dt.date(1899, 12, 1), dt.datetime(2024, 1, 1, 6, tzinfo=dt.timezone.utc)]",
+            &mut cells,
+        );
+        assert_eq!(value(&o), col(vec![59.0.into(), 61.0.into(), 1.5.into(), 0.75.into(), (-30.0).into(), 45292.25.into()]));
+        assert_eq!(dates(&o), [(0, DateKind::Date), (1, DateKind::Date), (2, DateKind::DateTime), (3, DateKind::Time), (5, DateKind::DateTime)]);
+        let o = w.run_blocking("xl('S')", &mut cells);
+        assert_eq!((value(&o), dates(&o)), (Value::Number(45292.75), vec![(0, DateKind::DateTime)]));
+        let o = w.run_blocking("xl('T2')", &mut cells);
+        assert_eq!((value(&o), dates(&o)), (Value::Number(0.4375), vec![(0, DateKind::Time)]));
+        let o = w.run_blocking("42", &mut cells);
+        assert_eq!(dates(&o), []);
     }
 
     #[test]
@@ -1069,6 +1157,31 @@ mod cpython_tests {
             value(&w.run_blocking("np.array([[1, 2], [3, 4]])", &mut cells)),
             Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).map(Value::from).unwrap_or_default()
         );
-        assert_eq!(value(&w.run_blocking("pd.Timestamp('2024-01-01')", &mut cells)), Value::Number(45292.0));
+        let o = w.run_blocking("pd.Timestamp('2024-01-01')", &mut cells);
+        assert_eq!((value(&o), dates(&o)), (Value::Number(45292.0), vec![(0, DateKind::DateTime)]));
+        // Date columns are datetime64 columns that .dt works on; time columns hold times; the
+        // frame goes back with its dates and times marked.
+        let o = w.run_blocking(
+            "dd = xl('D', headers=True)\n[str(dd['when'].dtype)[:10], dd['when'].dt.strftime('%Y-%m-%d %H:%M')[1], dd['at'][0].isoformat(), dd['n'].sum()]",
+            &mut cells,
+        );
+        assert_eq!(value(&o), col(vec!["datetime64".into(), "2024-02-01 12:00".into(), "10:30:00".into(), 3.0.into()]), "{o:?}");
+        let o = w.run_blocking("dd", &mut cells);
+        assert_eq!(
+            value(&o),
+            Array::new(
+                3,
+                3,
+                vec!["when".into(), "n".into(), "at".into(), 45292.0.into(), 1.0.into(), 0.4375.into(), 45323.5.into(), 2.0.into(), 0.75.into()]
+            )
+            .map(Value::from)
+            .unwrap_or_default()
+        );
+        assert_eq!(dates(&o), [(3, DateKind::DateTime), (5, DateKind::Time), (6, DateKind::DateTime), (8, DateKind::Time)]);
+        // A column with a number that is no date keeps its values as they are; NaT is empty.
+        let o = w.run_blocking("ll = xl('L')\n[str(ll[0].dtype), ll[0][0].isoformat()]", &mut cells);
+        assert_eq!(value(&o), col(vec!["object".into(), "1900-02-28".into()]));
+        let o = w.run_blocking("pd.Series(pd.to_datetime(['2024-01-01', None]))", &mut cells);
+        assert_eq!((value(&o), dates(&o)), (col(vec![45292.0.into(), Value::Empty]), vec![(0, DateKind::DateTime)]));
     }
 }

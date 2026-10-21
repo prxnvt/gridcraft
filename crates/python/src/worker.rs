@@ -242,7 +242,9 @@ impl<W: Write> Worker<W> {
             match parse_to_worker(&line) {
                 Some(ToWorker::XlValue { id: got, reply }) if got == id => {
                     return match reply {
-                        XlReply::Value(v) => ExtFunctionResult::Return(xl_object(&v, headers)),
+                        // The built-in Python gets dates and times as their serial numbers: its
+                        // results can't be read back as dates.
+                        XlReply::Value(v) | XlReply::Dated { value: v, .. } => ExtFunctionResult::Return(xl_object(&v, headers)),
                         XlReply::Error(msg) => ExtFunctionResult::Error(MontyException::new(ExcType::ValueError, Some(msg))),
                     };
                 }
@@ -328,7 +330,7 @@ pub fn to_output(o: &ObjectRef<'_>, max_cells: usize) -> Result<Output, String> 
             None => (Value::text(preview.as_str()), false),
         },
     };
-    Ok(Output { value, type_name, preview, convertible })
+    Ok(Output { value, type_name, preview, convertible, dates: Vec::new() })
 }
 
 fn cut(s: &str, max: usize) -> String {
@@ -480,6 +482,17 @@ mod tests {
         assert_eq!(xl_object(&a, true).py_repr(), "[{'k': 1, 'v': '#DIV/0!'}]");
         assert_eq!(xl_object(&Value::Number(2.5), false).py_repr(), "2.5");
         assert_eq!(xl_object(&Value::Empty, false).py_repr(), "None");
+    }
+
+    #[test]
+    fn dates_reach_the_built_in_python_as_serial_numbers() {
+        let (tx_in, rx_in) = mpsc::channel::<String>();
+        let mut w = Worker { repl: None, limits: Limits::default(), init_code: String::new(), out: Vec::new(), input: rx_in };
+        let dates = vec![crate::DateCell { at: 0, kind: crate::DateKind::DateTime }];
+        let reply = ToWorker::XlValue { id: 1, reply: XlReply::Dated { value: Value::Number(45292.5), dates } };
+        tx_in.send(crate::protocol::to_worker_line(&reply)).unwrap();
+        let done = w.run(1, "xl('A1') + 1");
+        assert_eq!(done.output.map(|o| (o.value, o.dates)), Some((Value::Number(45293.5), Vec::new())));
     }
 }
 

@@ -373,6 +373,48 @@ fn cells_run_on_the_users_python_when_the_search_finds_one() {
     assert!(log["runs"].as_array().unwrap().iter().all(|r| r["status"] == "ok"), "{log}");
 }
 
+/// Cells formatted as dates and times reach the user's Python as `datetime` values, and the
+/// dates and times a cell returns are written back as serials with a date format, in the 1900 and
+/// the 1904 date systems.
+#[test]
+fn dates_reach_the_users_python_as_datetimes_and_come_back_as_dates() {
+    let detection = gridcraft_python::interp::detect(&std::env::var("GRIDCRAFT_TEST_PYTHON").unwrap_or_default(), None);
+    if detection.found.is_none() {
+        eprintln!("skipped: no Python 3.11 or newer here ({:?})", detection.rejected);
+        return;
+    }
+    let mut s = Session::new();
+    s.new_workbook();
+    s.set_python_detection(detection);
+    let fmt = |s: &Session, at: &str| {
+        let wb = &s.doc().unwrap().wb;
+        wb.styles.get(wb.sheet(0).unwrap().style_id(CellRef::parse(at).unwrap())).num_fmt.as_str().to_string()
+    };
+    s.execute("range.setValues", json!({"range": "A1:A3", "values": [["2024-01-01"], ["1900-02-28"], ["1900-03-01"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A4", "input": "10:30"})).unwrap();
+    let read = "[x.isoformat() for x in (xl('A1'), xl('A2'), xl('A3'), xl('A4'))]";
+    s.execute("python.set", json!({"cell": "C1", "code": read})).unwrap();
+    let col = |v: Vec<Value>| Array::new(v.len(), 1, v).map(Value::from).unwrap();
+    let spilled = |s: &Session| (1..=4).map(|r| v(s, &format!("C{r}"))).collect::<Vec<_>>();
+    assert_eq!(col(spilled(&s)), col(vec!["2024-01-01".into(), "1900-02-28".into(), "1900-03-01".into(), "10:30:00".into()]));
+    s.execute("python.set", json!({"cell": "E1", "code": "import datetime as dt\ndt.date(2024, 1, 1)"})).unwrap();
+    s.execute("python.set", json!({"cell": "E2", "code": "dt.datetime.combine(xl('A1'), dt.time(6))"})).unwrap();
+    s.execute("python.set", json!({"cell": "E3", "code": "dt.time(18, 0)"})).unwrap();
+    assert_eq!((v(&s, "E1"), v(&s, "E2"), v(&s, "E3")), (Value::Number(45292.0), Value::Number(45292.25), Value::Number(0.75)));
+    assert_eq!((fmt(&s, "E1"), fmt(&s, "E2"), fmt(&s, "E3")), ("m/d/yyyy".into(), "m/d/yyyy h:mm".into(), "h:mm AM/PM".into()));
+    // The 1904 system: the same days, other serials.
+    let d = s.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    wb.date_system = gridcraft_core::DateSystem::D1904;
+    d.wb = Arc::new(wb);
+    s.execute("cell.set", json!({"cell": "A1", "input": "2024-01-01"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(43830.0));
+    assert_eq!(v(&s, "C1"), Value::text("2024-01-01"));
+    assert_eq!((v(&s, "E1"), v(&s, "E2"), v(&s, "E3")), (Value::Number(43830.0), Value::Number(43830.25), Value::Number(0.75)));
+    let log = s.execute("python.diagnostics", json!({})).unwrap();
+    assert!(log["runs"].as_array().unwrap().iter().all(|r| r["status"] == "ok"), "{log}");
+}
+
 /// A cell the time limit stops in the middle of a slow import runs once more on a fresh Python
 /// (a first import after an install is slow once); stopped again, it is refused as usual.
 #[test]

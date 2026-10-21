@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (Python package installs and import-aware time limits) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (Python dates and times in `xl()` and in results) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-12 | Python dates and times (engine): on CPython, `xl()` gives cells formatted as dates or times as `datetime.date`, `datetime.datetime` and `datetime.time` values (DataFrame date columns as `datetime64`), with Excel's 1900 leap-year rule and the 1904 date system; dates and times a cell returns (pandas Timestamps included) are written back as serials, with a date or time format where the cells have none; the built-in Python keeps serial numbers |
 | 2026-10-12 | Python import-aware time limits (engine): on CPython, time spent importing modules not loaded yet does not count against a cell's time limit, up to `importSeconds` (60 s by default), with `Extend` heartbeats that move the parent's deadline; a stop mid-import names the module and replaces the worker; a cell stopped mid-import or on its first run on a new worker runs once more on a fresh one before it is refused; numpy and pandas load before a worker reports ready; installs end with a warm-up import and uv installs compile bytecode |
 | 2026-10-12 | Python packages (engine): GridCraft keeps one Python environment of its own, made from the CPython it found with uv or venv in the app's data folder (`GRIDCRAFT_PYTHON_ENV` or `python.options {environment}` move it), and `python.install` installs packages only after the exact list is approved, into the person's own venv or conda environment when that runs cells and otherwise into GridCraft's, never into a system Python; requirements are checked strictly (names, extras and versions only, at most 32); installs use uv or pip with `--only-binary` from an argument list in the background with a 10-minute deadline, `python.stop` cancels them, failures say why, and every outcome is a Diagnostics row and an app log record; cells run again on the new environment; workbooks declare their packages (`python.packages`, kept in xlsx); `python.environment` creates, lists and deletes the environment |
 | 2026-10-12 | Python in cells (engine and files; no editing UI yet): cells run on the user's CPython 3.11 or newer, so pandas and numpy work, or on a built-in sandboxed Python (Monty), always in a worker process that is killed at the time limit or above 512 MB; `xl()` reads cells, ranges, names, tables and other sheets; cells run in row-major order when their code or inputs change, arrays spill, results feed formulas; `#PYTHON!`, `#BUSY!`, `#TIMEOUT!`, `#BLOCKED!`; workbooks opened from files run nothing until `python.enable`; `python.*` commands; xlsx stores `PY("…",0|1)` with cached values |
@@ -180,6 +181,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python dates and times in `xl()` and in results; progress log row |
 | 2026-10-12 | minor | Python import-aware time limits; progress log row |
 | 2026-10-12 | minor | Python package installs; progress log row |
 | 2026-10-12 | minor | Python in cells (engine); catalog 274 → 278 / 294; progress log row |

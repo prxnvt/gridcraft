@@ -28,7 +28,7 @@ pub mod client;
 #[cfg(all(feature = "python", not(target_arch = "wasm32")))]
 pub mod worker;
 
-pub use protocol::{Limits, Output, PyError, XlReply};
+pub use protocol::{DateCell, DateKind, Limits, Output, PyError, XlReply};
 
 /// The command-line flag that makes an app binary run as the Python worker. `apps/gridcraft` and
 /// `apps/gridcraft-cli` check for it first thing in `main`.
