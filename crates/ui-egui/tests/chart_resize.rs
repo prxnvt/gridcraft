@@ -59,7 +59,7 @@ fn dragging_the_corner_handle_resizes_the_chart() {
     h.run_steps(2);
     button(&mut h, inside, true);
     button(&mut h, inside, false);
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_chart(), Some(id));
 
     h.input_mut().events.push(Event::PointerMoved(start));
     h.run_steps(2);
@@ -76,7 +76,7 @@ fn dragging_the_corner_handle_resizes_the_chart() {
 
 /// Opens Format Chart Area for the chart and expands its Size section; returns the Width field's rect.
 fn open_size_fields(h: &mut Harness, id: u32) -> egui::Rect {
-    h.state_mut().selected_chart = Some(id);
+    h.state_mut().select_object_id(Some(id));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
     h.get_by_role_and_label(Role::Button, "Size").click();

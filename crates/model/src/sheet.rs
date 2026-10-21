@@ -164,6 +164,82 @@ impl Sheet {
     pub fn cell(&self, c: CellRef) -> Option<&Cell> {
         self.cells.get(c)
     }
+
+    /// The floating object with workbook-unique id `id` on this sheet.
+    pub fn object_ref(&self, id: u32) -> Option<ObjRef> {
+        let kind = if self.charts.iter().any(|o| o.id == id) {
+            ObjKind::Chart
+        } else if self.images.iter().any(|o| o.id == id) {
+            ObjKind::Image
+        } else if self.shapes.iter().any(|o| o.id == id) {
+            ObjKind::Shape
+        } else if self.slicers.iter().any(|o| o.id == id) {
+            ObjKind::Slicer
+        } else {
+            return None;
+        };
+        Some(ObjRef::new(kind, id))
+    }
+
+    /// Whether the floating object `o` exists on this sheet.
+    pub fn has_object(&self, o: ObjRef) -> bool {
+        self.object_anchor(o).is_some()
+    }
+
+    /// The anchor of the floating object `o`.
+    pub fn object_anchor(&self, o: ObjRef) -> Option<Anchor> {
+        match o.kind {
+            ObjKind::Chart => self.charts.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Image => self.images.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+        }
+    }
+
+    pub fn object_anchor_mut(&mut self, o: ObjRef) -> Option<&mut Anchor> {
+        match o.kind {
+            ObjKind::Chart => self.charts.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Image => self.images.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+        }
+    }
+
+    /// Removes the floating object `o`; false when there is no such object.
+    pub fn remove_object(&mut self, o: ObjRef) -> bool {
+        fn take<T>(v: &mut Vec<T>, f: impl Fn(&T) -> bool) -> bool {
+            let n = v.len();
+            v.retain(|x| !f(x));
+            v.len() != n
+        }
+        match o.kind {
+            ObjKind::Chart => take(&mut self.charts, |c| c.id == o.id),
+            ObjKind::Image => take(&mut self.images, |c| c.id == o.id),
+            ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
+            ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
+        }
+    }
+
+    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers) that
+    /// [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old ones
+    /// and write them back in step.
+    pub fn object_anchors(&self) -> impl Iterator<Item = &Anchor> {
+        self.charts
+            .iter()
+            .map(|o| &o.anchor)
+            .chain(self.images.iter().map(|o| &o.anchor))
+            .chain(self.shapes.iter().map(|o| &o.anchor))
+            .chain(self.slicers.iter().map(|o| &o.anchor))
+    }
+
+    pub fn object_anchors_mut(&mut self) -> impl Iterator<Item = &mut Anchor> {
+        self.charts
+            .iter_mut()
+            .map(|o| &mut o.anchor)
+            .chain(self.images.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.shapes.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.slicers.iter_mut().map(|o| &mut o.anchor))
+    }
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
         match self.cells.get(c) {

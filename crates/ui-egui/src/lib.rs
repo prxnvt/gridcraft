@@ -23,6 +23,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod objects;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -238,8 +239,8 @@ pub struct SheetApp {
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
     pub(crate) shots: control::Shots,
-    /// Chart selected on the sheet (id).
-    pub selected_chart: Option<u32>,
+    /// The floating object selected on the sheet (chart, picture, shape or slicer).
+    pub selected_object: Option<gridcraft_engine::model::ObjRef>,
     pub started: f64,
 }
 
@@ -278,7 +279,7 @@ impl SheetApp {
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
-            selected_chart: None,
+            selected_object: None,
             started: now_ms(),
         }
     }
@@ -553,6 +554,7 @@ impl SheetApp {
 
     /// Picks up requests commands made (dialogs, edit mode…).
     pub fn after_engine(&mut self) {
+        self.prune_selected_object();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),

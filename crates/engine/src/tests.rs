@@ -2795,3 +2795,5 @@ fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     assert_eq!(std::fs::read(&path).unwrap(), bytes, "the encrypted original is untouched");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+mod objects;
