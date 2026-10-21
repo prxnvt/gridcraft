@@ -37,7 +37,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.pane` (through `engine.execute`) | `{name?}` | Show a task pane (`comments`, `watch`, `selection`, `formatChart`, `pythonDiagnostics`); no name closes it |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
-| `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
+| `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `app.save` waits for running Python cells (see below). `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
@@ -54,6 +54,15 @@ namespace; it goes through the same background run, so `wait: true` works with i
 `editor.python` is true while the formula bar edits a Python cell's code; Ctrl+Enter (Cmd+Enter
 on macOS) commits it, as does the formula bar's Run button (Stop while the cell runs or waits,
 Re-run once it has a result).
+
+Saving waits for Python cells that are still running, so the file holds their results rather
+than `#BUSY!`: `app.save`, `file.save` and `file.saveAs` with a path (and Save, Save As,
+Cmd+S / Ctrl+S, the Save of the Save Changes? prompt and AutoSave) save once the cells finish.
+The wait is bounded: when no cell has finished for as long as one may run (the Python time limit,
+plus the time allowed for imports, plus one second), the file is saved with whatever the cells
+hold and a warning is logged. The window keeps working meanwhile; `ui.inspect` reports
+`savePending: true`, and the reply to `app.save`, or to `engine.execute` with `file.save` or
+`file.saveAs`, is held until the save has happened and then says how it went.
 
 Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
 to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.

@@ -1053,11 +1053,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             open = false;
                         }
                         // File operations must include the cell the user is still editing (as the File > Save menu item already does).
+                        // Python cells still running (one just committed too) finish first, so
+                        // the file gets their results.
                         if ui.button("Save").clicked() && app.commit_edit(0, 0, false, false) {
-                            app.run_or_alert("file.save", json!({}));
-                            if app.session.active().is_some_and(|x| !x.is_dirty()) {
-                                app.run_or_alert("file.close", json!({"force": true}));
-                            }
+                            app.save_and_close_workbook();
                             open = false;
                         }
                     });

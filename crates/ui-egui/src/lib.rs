@@ -246,6 +246,40 @@ pub struct SheetApp {
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
     pub started: f64,
+    /// A save waiting for Python cells to finish, so the file gets their results.
+    pending_save: Option<PendingSave>,
+    /// Numbers the saves that wait, so a control-channel reply finds how its own save ended.
+    next_save: u64,
+    /// How the saves that waited ended, by number, until the control channel has read them.
+    pub(crate) save_results: Vec<(u64, Result<Json, String>)>,
+}
+
+/// Saves that wait for the Python cells still running (checked every frame), so the file gets
+/// their results rather than `#BUSY!`. They wait as long as one cell may run (the time limit,
+/// the time imports may add and a second for the worker to start), again after each cell that
+/// finishes; then they save whatever the cells hold.
+#[derive(Clone, Debug)]
+struct PendingSave {
+    /// The saves asked for while waiting, in order.
+    saves: Vec<DeferredSave>,
+    /// When the wait ends (ms, see [`now_ms`]).
+    deadline: f64,
+    /// Cells left when last checked: fewer is progress, which restarts the wait.
+    left: usize,
+}
+
+/// One save waiting for Python.
+#[derive(Clone, Debug)]
+struct DeferredSave {
+    /// Its number (see `SheetApp::next_save`).
+    token: u64,
+    /// The workbook to save.
+    uid: u64,
+    /// `file.save` or `file.saveAs`, and its params.
+    id: &'static str,
+    params: Json,
+    /// Close the workbook once it is saved (the Save of the Save Changes? prompt).
+    close: bool,
 }
 
 impl SheetApp {
@@ -289,6 +323,9 @@ impl SheetApp {
             shots: control::Shots::default(),
             selected_chart: None,
             started: now_ms(),
+            pending_save: None,
+            next_save: 1,
+            save_results: Vec::new(),
         }
     }
 
@@ -349,6 +386,15 @@ impl SheetApp {
         {
             self.commit_text_box_edit()?;
         }
+        // A save waits for the Python cells still running, so the file gets their results.
+        // (A save with nowhere to go asks where first, and comes back here with the path.)
+        if let Some(save) = deferrable_save(id, &params)
+            && self.has_save_target(&params)
+            && let Some(uid) = self.session.active().map(|d| d.uid)
+            && self.defer_save(uid, save, params.clone(), false).is_some()
+        {
+            return Ok(json!({"waitingForPython": true}));
+        }
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
@@ -358,6 +404,124 @@ impl SheetApp {
             && let Ok(r) = &r
         {
             self.deliver_pdf(r);
+        }
+        r
+    }
+
+    /// A save is waiting for Python cells to finish (see [`PendingSave`]).
+    pub fn save_pending(&self) -> bool {
+        self.pending_save.is_some()
+    }
+
+    /// The number of the most recent save that had to wait for Python, if one is waiting.
+    pub(crate) fn last_pending_save(&self) -> Option<u64> {
+        self.pending_save.as_ref().and_then(|p| p.saves.last()).map(|s| s.token)
+    }
+
+    /// How long a save waits for the Python cells to make progress, in ms: as long as one cell
+    /// may run.
+    fn python_wait_ms(&self) -> f64 {
+        let p = &self.session.prefs;
+        let secs = p.python_timeout_seconds + p.python_import_seconds + 1.0;
+        if secs.is_finite() { secs.clamp(1.0, 3_600.0) * 1000.0 } else { 60_000.0 }
+    }
+
+    /// Makes a save wait while Python cells are still running, so the file gets their results.
+    /// Returns its number, or `None` when nothing runs and the save can happen now.
+    fn defer_save(&mut self, uid: u64, id: &'static str, params: Json, close: bool) -> Option<u64> {
+        let left = self.session.python_pending_cells();
+        if left == 0 {
+            return None;
+        }
+        let token = self.next_save;
+        self.next_save = self.next_save.saturating_add(1);
+        let deadline = now_ms() + self.python_wait_ms();
+        let pending = self.pending_save.get_or_insert_with(|| PendingSave { saves: Vec::new(), deadline, left });
+        pending.saves.push(DeferredSave { token, uid, id, params, close });
+        self.toast = Some(("Saving when the Python cells finish\u{2026}".into(), now_ms()));
+        Some(token)
+    }
+
+    /// Whether a save with `params` knows where to save the active workbook (else it asks).
+    fn has_save_target(&self, params: &Json) -> bool {
+        params.get("path").and_then(Json::as_str).is_some_and(|p| !p.is_empty()) || self.session.active().is_some_and(|d| d.path.is_some())
+    }
+
+    /// Asks the host where to save the active workbook (`.xlsx` when the name has no extension).
+    fn pick_save_path(&self) -> Option<String> {
+        let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+        let path = self.services.pick_save.as_ref().and_then(|pick| pick(&suggested))?;
+        Some(if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path })
+    }
+
+    /// Saves the active workbook, then closes it if the save worked (the Save of the Save
+    /// Changes? prompt). With Python cells still running, it first waits for them, having asked
+    /// where to save a workbook that has no file yet.
+    pub fn save_and_close_workbook(&mut self) {
+        let Some(uid) = self.session.active().map(|d| d.uid) else { return };
+        let mut params = json!({});
+        if !self.has_save_target(&params) && self.services.pick_save.is_some() && self.session.python_pending_cells() > 0 {
+            let Some(path) = self.pick_save_path() else { return };
+            params = json!({"path": path});
+        }
+        if self.defer_save(uid, "file.save", params.clone(), true).is_some() {
+            return;
+        }
+        self.run_or_alert("file.save", params);
+        if self.session.active().is_some_and(|d| !d.is_dirty()) {
+            self.run_or_alert("file.close", json!({"force": true}));
+        }
+    }
+
+    /// Runs the waiting saves once the Python cells have finished, or once they have made no
+    /// progress for as long as a cell may run (the file then gets what the cells hold). Called
+    /// every frame.
+    pub(crate) fn poll_pending_save(&mut self, ctx: &egui::Context) {
+        let Some(mut pending) = self.pending_save.take() else { return };
+        let left = self.session.python_pending_cells();
+        let now = now_ms();
+        if left > 0 && left < pending.left {
+            pending.left = left;
+            pending.deadline = now + self.python_wait_ms();
+        }
+        if left > 0 && now < pending.deadline {
+            self.pending_save = Some(pending);
+            ctx.request_repaint_after(std::time::Duration::from_millis(15));
+            return;
+        }
+        if left > 0 {
+            log::warn!("saving while {left} Python cell(s) are still running: no cell finished within the time a cell may run");
+        }
+        // (The control channel reads the results a frame later; older ones went unclaimed.)
+        self.save_results.clear();
+        for save in pending.saves {
+            let r = self.save_workbook(&save);
+            self.save_results.push((save.token, r));
+        }
+    }
+
+    /// Runs a save that waited on its workbook (closing the workbook afterwards if asked and the
+    /// save worked), keeping the active workbook otherwise.
+    fn save_workbook(&mut self, save: &DeferredSave) -> Result<Json, String> {
+        let index = |app: &SheetApp| app.session.documents().iter().position(|d| d.uid == save.uid);
+        let Some(i) = index(self) else { return Err("The workbook was closed before it was saved.".into()) };
+        let keep = self.session.active().map(|d| d.uid);
+        self.session.set_active(i);
+        self.store_view_state();
+        let r = self.session.run(save.id, save.params.clone());
+        self.after_engine();
+        if let Err(e) = &r {
+            self.message = Some(("GridCraft".into(), clean_error(e)));
+        }
+        let saved = index(self).and_then(|i| self.session.documents().get(i)).is_some_and(|d| !d.is_dirty());
+        if save.close
+            && saved
+            && let Some(i) = index(self)
+        {
+            self.session.set_active(i);
+            self.run_or_alert("file.close", json!({"force": true}));
+        } else if let Some(k) = keep.and_then(|k| self.session.documents().iter().position(|d| d.uid == k)) {
+            self.session.set_active(k);
         }
         r
     }
@@ -606,10 +770,8 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
-                let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-                if let Some(pick) = &self.services.pick_save {
-                    if let Some(path) = pick(&suggested) {
-                        let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
+                if self.services.pick_save.is_some() {
+                    if let Some(path) = self.pick_save_path() {
                         self.run_or_alert("file.save", json!({"path": path}));
                     }
                 } else if self.services.download.is_some()
@@ -1057,6 +1219,8 @@ impl SheetApp {
             self.session.step_python();
             ctx.request_repaint_after(std::time::Duration::from_millis(15));
         }
+        // A save that waited for them.
+        self.poll_pending_save(ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
@@ -1151,6 +1315,8 @@ impl SheetApp {
         if self.grid.autosave
             && self.editor.is_none()
             && self.text_box_editor.is_none()
+            && self.pending_save.is_none()
+            && self.session.python_pending_cells() == 0
             && now - self.grid.last_autosave > 2000.0
             && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
         {
@@ -1243,6 +1409,16 @@ pub fn clean_error(e: &str) -> String {
     e.to_string()
 }
 
+/// The command id of a save that waits for running Python cells, or `None` for any other command
+/// (Save As without a path only asks where to save).
+fn deferrable_save(id: &str, params: &Json) -> Option<&'static str> {
+    match id {
+        "file.save" => Some("file.save"),
+        "file.saveAs" if params.get("path").and_then(Json::as_str).is_some_and(|p| !p.is_empty()) => Some("file.saveAs"),
+        _ => None,
+    }
+}
+
 #[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn now_ms() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]
@@ -1258,4 +1434,40 @@ pub fn now_ms() -> f64 {
 
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_python::client::Launcher;
+
+    /// Python cells that never make progress (nothing steps them here): a save waits for them only
+    /// as long as a cell may run, then saves what they hold, and the window keeps working.
+    #[test]
+    fn a_save_waiting_for_python_that_never_finishes_saves_anyway() {
+        let path = std::env::temp_dir().join(format!("gridcraft-save-timeout-{}.xlsx", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut s = Session::new();
+        s.new_workbook();
+        s.set_python_launcher(Launcher::InProcess);
+        let mut app = SheetApp::new(s, Services::default());
+        app.run("python.set", json!({"cell": "A1", "code": "6 * 7"})).unwrap();
+        assert!(app.session.python_pending_cells() > 0);
+        let r = app.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(r["waitingForPython"], true);
+        assert!(app.save_pending());
+        let ctx = egui::Context::default();
+        app.poll_pending_save(&ctx);
+        assert!(app.save_pending(), "still within the time a cell may run");
+        assert!(!path.exists(), "not saved yet");
+        if let Some(p) = app.pending_save.as_mut() {
+            p.deadline = 0.0;
+        }
+        app.poll_pending_save(&ctx);
+        assert!(!app.save_pending());
+        assert!(path.exists(), "saved with what the cell holds");
+        assert!(matches!(app.save_results.as_slice(), [(_, Ok(_))]));
+        assert!(app.session.python_pending_cells() > 0, "the cell is still waiting");
+        let _ = std::fs::remove_file(&path);
+    }
 }

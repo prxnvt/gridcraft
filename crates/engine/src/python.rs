@@ -629,6 +629,18 @@ impl Session {
         self.python.docs.values().any(|d| d.job.is_some()) || self.python_installing()
     }
 
+    /// How many Python cells, in every workbook, are running or waiting to run (a package
+    /// install alone does not count). Saving waits for these, so the file gets their results
+    /// rather than `#BUSY!`; a falling count is progress.
+    pub fn python_pending_cells(&self) -> usize {
+        self.python
+            .docs
+            .values()
+            .filter_map(|d| d.job.as_ref())
+            .map(|job| usize::from(job.inflight.is_some()).saturating_add(job.queue.len()).saturating_add(job.replay.len()))
+            .fold(0, usize::saturating_add)
+    }
+
     /// Advances background Python work: takes finished results, starts the next cells, and
     /// finishes a package install that ended. Call it every frame while
     /// [`Session::python_busy`]. Returns whether work remains.
