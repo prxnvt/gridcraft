@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (stability: command-sequence fuzzing against undo/redo, XLSX round-trip and full-recalc invariants) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (the Insert Function dialog's name) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -312,7 +312,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   galleries (cell styles, table styles, colour palettes, conditional formatting menus),
   contextual Table/Chart Design tabs, formula bar with Name Box, virtualised grid (smooth
   scrolling, zoom, frozen panes, text overflow), sheet tabs (rename, reorder, colour, hide),
-  status bar with Sum/Count/Average and zoom, dialogs (Format Cells, Formula Builder, Find and
+  status bar with Sum/Count/Average and zoom, dialogs (Format Cells, Insert Function, Find and
   Replace, Sort, Name Manager, Data Validation, Paste Special…), command palette, dark mode.
 - Agents: every action is an engine command; JSON control channel in the desktop app (pointer,
   keyboard, dialogs, screenshots); MCP server (headless or bridged); CLI (`info`, `convert`,
@@ -332,6 +332,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | The Insert Function dialog is named as in Excel (it was called Formula Builder); no score change |
 | 2026-10-11 | minor | Stability: command-sequence fuzz harness (`crates/engine/tests/command_sequence_fuzz.rs`) checks random command sequences against undo/redo, XLSX round-trip, full-recalc and structure invariants; the sequence bugs it found are fixed (no score change) |
 | 2026-10-11 | minor | Password-encrypted workbooks open (#11): Essentials file-opening work 24–36 h |
 | 2026-10-11 | minor | Worksheet functions 505 / 523 (96.6%; 496 working): ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD |

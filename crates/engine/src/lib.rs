@@ -222,6 +222,12 @@ pub enum UiRequest {
     OpenUrl(String),
 }
 
+/// The journal's longest length: past it, [`Session::execute`] drops the oldest
+/// [`JOURNAL_TRIM`] entries.
+pub const JOURNAL_LIMIT: usize = 10_000;
+/// How many of the oldest entries a full journal drops at once.
+pub const JOURNAL_TRIM: usize = 5_000;
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
@@ -336,8 +342,8 @@ impl Session {
         };
         if spec.journal && result.is_ok() {
             self.journal.push((id.to_string(), cmd::journal_params(&params)));
-            if self.journal.len() > 10_000 {
-                self.journal.drain(..5_000);
+            if self.journal.len() > JOURNAL_LIMIT {
+                self.journal.drain(..JOURNAL_TRIM);
             }
         }
         if spec.undoable

@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (formula bar grows to five lines; code editor widget) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Recently Used follows entered formulas; Insert Function category list) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -15,8 +15,9 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Element | Excel | GridCraft | Status |
 |---|---|---|---|
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
-| Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs); large split buttons (Formulas › AutoSum); arrows at the card's edges scroll a tab wider than the window | done; missing contextual tabs for pictures, shapes, sparklines, slicers; groups do not collapse when narrow |
+| Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs); large and small split buttons; arrows at the card's edges scroll a tab wider than the window | done; missing contextual tabs for pictures, shapes, sparklines, slicers; groups do not collapse when narrow |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
+| Formulas › Function Library | Insert Function, AutoSum, Recently Used and a menu per function category | yes (10-11): a big Insert Function button and three columns of labelled small buttons, the layout Excel uses when the window is not wide enough for a big button per category; each category's book icon has its own colour; a category menu shows each function's description on hover and ends with Insert Function…, which opens the dialog on that category; More Functions cascades into Statistical, Engineering, Cube, Information, Compatibility and Web; AutoSum is a split button whose menu (Sum, Average, Count Numbers, Max, Min, More Functions…) Home › Editing shares; Recently Used has the MR key tip and lists the ten functions most recently entered from any source (ribbon, control channel, MCP, scripts) or chosen in Insert Function, kept with the UI preferences | the wide layout with a big button per category is not offered |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing |
 | Key tips (Alt / F10 then letters) | yes, every ribbon control | **initial** (#43, 10-10): Alt or F10 shows key tips on Home for alignment, Paste Special and AutoFit plus legacy Alt sequences; other tabs and controls not yet (#33, #49) | 3–5 h |
@@ -132,7 +133,7 @@ text, so AltGr symbols (e.g. `~` on a German layout) never trigger a shortcut.
 
 ## Dialogs
 
-Format Cells, Insert Function/Formula Builder, Find and Replace, Go To and Go To Special, Sort,
+Format Cells, Insert Function (search, Most Recently Used, All and each category), Find and Replace, Go To and Go To Special, Sort,
 Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup, Goal
 Seek, Scenario Manager, Data Analysis, Forecast Sheet and others exist. Missing or partial: Options,
 Solver, Power Query editor, Insert Object, Equation editor, Protect/Allow Edit Ranges,
@@ -161,6 +162,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Recently Used follows the formulas entered from any source and is saved with the UI preferences; the Insert Function dialog is titled as in Excel, and its category list (Most Recently Used, All, each category) works |
+| 2026-10-11 | minor | Formulas › Function Library: Insert Function and three columns of labelled small buttons with category colours; category menus end with Insert Function…; More Functions cascades; AutoSum as a labelled split button sharing Home's menu; MR key tip for Recently Used |
 | 2026-10-11 | minor | Formula bar grows from one to five lines then scrolls; in-cell editor capped at five lines; code editor widget (Python and LaTeX colouring, Tab indent, Enter keeps indentation) |
 | 2026-10-11 | minor | Ribbon: scroll arrows on a tab wider than the window, Formulas › AutoSum as a split button with its function menu, View › Show in two columns so Headings is no longer cut off |
 | 2026-10-11 | minor | Theme tokens for icon, reference, on-accent and sheet-control colours; WCAG 2 contrast test over both themes (dark danger red and selected header text adjusted) |
