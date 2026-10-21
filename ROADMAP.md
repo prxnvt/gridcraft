@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (password-encrypted workbooks open, #11) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (RefEdit reference boxes in dialogs) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-11 | Dialogs take ranges by selection on the grid: reference boxes (RefEdit) with a collapse button that shrinks the dialog while the person selects, in Goal Seek, Solver and Data Analysis |
 | 2026-10-11 | Command-sequence fuzzing: random command sequences checked against undo/redo, XLSX round-trip and full recalculation; fixes for the table, legacy-array, spill, AutoSum, Watch Window and sheet-copy bugs it found |
 | 2026-10-11 | Password-protected workbooks open: GridCraft asks for the password and decrypts Agile and Standard encryption (#11) |
 | 2026-10-11 | Text boxes keep their formatting: run size, bold, italic, typeface, text colour and outline, alignment, vertical anchor and "no outline" (#377) |

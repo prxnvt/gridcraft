@@ -393,6 +393,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "Collapse dialog" => "대화 상자 축소",
+        "Expand dialog" => "대화 상자 확장",
         _ => return None,
     })
 }

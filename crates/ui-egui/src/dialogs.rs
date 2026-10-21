@@ -12,9 +12,12 @@ use serde_json::{Map, Value as Json, json};
 use crate::SheetApp;
 use crate::theme;
 
+/// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
+/// (a RefEdit box).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
     Text { key: &'static str, label: &'static str },
+    Ref { key: &'static str, label: &'static str },
     Password { key: &'static str, label: &'static str },
     Number { key: &'static str, label: &'static str },
     Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
@@ -40,11 +43,46 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
+    /// The state of the dialog's reference boxes (RefEdit).
+    refs: RefPick,
+}
+
+/// What a dialog's reference boxes are doing: which one grid selections fill, and whether the
+/// dialog is collapsed to one of them.
+#[derive(Clone, Debug, Default)]
+struct RefPick {
+    /// The reference box that grid selections are written into.
+    target: Option<String>,
+    /// The selection last written into the target (or present when picking began); only a
+    /// different selection replaces what the box holds.
+    seen: String,
+    /// The sheet, ranges and active cell from before picking began, put back when the dialog
+    /// runs its command or closes.
+    home: Option<(usize, String, String)>,
+    /// The target took a selection from the grid and takes the keyboard back once the pointer
+    /// is released, so typing still edits the box.
+    refocus: bool,
+    /// The reference box the dialog is collapsed to.
+    collapsed: Option<String>,
+    /// Where the expanded dialog was last drawn: the collapsed dialog keeps its top-left corner.
+    rect: Option<egui::Rect>,
 }
 
 impl Dialog {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The reference box the dialog is collapsed to, if any.
+    pub fn collapsed(&self) -> Option<&str> {
+        self.refs.collapsed.as_deref()
+    }
+
+    /// Collapses the dialog to its reference box `key` and starts picking into it, as the box's
+    /// collapse button does.
+    pub fn collapse_to(&mut self, app: &SheetApp, key: &str) {
+        begin_pick(app, self, key);
+        self.refs.collapsed = Some(key.to_string());
     }
 
     fn form(name: &str, title: &str, command: &'static str, fields: Vec<Field>, defaults: Json) -> Dialog {
@@ -62,6 +100,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            refs: RefPick::default(),
         }
     }
 
@@ -80,6 +119,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            refs: RefPick::default(),
         }
     }
 
@@ -812,6 +852,91 @@ fn abs(r: &gridcraft_engine::core::RangeRef) -> String {
     if r.is_single() { a(r.start) } else { format!("{}:{}", a(r.start), a(r.end)) }
 }
 
+// ---------------------------------------------------------------- RefEdit
+
+/// The egui id of the reference box `key`, the same wherever the box is drawn.
+fn ref_edit_id(key: &str) -> egui::Id {
+    egui::Id::new("gridcraft.ref_edit").with(key)
+}
+
+/// The grid selection as a reference: absolute areas joined by commas, each with the sheet name
+/// when the selection is on another sheet than the one the dialog was opened on.
+fn selection_ref(app: &SheetApp, home_sheet: Option<usize>) -> String {
+    let Some(doc) = app.session.active() else { return String::new() };
+    let areas = doc.selection.ranges.iter().map(abs);
+    match doc.wb.active() {
+        Some(sh) if home_sheet.is_some_and(|h| h != doc.wb.active_sheet) => {
+            let sheet = gridcraft_engine::formula::quote_sheet(&sh.name);
+            areas.map(|a| format!("{sheet}!{a}")).collect::<Vec<_>>().join(",")
+        }
+        _ => areas.collect::<Vec<_>>().join(","),
+    }
+}
+
+/// Makes the reference box `key` the one grid selections fill. The first pick remembers the
+/// sheet and selection, which are put back when the dialog runs its command or closes.
+fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
+    if d.refs.home.is_none()
+        && let Some(doc) = app.session.active()
+    {
+        let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
+        d.refs.home = Some((doc.wb.active_sheet, ranges.join(","), doc.selection.active.a1()));
+    }
+    d.refs.target = Some(key.to_string());
+    d.refs.refocus = false;
+    d.refs.seen = selection_ref(app, d.refs.home.as_ref().map(|h| h.0));
+}
+
+/// Stops picking and puts back the sheet and selection from before picking began.
+fn end_pick(app: &mut SheetApp, d: &mut Dialog) {
+    d.refs.target = None;
+    d.refs.collapsed = None;
+    if let Some((sheet, range, active)) = d.refs.home.take() {
+        let _ = app.session.run("selection.set", json!({"sheet": sheet, "range": range, "active": active}));
+    }
+}
+
+/// A reference box (RefEdit): a text field that the grid selection fills while it is the box
+/// being picked into, and a button that collapses the dialog to the box or expands it again.
+/// `label` names the box for screen readers.
+fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: egui::Id, width: f32) {
+    let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+    let collapsed = d.refs.collapsed.as_deref() == Some(key);
+    ui.horizontal(|ui| {
+        let id = ref_edit_id(key);
+        let r = ui.add(egui::TextEdit::singleline(&mut s).id(id).desired_width(width - 30.0)).labelled_by(label);
+        if r.gained_focus() {
+            begin_pick(app, d, key);
+        } else if d.refs.target.as_deref() == Some(key) {
+            let sel = selection_ref(app, d.refs.home.as_ref().map(|h| h.0));
+            if sel != d.refs.seen {
+                // The person selected on the grid: the selection becomes the reference.
+                s = sel.clone();
+                d.refs.seen = sel;
+                d.refs.refocus = true;
+            }
+            if d.refs.refocus && !ui.input(|i| i.pointer.any_down()) {
+                d.refs.refocus = false;
+                r.request_focus();
+            }
+        }
+        let t = theme::Tokens::get(ui.ctx());
+        let (icon, tip) = if collapsed { (Icon::Expand, "Expand dialog") } else { (Icon::Collapse, "Collapse dialog") };
+        let b = crate::widgets::icon_button(ui, icon, t.text_dim, tip, vec2(22.0, 20.0));
+        let name = crate::i18n::current(ui.ctx()).tr(tip).to_string();
+        b.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+        if b.clicked() {
+            if collapsed {
+                d.refs.collapsed = None;
+            } else {
+                d.collapse_to(app, key);
+            }
+            ui.memory_mut(|m| m.request_focus(id));
+        }
+    });
+    d.values.insert(key.into(), json!(s));
+}
+
 /// Builds the command params from form values for dialogs that need translation.
 fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
@@ -879,6 +1004,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);
     }
+    // A dialog collapsed to a reference box: Escape or Enter expands it again, rather than
+    // closing it or pressing OK.
+    if d.refs.collapsed.is_some()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape) | i.consume_key(egui::Modifiers::NONE, Key::Enter))
+    {
+        d.refs.collapsed = None;
+    }
     let mut open = true;
     let mut win_open = true;
     let mut confirm = false;
@@ -891,15 +1023,21 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "solver" => 460.0,
         _ => 380.0,
     };
-    let window = egui::Window::new(d.title.clone())
-        .id(egui::Id::new("dialog").with(&d.name))
-        .collapsible(false)
-        .resizable(false)
-        .default_width(width)
-        .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0))
-        .open(&mut win_open);
+    let window = egui::Window::new(d.title.clone()).id(egui::Id::new("dialog").with(&d.name)).collapsible(false).resizable(false).open(&mut win_open);
+    let collapsed = d.refs.collapsed.clone();
+    // Collapsed to a reference box, the dialog shrinks to the box where its top-left corner was,
+    // leaving the sheet free for selecting.
+    let window = match (&collapsed, d.refs.rect) {
+        (Some(_), Some(rect)) => window.fixed_pos(rect.min),
+        _ => window.default_width(width).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0)),
+    };
     let window = if d.name == "insertPicture" { window.default_height(240.0) } else { window };
-    window.show(ctx, |ui| {
+    let shown = window.show(ctx, |ui| {
+            if let Some(key) = &collapsed {
+                let title = egui::Id::new("dialog").with(&d.name);
+                ref_edit(app, ui, &mut d, key, title, (width - 40.0).min(380.0));
+                return;
+            }
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
@@ -914,7 +1052,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
-                "solver" => solver(ui, &mut d, &mut confirm, &mut open),
+                "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
@@ -1083,9 +1221,16 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         open = false;
                     }
                 }
-                _ => form(ui, &mut d, &mut confirm, &mut open),
+                _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         });
+    if collapsed.is_none() {
+        d.refs.rect = shown.map(|r| r.response.rect);
+    }
+    // Typing in another field of the dialog ends picking into a reference box.
+    if ctx.text_edit_focused() && d.refs.target.as_deref().is_none_or(|key| !ctx.memory(|m| m.has_focus(ref_edit_id(key)))) {
+        d.refs.target = None;
+    }
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -1110,6 +1255,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
+    }
+    if confirm {
+        // References without a sheet name mean the sheet the dialog was opened on.
+        end_pick(app, &mut d);
     }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
@@ -1136,6 +1285,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     } else if confirm {
         open = false;
+    }
+    if !open {
+        end_pick(app, &mut d);
     }
     if let Some(child) = app.dialog.as_mut() {
         // The body opened another dialog (Name Manager › New…). It takes over; this one waits
@@ -1233,13 +1385,13 @@ fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     });
 }
 
-fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
-    form_fields(ui, d);
+fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    form_fields(app, ui, d);
     ok_cancel(ui, confirm, open);
 }
 
 /// Draws a dialog's `fields`, editing its values.
-fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
+fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         for f in d.fields.clone() {
             match f {
@@ -1260,6 +1412,12 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
                         }
+                    });
+                }
+                Field::Ref { key, label } => {
+                    ui.vertical(|ui| {
+                        let l = ui.label(label);
+                        ref_edit(app, ui, d, key, l.id, 320.0);
                     });
                 }
                 Field::Password { key, label } => {
@@ -2103,25 +2261,26 @@ fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm
 }
 
 fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
-    let (mut set, mut to, mut changing) = (get("set"), get("to"), get("changing"));
     egui::Grid::new("gs").show(ui, |ui| {
-        ui.label("Set cell:");
-        ui.text_edit_singleline(&mut set);
+        let l = ui.label("Set cell:");
+        ref_edit(app, ui, d, "set", l.id, 200.0);
         ui.end_row();
         ui.label("To value:");
-        ui.text_edit_singleline(&mut to);
+        let mut to = d.values.get("to").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.add(egui::TextEdit::singleline(&mut to).desired_width(170.0)).changed() {
+            d.values.insert("to".into(), json!(to));
+        }
         ui.end_row();
-        ui.label("By changing cell:");
-        ui.text_edit_singleline(&mut changing);
+        let l = ui.label("By changing cell:");
+        ref_edit(app, ui, d, "changing", l.id, 200.0);
         ui.end_row();
     });
-    d.values.insert("set".into(), json!(set.clone()));
-    d.values.insert("to".into(), json!(to.clone()));
-    d.values.insert("changing".into(), json!(changing.clone()));
+    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let (set, to, changing) = (get("set"), get("to"), get("changing"));
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
     if *confirm {
+        end_pick(app, d);
         match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {
             Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
             Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
@@ -2137,8 +2296,8 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
     use Field::*;
     let grouped = || Choice { key: "groupedBy", label: "Grouped By:", options: vec![("columns", "Columns"), ("rows", "Rows")] };
     let labels = || Check { key: "labels", label: "Labels in first row" };
-    let range = || Text { key: "range", label: "Input Range:" };
-    let two = || vec![Text { key: "range1", label: "Variable 1 Range:" }, Text { key: "range2", label: "Variable 2 Range:" }];
+    let range = || Ref { key: "range", label: "Input Range:" };
+    let two = || vec![Ref { key: "range1", label: "Variable 1 Range:" }, Ref { key: "range2", label: "Variable 2 Range:" }];
     match tool {
         "descriptive" => vec![
             range(),
@@ -2151,7 +2310,7 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         ],
         "histogram" => vec![
             range(),
-            Text { key: "bins", label: "Bin Range (blank for automatic bins):" },
+            Ref { key: "bins", label: "Bin Range (blank for automatic bins):" },
             labels(),
             Check { key: "pareto", label: "Pareto (sorted histogram)" },
             Check { key: "cumulative", label: "Cumulative Percentage" },
@@ -2159,8 +2318,8 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
         "regression" => vec![
-            Text { key: "inputY", label: "Input Y Range:" },
-            Text { key: "inputX", label: "Input X Range:" },
+            Ref { key: "inputY", label: "Input Y Range:" },
+            Ref { key: "inputX", label: "Input X Range:" },
             labels(),
             Check { key: "constantZero", label: "Constant is Zero" },
             Text { key: "confidence", label: "Confidence Level (%):" },
@@ -2251,19 +2410,28 @@ fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
     };
     d.title = label.to_string();
     d.fields = toolpak_fields(&tool);
-    form_fields(ui, d);
+    form_fields(app, ui, d);
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
     for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
         ui.horizontal(|ui| {
-            if ui.radio(to == choice, text_label).clicked() {
+            let r = ui.radio(to == choice, text_label);
+            if r.clicked() {
                 d.values.insert("outputTo".into(), json!(choice));
             }
-            let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-            if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
-                d.values.insert(key.into(), json!(t));
-                d.values.insert("outputTo".into(), json!(choice));
+            if key == "output" {
+                ref_edit(app, ui, d, key, r.id, 190.0);
+                // Typing or picking an output range chooses it.
+                if d.refs.target.as_deref() == Some(key) {
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
+            } else {
+                let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+                if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
+                    d.values.insert(key.into(), json!(t));
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
             }
         });
     }
@@ -2272,7 +2440,7 @@ fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
 
 /// Data › Solver: the Solver Parameters form. Solve runs `data.solver` through the dialog's
 /// command; the result opens Solver Results.
-fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+fn solver(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let text = |d: &Dialog, k: &str| d.values.get(k).map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default();
     let edit = |ui: &mut egui::Ui, d: &mut Dialog, k: &str, width: f32| {
         let mut t = text(d, k);
@@ -2281,8 +2449,8 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
         }
     };
     ui.horizontal(|ui| {
-        ui.label("Set Objective:");
-        edit(ui, d, "objective", 200.0);
+        let l = ui.label("Set Objective:");
+        ref_edit(app, ui, d, "objective", l.id, 230.0);
     });
     let goal = text(d, "goal");
     ui.horizontal(|ui| {
@@ -2294,9 +2462,9 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
         }
         edit(ui, d, "value", 80.0);
     });
-    ui.label("By Changing Variable Cells:");
-    edit(ui, d, "variables", 420.0);
-    ui.label("Subject to the Constraints:");
+    let l = ui.label("By Changing Variable Cells:");
+    ref_edit(app, ui, d, "variables", l.id, 420.0);
+    let constraints = ui.label("Subject to the Constraints:");
     let list: Vec<String> = d
         .values
         .get("constraints")
@@ -2314,7 +2482,7 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
         });
     });
     ui.horizontal(|ui| {
-        edit(ui, d, "newLhs", 110.0);
+        ref_edit(app, ui, d, "newLhs", constraints.id, 130.0);
         let op = text(d, "newOp");
         egui::ComboBox::from_id_salt("solverOp").selected_text(op.clone()).width(60.0).show_ui(ui, |ui| {
             for o in ["<=", "=", ">=", "int", "bin"] {
@@ -2324,7 +2492,7 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
             }
         });
         if !matches!(op.as_str(), "int" | "bin") {
-            edit(ui, d, "newRhs", 110.0);
+            ref_edit(app, ui, d, "newRhs", constraints.id, 130.0);
         }
         if ui.button("Add").clicked() {
             let lhs = text(d, "newLhs");

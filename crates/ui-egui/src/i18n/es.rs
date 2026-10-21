@@ -393,6 +393,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Oscuro",
         "Sheet Options|View" => "Ver",
         "Print" => "Imprimir",
+        "Collapse dialog" => "Contraer diálogo",
+        "Expand dialog" => "Expandir diálogo",
         _ => return None,
     })
 }

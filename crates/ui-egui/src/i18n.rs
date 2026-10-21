@@ -565,6 +565,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Workbook calculation", "ブックの計算"),
     ("Enable iterative calculation", "反復計算を行う"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    ("Collapse dialog", "ダイアログを折りたたむ"),
+    ("Expand dialog", "ダイアログを展開する"),
 ];
 
 #[cfg(test)]

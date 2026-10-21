@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (AutoFit reserves filter dropdown space, observed against Windows Excel) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (RefEdit reference boxes in dialogs; Goal Seek, Solver and Data Analysis use them) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -138,6 +138,16 @@ Seek, Scenario Manager, Data Analysis, Forecast Sheet and others exist. Missing 
 Solver, Power Query editor, Insert Object, Equation editor, Protect/Allow Edit Ranges,
 Workbook Links, Accessibility checker.
 
+Reference boxes (RefEdit) take a range by selection on the grid: while a box is the one being
+picked into, clicking or dragging on the sheet writes the absolute reference into it (with the
+sheet name when the selection is on another sheet), and typing still edits it. The box's collapse
+button shrinks the dialog to the box while the person selects; Escape, Enter or the expand button
+restore it, and the sheet and selection from before picking come back when the dialog runs its
+command or closes. The collapse button is reachable from the keyboard and named for screen
+readers. Goal Seek, Solver (objective, variable cells and both sides of a new constraint) and
+Data Analysis (input, bin and output ranges) use reference boxes; the other dialogs that take
+ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines) still take typed references.
+
 ## Accessibility
 
 AccessKit is enabled, but the grid, ribbon and dialogs are not exposed as an accessible tree with
@@ -160,6 +170,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | RefEdit reference boxes in dialogs: pick a range on the grid, collapse the dialog while selecting; Goal Seek, Solver and Data Analysis use them |
 | 2026-10-11 | minor | AutoFit accounts for table and ordinary filter dropdowns, including low zoom; header text excludes the button area |
 | 2026-10-11 | minor | Outline band for grouped rows and columns, Show / Hide Detail on the Data tab, numpad navigation keys in shortcuts (#373) |
 | 2026-10-11 | minor | Shift+Space / Ctrl+Space no longer start an edit; Control+Space selects the column on Mac (#338) |

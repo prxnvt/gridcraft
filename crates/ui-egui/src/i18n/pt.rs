@@ -394,6 +394,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Cálculo da pasta de trabalho",
         "Enable iterative calculation" => "Habilitar cálculo iterativo",
         "Calculation settings are saved with the workbook." => "As configurações de cálculo são salvas com a pasta de trabalho.",
+        "Collapse dialog" => "Recolher caixa de diálogo",
+        "Expand dialog" => "Expandir caixa de diálogo",
         _ => return None,
     })
 }

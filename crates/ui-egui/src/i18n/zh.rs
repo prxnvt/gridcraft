@@ -385,6 +385,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        "Collapse dialog" => "折叠对话框",
+        "Expand dialog" => "展开对话框",
         _ => return None,
     })
 }

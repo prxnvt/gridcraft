@@ -394,6 +394,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Dunkel",
         "Sheet Options|View" => "Anzeige",
         "Print" => "Drucken",
+        "Collapse dialog" => "Dialogfeld reduzieren",
+        "Expand dialog" => "Dialogfeld erweitern",
         _ => return None,
     })
 }

@@ -56,6 +56,10 @@ pub enum Icon {
     Chevron,
     ChevronUp,
     Close,
+    /// A reference box's button that shrinks its dialog to the box (RefEdit).
+    Collapse,
+    /// A reference box's button that restores its collapsed dialog (RefEdit).
+    Expand,
     Check,
     Fx,
     Plus,
@@ -431,6 +435,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
         Icon::Close => {
             g.line(&[(4.0, 4.0), (12.0, 12.0)], c, 1.3);
             g.line(&[(12.0, 4.0), (4.0, 12.0)], c, 1.3);
+        }
+        Icon::Collapse | Icon::Expand => {
+            // A sheet with a selected block, under an arrow pointing up (collapse) or down (expand).
+            g.rect(2.0, 6.5, 12.0, 7.5, None, Some(c));
+            g.rect(4.0, 9.0, 4.0, 3.0, Some(c), None);
+            if icon == Icon::Collapse {
+                g.poly(&[(8.0, 1.0), (11.5, 4.5), (4.5, 4.5)], c);
+            } else {
+                g.poly(&[(8.0, 5.0), (11.5, 1.5), (4.5, 1.5)], c);
+            }
         }
         Icon::Check => g.line(&[(3.0, 8.5), (6.5, 12.0), (13.0, 4.5)], c, 1.3),
         Icon::Checkbox => {
