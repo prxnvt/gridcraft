@@ -59,6 +59,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 .or(info[key].as_array())
                 .map(|a| {
                     a.iter()
+                        // A row or column field's own filter is not a report filter.
+                        .filter(|x| x["report"].as_bool() != Some(false))
                         .filter_map(|x| x["name"].as_str().or(x["field"].as_str()).or(x["sourceCol"].as_str()).or(x.as_str()).map(str::to_string))
                         .collect()
                 })
@@ -128,6 +130,17 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                     if ui.button(l).clicked() {
                                         app.run_or_alert("pivot.group", json!({"pivot": name, "field": f, "by": g}));
                                     }
+                                }
+                                if *key != "filters" {
+                                    ui.separator();
+                                    for (top, l) in [(true, "Top 10 Items"), (false, "Bottom 10 Items")] {
+                                        if ui.button(l).clicked() {
+                                            app.run_or_alert("pivot.top10", json!({"pivot": name, "field": f, "top": top}));
+                                        }
+                                    }
+                                }
+                                if ui.button(format!("Clear Filter From \"{f}\"")).clicked() {
+                                    app.run_or_alert("pivot.clearFilter", json!({"pivot": name, "field": f}));
                                 }
                             }
                             ui.separator();

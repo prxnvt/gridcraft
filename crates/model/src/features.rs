@@ -1071,6 +1071,93 @@ pub struct PivotValue {
     pub base_item: Option<String>,
 }
 
+/// A comparison in a label filter or a value filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PivotCompare {
+    Equals,
+    NotEquals,
+    BeginsWith,
+    NotBeginsWith,
+    EndsWith,
+    NotEndsWith,
+    Contains,
+    NotContains,
+    Greater,
+    GreaterOrEqual,
+    Less,
+    LessOrEqual,
+    Between,
+    NotBetween,
+}
+
+impl PivotCompare {
+    /// Every comparison, in the order of Excel's Label Filters menu.
+    pub const ALL: [PivotCompare; 14] = [
+        PivotCompare::Equals,
+        PivotCompare::NotEquals,
+        PivotCompare::BeginsWith,
+        PivotCompare::NotBeginsWith,
+        PivotCompare::EndsWith,
+        PivotCompare::NotEndsWith,
+        PivotCompare::Contains,
+        PivotCompare::NotContains,
+        PivotCompare::Greater,
+        PivotCompare::GreaterOrEqual,
+        PivotCompare::Less,
+        PivotCompare::LessOrEqual,
+        PivotCompare::Between,
+        PivotCompare::NotBetween,
+    ];
+
+    /// Whether the comparison takes a second value.
+    pub fn is_range(self) -> bool {
+        matches!(self, PivotCompare::Between | PivotCompare::NotBetween)
+    }
+
+    /// Whether the comparison applies to text only (it has no meaning in a value filter).
+    pub fn is_text_only(self) -> bool {
+        matches!(
+            self,
+            PivotCompare::BeginsWith
+                | PivotCompare::NotBeginsWith
+                | PivotCompare::EndsWith
+                | PivotCompare::NotEndsWith
+                | PivotCompare::Contains
+                | PivotCompare::NotContains
+        )
+    }
+}
+
+/// What a Top 10 filter counts: items, a percent of the total, or a sum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PivotTopBy {
+    Items,
+    Percent,
+    Sum,
+}
+
+/// A filter rule on a row or column field.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PivotRule {
+    /// Label Filters: compares each item's caption with `value` (and `value2` for a range).
+    /// `*` and `?` are wildcards.
+    Label { op: PivotCompare, value: String, value2: String },
+    /// Value Filters: compares each item's total of the value field named `field` (its caption).
+    Value { op: PivotCompare, field: String, value: f64, value2: f64 },
+    /// Top 10: keeps the top (or bottom) items by the value field named `field`.
+    Top { top: bool, count: f64, by: PivotTopBy, field: String },
+}
+
+impl PivotRule {
+    /// The caption of the value field the rule uses, if any.
+    pub fn value_field(&self) -> Option<&str> {
+        match self {
+            PivotRule::Label { .. } => None,
+            PivotRule::Value { field, .. } | PivotRule::Top { field, .. } => Some(field),
+        }
+    }
+}
+
 /// A report filter (or, for a field also in Rows/Columns, its hidden-items filter).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -1078,6 +1165,10 @@ pub struct PivotFilter {
     pub source_col: String,
     /// Item labels shown; `None` = all.
     pub selected: Option<Vec<String>>,
+    /// A label, value or Top 10 filter (row and column fields only). As in Excel without
+    /// "Allow multiple filters per field", a field has one kind of filter at a time: setting a
+    /// rule clears `selected`, and selecting items clears the rule.
+    pub rule: Option<PivotRule>,
 }
 
 /// A PivotTable: its definition plus where its output was last written. The output itself is
