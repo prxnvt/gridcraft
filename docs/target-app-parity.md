@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (stability: command-sequence fuzzing against undo/redo, XLSX round-trip and full-recalc invariants) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (Python in cells, engine; catalog 278 / 294) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -13,7 +13,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Number | Value | Kind |
 |---|---|---|
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **274 / 290 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Ribbon and menu catalog | **278 / 294 (94.6%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
 | Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
 | **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
@@ -232,7 +232,8 @@ Linux, BSD and RISC-V, where Excel doesn't run.
   CLI that reach every command. VBA is out of scope (owner decision). A plugin or custom-function
   API (for example LAMBDA libraries and WASM custom functions) is the open-equivalent path: 25–40 h.
 - **AI:** Excel has Copilot, the COPILOT() function, Analyze Data, Python in Excel and Flash
-  Fill. GridCraft has Flash Fill and best-in-class agent control (any MCP client can drive every
+  Fill. GridCraft has Python in cells in the engine (on the user's CPython, so pandas and numpy
+  work, or on a built-in sandboxed Python; no editing UI yet), Flash Fill and best-in-class agent control (any MCP client can drive every
   command headless or live), but no in-app assistant, no natural-language formulas and no
   Analyze Data. Local-model equivalents: 30–50 h; model choice needs the owner.
 
@@ -332,6 +333,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python in cells in the engine (`python.*` commands, CPython or the built-in Python, xlsx round trip); Formulas › Python adds Insert Python, Reset, Diagnostics and Initialization: catalog 274 → 278 / 294 (no score change until the UI lands) |
 | 2026-10-11 | minor | Stability: command-sequence fuzz harness (`crates/engine/tests/command_sequence_fuzz.rs`) checks random command sequences against undo/redo, XLSX round-trip, full-recalc and structure invariants; the sequence bugs it found are fixed (no score change) |
 | 2026-10-11 | minor | Password-encrypted workbooks open (#11): Essentials file-opening work 24–36 h |
 | 2026-10-11 | minor | Worksheet functions 505 / 523 (96.6%; 496 working): ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD |

@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (CSV save keeps the separator it was opened with) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (Python cells in xlsx and native JSON) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -61,6 +61,16 @@ Server, Access, ODBC, …), web pages, SharePoint and online services, through P
 GridCraft imports CSV/TSV, JSON and HTML tables only, with no query editor, no connections and no
 refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
+## Python cells
+
+| Where | GridCraft | Notes |
+|---|---|---|
+| `.xlsx` | read and write | A Python cell is written as the formula `PY("…"&"…",0|1)` (string literals of at most 255 characters; 1 for a Python object result, 0 for values) with its cached value; a spilling result is written as a dynamic array with its spilled values cached. Read back from that form, with or without `_xlfn.`. Other applications show the cached values, and `#NAME?` if they recalculate. Excel's own file form for Python cells is not publicly documented, so files are not exchanged with Excel's Python in Excel |
+| `.xls`, `.xlsb`, `.ods` | read | A `PY("…",0|1)` formula read from any format becomes a Python cell; the `.xlsb` and `.ods` imports keep values only, so Python cells there come in as their cached values |
+| GridCraft JSON | read and write | The whole Python cell: code, output mode, the last result and the exact error |
+| Initialization code | read and write | Kept in the workbook's hidden data names |
+| Limits on open | — | More than 7,000 characters of code: the cell keeps only its cached value, with a warning. A kept result that is not a well-formed array of at most 1,000,000 cells is dropped. Opening runs nothing |
+
 ## Work (76–114 h)
 
 | Work | Hours |
@@ -78,6 +88,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python cells: xlsx `PY("…",0|1)` formulas with cached values and spills, GridCraft JSON, initialization code, limits on open |
 | 2026-10-12 | minor | CSV: saving a file opened as CSV keeps its detected separator (`;` files were rewritten with `,`) |
 | 2026-10-11 | minor | XLSX: cell/shared/array formulas read through the file→model conversion (`_xlpm.` LET/LAMBDA parameter prefixes stripped); table column names keep line breaks; table names may start with `\` |
 | 2026-10-11 | minor | CSV/TSV export writes displayed values (number formats applied, no `#####`); `.xltx`, `.xltm` and `.xlsm` saved with their own workbook content types |

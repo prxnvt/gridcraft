@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 274 / 290 commands implemented (94.5%).**
+**Overall: 278 / 294 commands implemented (94.6%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -13,7 +13,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Insert | 17 | 25 | 68% |
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
-| Formulas | 23 | 23 | 100% |
+| Formulas | 27 | 27 | 100% |
 | Data | 23 | 28 | 82% |
 | Review | 15 | 18 | 83% |
 | View | 20 | 20 | 100% |
@@ -209,7 +209,7 @@ Implemented:
 - `arrange.group` Group (Arrange)
 - `arrange.rotate` Rotate (Arrange)
 
-## Formulas (23 / 23, 100%)
+## Formulas (27 / 27, 100%)
 
 Implemented:
 
@@ -236,6 +236,10 @@ Implemented:
 - `formulas.calculationOptions` Calculation Options (Calculation)
 - `formulas.calculateNow` Calculate Now (Calculation)
 - `formulas.calculateSheet` Calculate Sheet (Calculation)
+- `python.insert` Insert Python (Python)
+- `python.reset` Reset (Python)
+- `python.diagnostics` Diagnostics (Python)
+- `python.initialization` Initialization (Python)
 
 ## Data (23 / 28, 82%)
 

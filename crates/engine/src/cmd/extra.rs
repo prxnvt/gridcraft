@@ -1038,6 +1038,7 @@ fn toggle_checkbox(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(si)?;
             if let Some(cell) = sh.cells.get_mut(c)
                 && cell.formula.is_none()
+                && cell.py.is_none()
             {
                 // An empty checkbox cell counts as FALSE.
                 let next = match cell.value {

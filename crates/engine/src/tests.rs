@@ -2796,4 +2796,8 @@ fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+mod python_cells;
+mod python_commands;
+mod python_files;
+mod python_run;
 mod seams;

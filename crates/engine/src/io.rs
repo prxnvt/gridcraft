@@ -84,8 +84,112 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
     }
 }
 
-/// Parses bytes that aren't encrypted.
+/// Parses bytes that aren't encrypted, and adopts the Python cells they hold (see
+/// [`adopt_python`]) within [`MAX_PYTHON_OUTPUT_CELLS`] and the code limit.
 fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, mut warnings) = read_plain(name, bytes)?;
+    adopt_python(&mut wb);
+    warnings.extend(enforce_python_limits(&mut wb));
+    Ok((wb, warnings))
+}
+
+/// Python cells from a file: a cell whose formula is `PY("…",0|1)` (a format that kept it as a
+/// formula) becomes a Python cell, and a Python cell whose spilled values the file cached gets
+/// them back as its result, so it shows them until it runs again.
+pub fn adopt_python(wb: &mut Workbook) {
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let formulas: Vec<(CellRef, gridcraft_model::PyCode)> = sh
+            .cells
+            .iter()
+            .filter_map(|(c, cell)| cell.formula.as_ref().and_then(|f| gridcraft_model::PyCode::from_formula(&f.text)).map(|p| (c, p)))
+            .collect();
+        let spills: Vec<(CellRef, RangeRef)> = sh
+            .spill_ranges
+            .iter()
+            .filter(|(a, r)| {
+                r.count() <= MAX_PYTHON_OUTPUT_CELLS as u64 && sh.cell(**a).and_then(|c| c.py.as_ref()).is_some_and(|p| p.output.is_none())
+            })
+            .map(|(a, r)| (*a, *r))
+            .collect();
+        if formulas.is_empty() && spills.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for (c, py) in formulas {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.formula = None;
+                cell.py = Some(std::sync::Arc::new(py));
+            }
+        }
+        for (anchor, range) in spills {
+            let data: Vec<gridcraft_core::Value> =
+                range.iter().map(|c| if c == anchor { sh.cell(c).map(|x| x.value.clone()).unwrap_or_default() } else { sh.value(c) }).collect();
+            let Some(array) = gridcraft_core::Array::new(range.height() as usize, range.width() as usize, data) else { continue };
+            if let Some(py) = sh.cells.get_mut(anchor).and_then(|x| x.py.as_mut()) {
+                std::sync::Arc::make_mut(py).output =
+                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), preview: String::new(), convertible: true });
+            }
+        }
+    }
+}
+
+/// The most cells a Python result kept in a file may have.
+pub const MAX_PYTHON_OUTPUT_CELLS: usize = 1_000_000;
+
+/// A file is somebody else's work: a Python cell with more code than
+/// [`gridcraft_model::python::MAX_CODE_CHARS`] keeps only its cached value, and a kept result
+/// that is not a well-formed array of at most [`MAX_PYTHON_OUTPUT_CELLS`] cells is dropped (the
+/// cell keeps its value). Returns the warnings.
+pub fn enforce_python_limits(wb: &mut Workbook) -> Vec<String> {
+    let max = gridcraft_model::python::MAX_CODE_CHARS;
+    let mut long = Vec::new();
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let mut over = Vec::new();
+        let mut bad_output = Vec::new();
+        for (c, cell) in sh.cells.iter() {
+            let Some(py) = &cell.py else { continue };
+            if py.code.chars().nth(max).is_some() {
+                long.push(format!("{}!{}", sh.name, c.a1()));
+                over.push(c);
+            } else if py.output.as_ref().is_some_and(|o| !sane_python_output(&o.value)) {
+                bad_output.push(c);
+            }
+        }
+        if over.is_empty() && bad_output.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for c in over {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.py = None;
+            }
+        }
+        for c in bad_output {
+            if let Some(py) = sh.cells.get_mut(c).and_then(|x| x.py.as_mut()) {
+                std::sync::Arc::make_mut(py).output = None;
+            }
+        }
+    }
+    let Some(first) = long.first() else { return vec![] };
+    let more = if long.len() > 1 { format!(" (and {} more)", long.len() - 1) } else { String::new() };
+    vec![format!("A Python cell holds more than {max} characters of code, so {first}{more} kept only its last calculated value.")]
+}
+
+/// A Python result a file may hold: a scalar, or an array whose size matches its data and has at
+/// most [`MAX_PYTHON_OUTPUT_CELLS`] cells.
+fn sane_python_output(v: &gridcraft_core::Value) -> bool {
+    match v {
+        gridcraft_core::Value::Array(a) => {
+            a.rows >= 1 && a.cols >= 1 && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= MAX_PYTHON_OUTPUT_CELLS)
+        }
+        _ => true,
+    }
+}
+
+/// Parses bytes that aren't encrypted, as they are.
+fn read_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Xls {
@@ -544,17 +648,17 @@ mod tests {
             (styled("yyyy-mm-dd"), styled("$#,##0.00"), styled("0.0%"), styled("# ?/?"), styled("@"), styled("0.00"), styled("#,##0"));
         let sh = wb.sheet_mut(0).unwrap();
         let cells = [
-            ("A1", Cell { value: Value::Number(46023.0), formula: None, style: date }),
-            ("B1", Cell { value: Value::Number(1234.5), formula: None, style: money }),
-            ("C1", Cell { value: Value::Number(0.125), formula: None, style: pct }),
-            ("D1", Cell { value: Value::Number(1.5), formula: None, style: frac }),
-            ("E1", Cell { value: Value::text("007"), formula: None, style: text }),
-            ("F1", Cell { value: Value::Error(CellError::NA), formula: None, style: money }),
-            ("G1", Cell { value: Value::Bool(true), formula: None, style: StyleId::DEFAULT }),
+            ("A1", Cell { value: Value::Number(46023.0), formula: None, style: date, py: None }),
+            ("B1", Cell { value: Value::Number(1234.5), formula: None, style: money, py: None }),
+            ("C1", Cell { value: Value::Number(0.125), formula: None, style: pct, py: None }),
+            ("D1", Cell { value: Value::Number(1.5), formula: None, style: frac, py: None }),
+            ("E1", Cell { value: Value::text("007"), formula: None, style: text, py: None }),
+            ("F1", Cell { value: Value::Error(CellError::NA), formula: None, style: money, py: None }),
+            ("G1", Cell { value: Value::Bool(true), formula: None, style: StyleId::DEFAULT, py: None }),
             ("A2", Cell { value: Value::Number(46024.0), style: date, ..Cell::formula(Formula::new("A1+1")) }),
-            ("B2", Cell { value: Value::Number(12345678.9), formula: None, style: fixed }),
-            ("C2", Cell { value: Value::Number(-0.25), formula: None, style: StyleId::DEFAULT }),
-            ("D2", Cell { value: Value::Number(1234567.0), formula: None, style: thousands }),
+            ("B2", Cell { value: Value::Number(12345678.9), formula: None, style: fixed, py: None }),
+            ("C2", Cell { value: Value::Number(-0.25), formula: None, style: StyleId::DEFAULT, py: None }),
+            ("D2", Cell { value: Value::Number(1234567.0), formula: None, style: thousands, py: None }),
         ];
         for (a, c) in cells {
             sh.set_cell(CellRef::parse(a).unwrap(), c);

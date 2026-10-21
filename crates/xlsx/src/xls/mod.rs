@@ -423,7 +423,7 @@ impl SheetState<'_> {
             return Ok(Some(pos));
         }
         budget.cell()?;
-        self.sheet.cells.set(pos, Cell { value, formula: None, style });
+        self.sheet.cells.set(pos, Cell { value, formula: None, style, py: None });
         Ok(Some(pos))
     }
 
@@ -441,7 +441,7 @@ impl SheetState<'_> {
                 if let Some(cell) = self.sheet.cells.get_mut(pos) {
                     cell.formula = Some(Arc::new(f));
                 } else {
-                    self.sheet.cells.set(pos, Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT });
+                    self.sheet.cells.set(pos, Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT, py: None });
                 }
             }
             Err(Unsupported(why)) => self.unsupported(why),
@@ -733,7 +733,7 @@ fn formula_cell(c: &mut Cursor<'_, '_>, st: &mut SheetState<'_>, budget: &mut Bu
     let Some(pos) = st.pos(r, col) else { return Ok(()) };
     budget.cell()?;
     let style = st.style(x);
-    st.sheet.cells.set(pos, Cell { value, formula: None, style });
+    st.sheet.cells.set(pos, Cell { value, formula: None, style, py: None });
     st.last_formula = Some(pos);
     if string_result {
         st.pending_string = Some(pos);

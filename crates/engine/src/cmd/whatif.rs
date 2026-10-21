@@ -201,7 +201,7 @@ impl Trial {
         for (si, c, v) in sets {
             if let Some(sh) = wb.sheet_mut(*si) {
                 let style = sh.style_id(*c);
-                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style });
+                sh.set_cell(*c, Cell { value: v.clone(), formula: None, style, py: None });
                 keys.push((*si, *c));
             }
         }
@@ -330,7 +330,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(csi)?;
         let style = sh.style_id(chg);
-        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style });
+        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style, py: None });
         cx.touch(csi, chg);
         Ok(())
     })?;
@@ -571,7 +571,7 @@ fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
         let bold = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.font.bold = true);
         let mut sheet = Sheet::new(name.clone());
         let put = |sheet: &mut Sheet, row: u32, col: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style, py: None });
         };
         put(&mut sheet, 1, 1, Value::text("Scenario Summary"), bold);
         put(&mut sheet, 2, 2, Value::text("Current Values:"), bold);
@@ -694,7 +694,7 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
         for (c, v) in out {
             let sh = cx.sheet_mut(si)?;
             let style = sh.style_id(c);
-            sh.set_cell(c, Cell { value: v, formula: None, style });
+            sh.set_cell(c, Cell { value: v, formula: None, style, py: None });
             cx.touch(si, c);
         }
         Ok(())
@@ -881,7 +881,7 @@ fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                     let src = CellRef::new(*row, c);
                     let to = dest.offset(i as i64, (c - list.start.col) as i64)?;
                     let style = sh.style_id(src);
-                    Some((to, Cell { value: sh.value(src), formula: None, style }))
+                    Some((to, Cell { value: sh.value(src), formula: None, style, py: None }))
                 })
             })
             .collect();
@@ -1109,7 +1109,7 @@ fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
             if v.is_empty() && style == StyleId::DEFAULT {
                 sh.remove_cell(c);
             } else {
-                sh.set_cell(c, Cell { value: v, formula: None, style });
+                sh.set_cell(c, Cell { value: v, formula: None, style, py: None });
             }
             cx.touch(dsi, c);
         }

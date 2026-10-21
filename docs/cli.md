@@ -59,6 +59,27 @@ gridcraft-cli run --in book.xlsx \
 
 Command ids and parameters: `gridcraft-cli commands`.
 
+## Python cells
+
+Python cells run headless too, inside each command: `python.set` answers with the cell's value.
+They run on the first Python 3.11 or newer found (the `python.options` interpreter, `VIRTUAL_ENV`,
+`CONDA_PREFIX`, then `python3` and `python` on `PATH`), otherwise on the built-in Python, which has
+no packages and no file or network access. `xl("A1:B3")` reads cells (a list of rows, or a pandas
+DataFrame on CPython with pandas installed); `xl("A1:B3", headers=True)` takes the first row as
+the header.
+
+```sh
+gridcraft-cli run \
+  --cmd 'range.setValues={"range":"A1:A3","values":[[1],[2],[3]]}' \
+  --cmd 'python.set={"cell":"B1","code":"sum(r[0] for r in xl(\"A1:A3\")) * 10"}' \
+  --cmd 'python.diagnostics' --out book.xlsx --print A1:B3
+```
+
+A workbook opened with `--in` came from a file, so its Python cells keep their saved values and
+new code shows `#BLOCKED!` until a `python.enable` step. `python.options` shows which Python runs
+cells. The binary also serves as the built-in Python's worker process (`--python-worker`, started by
+GridCraft itself, not meant to be run by hand).
+
 ## `check`
 
 ```sh

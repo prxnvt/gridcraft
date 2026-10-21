@@ -188,7 +188,7 @@ impl Sheet {
     }
     pub fn set_value(&mut self, c: CellRef, v: Value) {
         let style = self.style_id(c);
-        self.set_cell(c, Cell { value: v, formula: None, style });
+        self.set_cell(c, Cell { value: v, formula: None, style, py: None });
     }
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
@@ -207,7 +207,7 @@ impl Sheet {
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.
     pub fn set_picture(&mut self, c: CellRef, picture: Arc<CellPicture>) {
         let style = self.style_id(c);
-        self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style });
+        self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style, py: None });
         self.cell_pictures.insert(c, picture);
     }
     pub fn input_text(&self, c: CellRef) -> String {

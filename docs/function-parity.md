@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (TEXT and number formats: fraction literals, `?` thousands padding, booleans through the text section) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (Python cells; `#PYTHON!`, `#BUSY!`, `#TIMEOUT!`, `#BLOCKED!`) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -81,7 +81,8 @@ PIVOTBY, REGEXTEST…) are all present.
 | 15-significant-digit comparison semantics | **missing** (#57: `=0.1+0.2=0.3` is FALSE) |
 | External workbook references (`[Book.xlsx]Sheet1!A1`) | parsed; links dropped on open, no update |
 | Localized function names and `;` separators | **missing** (#45); en-US only |
-| Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA` done; `#FIELD!`, `#BLOCKED!`, `#CONNECT!`, `#BUSY!`, `#UNKNOWN!`, `#PYTHON!` missing (minor: they come from data types, cloud and Python features) |
+| Python in cells | done in the engine (no editing UI yet): `python.set` makes a Python cell, run on the user's CPython 3.11 or newer or on the built-in Python; `xl("A1:B5", headers=True)` reads cells. Typing `=PY(` is refused with a pointer to `python.set`, so `PY` stays counted as missing above. Files store `PY("…",0|1)` |
+| Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA`, and the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!`, `#BLOCKED!` done; `#FIELD!`, `#CONNECT!`, `#UNKNOWN!` missing (minor: they come from data types and cloud features). `ERROR.TYPE` gives 11 for `#BLOCKED!` as Excel does; Microsoft documents no number for `#PYTHON!`, `#BUSY!` or `#TIMEOUT!`, and GridCraft gives 19, 20 and 21 |
 
 ## Depth (estimated)
 
@@ -106,6 +107,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Python in cells (engine): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing (Python cells are made with `python.set`) |
 | 2026-10-11 | minor | TEXT / number formats fixed against Excel-cached results: fraction literals and zero fractions, `0` denominators zero padded, `?` pads the thousands separator, booleans use the text section (226 mismatches → 0 in 352 TEXT cells) |
 | 2026-10-11 | minor | Iterative calculation: circular references iterate up to Maximum Iterations / Maximum Change when enabled |
 | 2026-10-11 | minor | Trim-reference operators (`:.`, `.:`, `.:.`) and unbracketed `[[#This Row],Col]` done; dropped the stale "Scope of what's missing" rows for TRIMRANGE, PERCENTOF, BAHTTEXT and the trim references |

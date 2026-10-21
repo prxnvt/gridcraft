@@ -700,6 +700,7 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
+        super::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order));
         cx.wb.names.retain(|n| n.scope != Some(i));
         for n in cx.wb.names.iter_mut() {
             if let Some(sc) = n.scope.as_mut()
@@ -774,6 +775,7 @@ fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 n.formula = gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &old, &name));
             }
         }
+        super::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name));
         cx.structural = true;
         Ok(Json::Null)
     })
