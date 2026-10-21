@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (floating objects: one selection, eight resize handles, keyboard delete; macro engine and `macro.*` commands) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (form controls: buttons, sliders and spin buttons) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -21,7 +21,7 @@ This page is the summary. The detail is in:
 
 | Number | Value | Kind |
 |---|---|---|
-| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 274 / 290 (94.5%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
+| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 279 / 295 (94.6%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-12 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control dialogs; `insert.button`, `insert.slider`, `insert.spinButton` and `control.*` commands; XLSX control properties, `<controls>` and VML, sharing the element and the drawing with the other form controls pass-through keeps |
 | 2026-10-11 | Floating objects: charts, pictures, shapes and slicers share one selection with a frame of eight resize handles (each moves only its own edges, also on right-to-left sheets); Delete or Backspace deletes the selected object and Escape drops the selection; slicers follow row and column edits and sorts like the other objects; chart series follow cut-moves and sheet renames and deletes; a copied sheet gives its objects fresh ids; `ui.inspect` reports `selectedObject` and `ui.object.select` selects any object (#190, #213) |
 | 2026-10-11 | UI building blocks: theme tokens with a WCAG contrast test over both themes (icons and reference colours follow dark mode); ribbon scroll arrows and a large split button (Formulas › AutoSum opens its menu); the formula bar grows from one to five lines, then scrolls; a code editor widget with Python and LaTeX colouring |
 | 2026-10-11 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
@@ -180,6 +181,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | Form controls; catalog 275 → 279 / 295 (Developer › Controls); progress log row |
 | 2026-10-11 | minor | UI building blocks; progress log row |
 | 2026-10-11 | minor | Macro engine and `macro.*` commands; catalog 274 → 275 / 291 (View › Macros › Record Macro); progress log row |
 | 2026-10-11 | minor | Password-encrypted workbooks open (#11); progress log row |

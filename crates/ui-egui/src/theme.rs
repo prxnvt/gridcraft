@@ -78,8 +78,17 @@ pub struct Tokens {
     pub sheet_control_bg: Color32,
     pub sheet_control_border: Color32,
     pub sheet_control_text: Color32,
-    /// A placeholder fill on the sheet (a picture that has not loaded).
+    /// A placeholder fill on the sheet (a picture that has not loaded), and a form slider's track.
     pub sheet_track: Color32,
+    /// A form slider's thumb.
+    pub sheet_thumb: Color32,
+    /// A form button or spin arrow under the pointer, and pressed.
+    pub sheet_control_hover: Color32,
+    pub sheet_control_pressed: Color32,
+    /// The filled part of a form slider's track (from the minimum to the thumb).
+    pub sheet_fill: Color32,
+    /// The ring around the form control that takes the arrow keys.
+    pub sheet_focus: Color32,
 }
 
 /// The eight category colours, in the order of [`Tokens::cat`].
@@ -125,6 +134,11 @@ const SHEET_CONTROL_BG: Color32 = rgb(0xF3F3F3);
 const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
 const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
 const SHEET_TRACK: Color32 = rgb(0xD6D6D6);
+const SHEET_THUMB: Color32 = rgb(0x6B6B6B);
+const SHEET_CONTROL_HOVER: Color32 = rgb(0xE4E4E4);
+const SHEET_CONTROL_PRESSED: Color32 = rgb(0xCFCFCF);
+const SHEET_FILL: Color32 = rgb(0x107C41);
+const SHEET_FOCUS: Color32 = rgb(0x107C41);
 
 impl Tokens {
     pub fn light() -> Tokens {
@@ -180,6 +194,11 @@ impl Tokens {
             sheet_control_border: SHEET_CONTROL_BORDER,
             sheet_control_text: SHEET_CONTROL_TEXT,
             sheet_track: SHEET_TRACK,
+            sheet_thumb: SHEET_THUMB,
+            sheet_control_hover: SHEET_CONTROL_HOVER,
+            sheet_control_pressed: SHEET_CONTROL_PRESSED,
+            sheet_fill: SHEET_FILL,
+            sheet_focus: SHEET_FOCUS,
         }
     }
 
@@ -236,6 +255,11 @@ impl Tokens {
             sheet_control_border: SHEET_CONTROL_BORDER,
             sheet_control_text: SHEET_CONTROL_TEXT,
             sheet_track: SHEET_TRACK,
+            sheet_thumb: SHEET_THUMB,
+            sheet_control_hover: SHEET_CONTROL_HOVER,
+            sheet_control_pressed: SHEET_CONTROL_PRESSED,
+            sheet_fill: SHEET_FILL,
+            sheet_focus: SHEET_FOCUS,
         }
     }
 
@@ -951,6 +975,12 @@ mod contrast_tests {
         add("selection border on sheet", t.sel_border, t.grid_bg, GLYPH);
         add("sheet control text", t.sheet_control_text, t.sheet_control_bg, TEXT);
         add("sheet control border on sheet", t.sheet_control_border, t.grid_bg, GLYPH);
+        add("slider thumb on track", t.sheet_thumb, t.sheet_track, GLYPH);
+        add("sheet control text on hover", t.sheet_control_text, t.sheet_control_hover, TEXT);
+        add("sheet control text when pressed", t.sheet_control_text, t.sheet_control_pressed, TEXT);
+        add("slider fill on sheet", t.sheet_fill, t.grid_bg, GLYPH);
+        add("slider fill on track", t.sheet_fill, t.sheet_track, GLYPH);
+        add("control focus ring on sheet", t.sheet_focus, t.grid_bg, GLYPH);
         v
     }
 
@@ -984,6 +1014,10 @@ mod contrast_tests {
         assert_eq!(
             (l.sheet_control_bg, l.sheet_control_border, l.sheet_control_text, l.sheet_track),
             (d.sheet_control_bg, d.sheet_control_border, d.sheet_control_text, d.sheet_track)
+        );
+        assert_eq!(
+            (l.sheet_thumb, l.sheet_control_hover, l.sheet_control_pressed, l.sheet_fill, l.sheet_focus),
+            (d.sheet_thumb, d.sheet_control_hover, d.sheet_control_pressed, d.sheet_fill, d.sheet_focus)
         );
         for c in Cat::ALL {
             assert_ne!(l.cat(c), d.cat(c), "{c:?} has a dark-mode value of its own");

@@ -273,6 +273,9 @@ impl Workbook {
             for c in &s.slicers {
                 m = m.max(c.id);
             }
+            for c in &s.controls {
+                m = m.max(c.id);
+            }
         }
         m.saturating_add(1)
     }
@@ -316,6 +319,10 @@ mod tests {
             sh.images.push(image(7));
         }
         assert_eq!(wb.next_object_id(), 8);
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 12, ..Default::default() });
+        }
+        assert_eq!(wb.next_object_id(), 13, "form controls take ids from the same sequence");
         if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(u32::MAX));
         }

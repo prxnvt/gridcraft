@@ -534,29 +534,51 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         let rid = rels.add("drawing", &format!("../drawings/drawing{dn}.xml"));
         let _ = write!(s, "<drawing r:id=\"{rid}\"/>");
     }
-    // Notes: comments part + VML so Excel shows them. Threaded comments also get a legacy note
-    // (its text with the replies as lines, for readers without threaded comments) linked by id.
-    if !sheet.comments.is_empty() {
-        out.comments += 1;
-        let n = out.comments;
-        let ids = thread_ids(sheet, si);
-        out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet, &ids).into_bytes());
-        if !ids.is_empty() {
-            let x = threaded_xml(sheet, &ids, &mut out.persons);
-            out.part(&format!("xl/threadedComments/threadedComment{n}.xml"), Some(CT_THREADED_COMMENTS), x.into_bytes());
-            rels.add_uri(REL_THREADED_COMMENT, &format!("../threadedComments/threadedComment{n}.xml"));
+    // Notes and form controls share one legacy VML drawing: notes need it for Excel to show them,
+    // and controls carry their `x:ClientData` there. Shape ids come from 1024-id blocks listed in
+    // the drawing's idmap, notes first, so a control's `shapeId` names its VML shape. Threaded
+    // comments also get a legacy note (its text with the replies as lines, for readers without
+    // threaded comments) linked by id.
+    let mut controls = String::new();
+    if !sheet.comments.is_empty() || !sheet.controls.is_empty() {
+        let shapes = (sheet.comments.len() as u64).saturating_add(sheet.controls.len() as u64);
+        let blocks = u32::try_from(shapes.saturating_add(1).div_ceil(1024)).unwrap_or(u32::MAX).max(1);
+        let first = out.vml_block.saturating_add(1);
+        out.vml_block = out.vml_block.saturating_add(blocks);
+        let idmap = (first..first.saturating_add(blocks)).map(|b| b.to_string()).collect::<Vec<_>>().join(",");
+        // With a kept drawing, our shapes join it in a block of their own.
+        let base = kept.shape_base().unwrap_or(u64::from(first) * 1024);
+        let notes = sheet.comments.len() as u64;
+        let mut control_shapes = String::new();
+        if !sheet.controls.is_empty() {
+            let w = crate::controls::write(out, &mut rels, sheet, |i| base + 1 + notes + i as u64);
+            controls = w.entries;
+            control_shapes = format!("{}{}", crate::controls::SHAPETYPE, w.vml);
         }
+        if !sheet.comments.is_empty() {
+            out.comments += 1;
+            let n = out.comments;
+            let ids = thread_ids(sheet, si);
+            out.part(&format!("xl/comments{n}.xml"), Some(CT_COMMENTS), comments_xml(sheet, &ids).into_bytes());
+            if !ids.is_empty() {
+                let x = threaded_xml(sheet, &ids, &mut out.persons);
+                out.part(&format!("xl/threadedComments/threadedComment{n}.xml"), Some(CT_THREADED_COMMENTS), x.into_bytes());
+                rels.add_uri(REL_THREADED_COMMENT, &format!("../threadedComments/threadedComment{n}.xml"));
+            }
+            rels.add("comments", &format!("../comments{n}.xml"));
+        }
+        out.vmls += 1;
+        let v = out.vmls;
         out.default_type("vml", "application/vnd.openxmlformats-officedocument.vmlDrawing");
-        let vml_name = format!("xl/drawings/vmlDrawing{n}.vml");
-        let vml = kept.notes_vml(vml_xml(sheet, n), &vml_name, out);
+        let vml_name = format!("xl/drawings/vmlDrawing{v}.vml");
+        let vml = kept.notes_vml(vml_xml(sheet, &idmap, base, &control_shapes), &vml_name, out);
         out.part(&vml_name, None, vml.into_bytes());
-        rels.add("comments", &format!("../comments{n}.xml"));
-        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{n}.vml"));
+        let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{v}.vml"));
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
     } else if let Some(rid) = kept.lone_vml(&mut rels, out) {
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
     }
-    s.push_str(&kept.elements());
+    s.push_str(&kept.elements(&controls));
     // Tables.
     if !tables.is_empty() {
         let mut parts = String::new();
@@ -1184,13 +1206,14 @@ fn protected_ranges_xml(sheet: &Sheet) -> String {
     if s.is_empty() { s } else { format!("<protectedRanges>{s}</protectedRanges>") }
 }
 
-/// Legacy VML shapes Excel uses to display notes.
-fn vml_xml(sheet: &Sheet, n: u32) -> String {
+/// Legacy VML shapes Excel uses to display notes (numbered from `base + 1`), followed by the
+/// form control shapes `controls`. `idmap` lists the shape blocks the drawing uses.
+fn vml_xml(sheet: &Sheet, idmap: &str, base: u64, controls: &str) -> String {
     let mut s = format!(
-        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{n}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
+        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{idmap}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
     );
     for (i, (cell, c)) in sheet.comments.iter().enumerate() {
-        let id = n as u64 * 1024 + 1 + i as u64;
+        let id = base + 1 + i as u64;
         let vis = if c.visible { "visible" } else { "hidden" };
         let _ = write!(
             s,
@@ -1205,6 +1228,7 @@ fn vml_xml(sheet: &Sheet, n: u32) -> String {
             if c.visible { "<x:Visible/>" } else { "" }
         );
     }
+    s.push_str(controls);
     s.push_str("</xml>");
     s
 }

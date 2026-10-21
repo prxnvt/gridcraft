@@ -107,6 +107,16 @@ pub struct GridState {
     pub hf_start: bool,
     /// The grid geometry of the last frame (hit-testing for agents and tests).
     pub geo: Option<Geo>,
+    /// A form control being worked with the pointer.
+    pub control: Option<crate::form_controls::Gesture>,
+    /// The form control that takes the arrow keys (the one last worked).
+    pub focused_control: Option<u32>,
+    /// Insert › Controls: the kind a click or drag on the grid places, and where the drag began
+    /// (logical position).
+    pub placing: Option<gridcraft_engine::model::ControlKind>,
+    pub place_start: Option<Pos2>,
+    /// A form control's context menu: (control id, where).
+    pub control_menu: Option<(u32, Pos2)>,
 }
 
 impl GridState {
@@ -627,6 +637,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
+    crate::control_ui::menu(app, ui);
     let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
     vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
     if app.session.clipboard.is_some() {
@@ -1569,6 +1580,15 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let in_col_header = pos.is_some_and(|p| p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left());
     let in_row_header = pos.is_some_and(|p| p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top());
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top());
+    // Insert › Controls places a control; a click works a form control (Ctrl or Cmd+click, or a
+    // right-click, selects it instead).
+    if app.editor.is_none() && crate::control_ui::place(app, ui, resp, geo, sh) {
+        return;
+    }
+    if app.editor.is_none() && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
+        keyboard(app, &ctx, resp, geo, sh);
+        return;
+    }
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
@@ -1608,9 +1628,14 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             _ => None,
         };
-        let on_object = app.grid.drag == Drag::None && !editing && crate::chartview::hit(geo, sh, p).is_some();
+        let hit = if app.grid.drag == Drag::None && !editing { crate::chartview::hit(geo, sh, p) } else { None };
+        // A form control works on click unless it is selected (or Ctrl or Cmd is held).
+        let works = hit.is_some_and(|(o, _)| o.kind == ObjKind::Control && app.selected_object != Some(o) && !mods.command && !mods.ctrl);
+        let on_object = hit.is_some();
         if let Some(h) = on_object_handle {
             ctx.set_cursor_icon(h.cursor(geo.rtl));
+        } else if works {
+            ctx.set_cursor_icon(CursorIcon::PointingHand);
         } else if matches!(app.grid.drag, Drag::Object { handle: None, .. }) || on_object {
             ctx.set_cursor_icon(CursorIcon::Move);
         } else if near_col_edge {
@@ -2063,7 +2088,18 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
     }
 
-    // Right-click: context menu.
+    // Right-click: context menu. On a form control it selects the control without running it,
+    // and opens the control's menu.
+    if resp.secondary_clicked()
+        && let Some(p) = pos
+        && let Some((o, _)) = crate::chartview::hit(geo, sh, p).filter(|(o, _)| o.kind == ObjKind::Control)
+    {
+        app.selected_object = Some(o);
+        app.grid.focused_control = None;
+        app.grid.control_menu = Some((o.id, geo.mirror_pos(p)));
+        resp.request_focus();
+        return;
+    }
     if resp.secondary_clicked()
         && let Some(p) = pos
     {
@@ -2353,6 +2389,8 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             }
             egui::Event::Paste(text) => app.paste_external(text),
             egui::Event::Text(_) if shortcut_pressed => {}
+            // Space presses a focused button; it doesn't start typing in a cell.
+            egui::Event::Text(text) if text == " " && app.grid.focused_control.is_some() && app.selected_object.is_none() => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 app.begin_edit(Some(text), false);
                 if let Some(ed) = app.editor.as_mut() {
@@ -2362,6 +2400,10 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                // The focused form control takes arrows, Page Up and Down, Home, End, Space and Enter.
+                if !m.command && !m.ctrl && !m.alt && crate::form_controls::key(app, sh, key) {
+                    continue;
+                }
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     continue;
                 }

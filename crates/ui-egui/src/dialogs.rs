@@ -65,7 +65,7 @@ impl Dialog {
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -782,6 +782,9 @@ impl Dialog {
                 dialog
             }
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
+            "assignAction" => return crate::control_ui::open_assign(app, &params),
+            "formatControl" => return crate::control_ui::open_format(app, &params),
+            "controlQuestion" => return crate::control_ui::open_question(&params),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
@@ -889,6 +892,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "assignAction" => 440.0,
         _ => 380.0,
     };
     let window = egui::Window::new(d.title.clone())
@@ -917,6 +921,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
+                "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
+                "controlQuestion" => crate::control_ui::question_dialog(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);

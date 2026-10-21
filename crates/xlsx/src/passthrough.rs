@@ -3,8 +3,9 @@
 //! On read, the raw bytes of unmodelled parts are kept with their content type and their
 //! relationship graph, per owner: the package root (custom document properties, ribbon
 //! customisation, add-in task panes), the workbook (custom XML, links to external workbooks with
-//! their `<externalReferences>`, data connections) and each sheet (query tables, form controls,
-//! ActiveX controls, OLE objects, the sheet background and printer settings, with the sheet's
+//! their `<externalReferences>`, data connections) and each sheet (query tables, form controls
+//! other than the buttons, scroll bars and spin buttons `controls.rs` models, ActiveX controls, OLE
+//! objects, the sheet background and printer settings, with the sheet's
 //! `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id` of `<pageSetup>` and the legacy
 //! VML shapes those controls need).
 //!
@@ -372,8 +373,9 @@ impl KeptReader {
         (!p.is_empty()).then(|| Arc::new(p))
     }
 
-    /// Sheet-level content of the sheet part `part`.
-    pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str) -> Option<Arc<Preserved>> {
+    /// Sheet-level content of the sheet part `part`. `read_controls` are the VML shape numbers of
+    /// the form controls the sheet reader modelled; they are left out of the kept content.
+    pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str, read_controls: &HashSet<u64>) -> Option<Arc<Preserved>> {
         if !self.on {
             return None;
         }
@@ -392,12 +394,22 @@ impl KeptReader {
             }
         }
         if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) {
-            self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen);
+            self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen, read_controls);
         }
         (!p.is_empty()).then(|| Arc::new(p))
     }
 
-    fn sheet_elements(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str, rels: &[PreservedRel], p: &mut Preserved, seen: &mut HashSet<String>) {
+    #[allow(clippy::too_many_arguments)]
+    fn sheet_elements(
+        &mut self,
+        cx: &mut Ctx<'_>,
+        part: &str,
+        name: &str,
+        rels: &[PreservedRel],
+        p: &mut Preserved,
+        seen: &mut HashSet<String>,
+        read_controls: &HashSet<u64>,
+    ) {
         let scan = match cx.pkg.read(part) {
             Ok(Some(bytes)) => scan_sheet(&bytes),
             _ => None,
@@ -415,10 +427,15 @@ impl KeptReader {
                 Err(why) => cx.warn(format!("sheet \"{name}\": printer settings were dropped: {why}")),
             }
         }
-        let mut frags = scan.fragments;
+        // Form controls the sheet reader modelled are written from the model; the others stay.
+        let mut frags: Vec<(String, String)> = scan
+            .fragments
+            .into_iter()
+            .filter_map(|(slot, x)| if slot == "controls" { without_controls(&x, read_controls).map(|x| (slot, x)) } else { Some((slot, x)) })
+            .collect();
         // Controls and OLE objects are drawn from shapes in the legacy VML drawing.
         if frags.iter().any(|(slot, _)| slot != "picture") {
-            match self.vml(cx, rels, scan.legacy_drawing.as_deref(), seen) {
+            match self.vml(cx, rels, scan.legacy_drawing.as_deref(), seen, read_controls) {
                 Ok((vml, parts)) => {
                     p.parts.extend(parts);
                     p.vml = Some(vml);
@@ -454,14 +471,15 @@ impl KeptReader {
         }
     }
 
-    /// The sheet's VML drawing without its notes (GridCraft writes those), and the parts its
-    /// shapes refer to (preview images).
+    /// The sheet's VML drawing without its notes and the form controls read into the model
+    /// (GridCraft writes those), and the parts its shapes refer to (preview images).
     fn vml(
         &mut self,
         cx: &mut Ctx<'_>,
         rels: &[PreservedRel],
         rid: Option<&str>,
         seen: &mut HashSet<String>,
+        read_controls: &HashSet<u64>,
     ) -> Result<(PreservedPart, Vec<PreservedPart>), String> {
         let rel = rid.and_then(|id| rels.iter().find(|r| r.id == id && !r.external)).ok_or("the sheet has no VML drawing")?;
         // Charged to the kept total like any other part: many sheets can point at one highly
@@ -478,7 +496,7 @@ impl KeptReader {
         };
         self.budget = self.budget.saturating_sub(data.len());
         let text = String::from_utf8(data).map_err(|_| "the VML drawing is not UTF-8".to_string())?;
-        let text = strip_notes(&text);
+        let text = strip_shapes(&text, read_controls);
         let vrels = raw_rels(cx, &rel.target)?;
         let mut q = Preserved::default();
         let roots: Vec<PreservedRel> = vrels.iter().filter(|r| !r.external).cloned().collect();
@@ -625,13 +643,14 @@ fn shape_spans(vml: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-/// VML without its note shapes (`ObjectType="Note"`).
-fn strip_notes(vml: &str) -> String {
+/// VML without its note shapes (`ObjectType="Note"`) and the shapes numbered in `drop`.
+fn strip_shapes(vml: &str, drop: &HashSet<u64>) -> String {
     let mut out = String::with_capacity(vml.len());
     let mut last = 0;
     for (a, b) in shape_spans(vml) {
         let shape = vml.get(a..b).unwrap_or("");
-        if shape.contains("ObjectType=\"Note\"") {
+        let numbered = shape_numbers(shape).first().is_some_and(|n| drop.contains(n));
+        if shape.contains("ObjectType=\"Note\"") || numbered {
             out.push_str(vml.get(last..a).unwrap_or(""));
             last = b;
         }
@@ -650,19 +669,32 @@ fn shape_numbers(vml: &str) -> Vec<u64> {
         .collect()
 }
 
-/// Kept VML (controls, OLE objects) plus GridCraft's note shapes: the notes get ids in a fresh
-/// shape block so they can't collide with the kept shapes the sheet XML refers to.
+/// The first shape block free in kept VML: GridCraft's own shapes (notes, then form controls) are
+/// numbered from `block * 1024 + 1` when they join it ([`merge_vml`]).
+fn first_free_block(kept: &str) -> u64 {
+    shape_numbers(kept).into_iter().max().unwrap_or(0) / 1024 + 1
+}
+
+/// Kept VML (controls, OLE objects) plus GridCraft's note and form control shapes: ours get ids
+/// in fresh shape blocks so they can't collide with the kept shapes the sheet XML refers to.
 fn merge_vml(kept: &str, ours: &str) -> String {
     let Some(close) = kept.rfind("</xml>") else { return ours.to_string() };
-    let block = shape_numbers(kept).into_iter().max().unwrap_or(0) / 1024 + 1;
+    let block = first_free_block(kept);
     let mut add = String::new();
-    if !kept.contains("id=\"_x0000_t202\"")
-        && let Some(i) = ours.find("<v:shapetype")
-        && let Some(j) = ours.get(i..).and_then(|s| s.find("</v:shapetype>"))
-    {
-        add.push_str(ours.get(i..i + j + "</v:shapetype>".len()).unwrap_or(""));
+    // Our shape types (notes, form controls) that the kept drawing doesn't define.
+    let mut from = 0;
+    while let Some(i) = ours.get(from..).and_then(|s| s.find("<v:shapetype")).map(|i| i + from) {
+        let Some(j) = ours.get(i..).and_then(|s| s.find("</v:shapetype>")).map(|j| i + j + "</v:shapetype>".len()) else { break };
+        let ty = ours.get(i..j).unwrap_or("");
+        let id = ty.split("id=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or("");
+        if !id.is_empty() && !kept.contains(&format!("id=\"{id}\"")) {
+            add.push_str(ty);
+        }
+        from = j;
     }
-    for (k, (a, b)) in shape_spans(ours).into_iter().enumerate() {
+    let spans = shape_spans(ours);
+    let blocks = (spans.len() as u64 + 1).div_ceil(1024).max(1);
+    for (k, (a, b)) in spans.into_iter().enumerate() {
         let shape = ours.get(a..b).unwrap_or("");
         let id = block.saturating_mul(1024).saturating_add(1 + k as u64);
         match (shape.find("id=\"_x0000_s"), shape.find("id=\"_x0000_s").and_then(|i| shape.get(i + 4..)?.find('"').map(|j| i + 4 + j))) {
@@ -673,14 +705,68 @@ fn merge_vml(kept: &str, ours: &str) -> String {
         }
     }
     let mut head = kept.get(..close).unwrap_or("").to_string();
-    // Claim the block in the drawing's id map.
+    // Claim the blocks in the drawing's id map.
     if let Some(i) = head.find("<o:idmap")
         && let Some(d) = head.get(i..).and_then(|s| s.find("data=\"")).map(|d| i + d + "data=\"".len())
         && let Some(e) = head.get(d..).and_then(|s| s.find('"')).map(|e| d + e)
     {
-        head.insert_str(e, &format!(",{block}"));
+        let claimed: String = (block..block.saturating_add(blocks)).map(|b| format!(",{b}")).collect();
+        head.insert_str(e, &claimed);
     }
     format!("{head}{add}{}", kept.get(close..).unwrap_or(""))
+}
+
+/// A kept `<controls>` fragment without the controls whose `shapeId` is in `drop` (they are
+/// written from the model). `None` when no control is left. A fragment that doesn't parse is
+/// returned unchanged.
+fn without_controls(frag: &str, drop: &HashSet<u64>) -> Option<String> {
+    if drop.is_empty() {
+        return Some(frag.to_string());
+    }
+    let numbered = |x: &str| {
+        x.split("shapeId=\"").skip(1).any(|r| r.split('"').next().and_then(|n| n.trim().parse::<u64>().ok()).is_some_and(|n| drop.contains(&n)))
+    };
+    let mut reader = Reader::from_str(frag);
+    let mut out = String::with_capacity(frag.len());
+    let (mut last, mut left, mut inside) = (0usize, 0usize, false);
+    loop {
+        let Ok(start) = usize::try_from(reader.buffer_position()) else { return Some(frag.to_string()) };
+        let ev = match reader.read_event() {
+            Ok(ev) => ev,
+            Err(_) => return Some(frag.to_string()),
+        };
+        let child = match ev {
+            Event::Eof => break,
+            Event::Start(e) if e.local_name().as_ref() == b"controls" => {
+                inside = true;
+                continue;
+            }
+            Event::End(e) if e.local_name().as_ref() == b"controls" => {
+                inside = false;
+                continue;
+            }
+            Event::Start(e) if inside => {
+                if reader.read_to_end(e.name()).is_err() {
+                    return Some(frag.to_string());
+                }
+                true
+            }
+            Event::Empty(_) if inside => true,
+            _ => false,
+        };
+        if !child {
+            continue;
+        }
+        let Ok(end) = usize::try_from(reader.buffer_position()) else { return Some(frag.to_string()) };
+        if numbered(frag.get(start..end).unwrap_or("")) {
+            out.push_str(frag.get(last..start).unwrap_or(""));
+            last = end;
+        } else {
+            left += 1;
+        }
+    }
+    out.push_str(frag.get(last..).unwrap_or(""));
+    (left > 0).then_some(out)
 }
 
 /// Rewrites relationship-id attributes (`r:id`, `r:embed`…: any attribute in the relationships
@@ -754,6 +840,12 @@ pub struct KeptOut {
 }
 
 impl KeptOut {
+    /// Reserves a part name GridCraft writes itself, so kept parts don't take it. False when it is
+    /// taken.
+    pub fn reserve(&mut self, name: &str) -> bool {
+        self.used.insert(name.to_ascii_lowercase())
+    }
+
     /// A part name for a kept part: its original name when that can't collide with anything
     /// written, otherwise a fresh one in the same folder.
     fn claim(&mut self, original: &str) -> String {
@@ -886,7 +978,15 @@ impl<'a> SheetKept<'a> {
         }
     }
 
-    /// GridCraft's notes VML for part `name`, merged with the kept control and object shapes.
+    /// The number GridCraft's own VML shapes start after when they join the kept drawing
+    /// ([`SheetKept::notes_vml`] numbers them `base + 1`, `base + 2`…); `None` without one.
+    pub fn shape_base(&self) -> Option<u64> {
+        let vml = self.vml()?;
+        Some(first_free_block(&String::from_utf8_lossy(&vml.data)).saturating_mul(1024))
+    }
+
+    /// GridCraft's notes and form controls VML for part `name`, merged with the kept control and
+    /// object shapes.
     pub fn notes_vml(&self, ours: String, name: &str, out: &mut Out) -> String {
         let Some(vml) = self.vml() else { return ours };
         self.write_vml_rels(vml, name, out);
@@ -908,16 +1008,30 @@ impl<'a> SheetKept<'a> {
         self.ids.get(old).map(String::as_str)
     }
 
-    /// The kept sheet elements, in schema order.
-    pub fn elements(&self) -> String {
-        let Some(p) = self.p else { return String::new() };
+    /// The kept sheet elements, in schema order, with GridCraft's own form control entries
+    /// (`controls`, see `controls::write`) in the sheet's one `<controls>` element.
+    pub fn elements(&self, controls: &str) -> String {
         let mut s = String::new();
-        for slot in SHEET_SLOTS {
-            for e in p.elements.iter().filter(|e| e.slot == *slot) {
-                if let Some(x) = remap(&e.xml, &self.ids) {
-                    s.push_str(&x);
+        let mut placed = controls.is_empty();
+        if let Some(p) = self.p {
+            for slot in SHEET_SLOTS {
+                for e in p.elements.iter().filter(|e| e.slot == *slot) {
+                    if let Some(mut x) = remap(&e.xml, &self.ids) {
+                        if *slot == "controls"
+                            && !placed
+                            && let Some(i) = x.rfind("</controls>")
+                        {
+                            x.insert_str(i, controls);
+                            placed = true;
+                        }
+                        s.push_str(&x);
+                    }
                 }
             }
+        }
+        // `<controls>` comes last of the kept elements.
+        if !placed {
+            s.push_str(&crate::controls::controls_element(controls));
         }
         s
     }

@@ -42,8 +42,10 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
 `ui.inspect` reports the selected floating object as `selectedObject: {kind, id}` (or `null`),
-where `kind` is `chart`, `image`, `shape` or `slicer`; the same names go in the `kind` parameter
-of `object.delete`, `object.move`, `object.setAnchorMode` and the `arrange.*` commands.
+where `kind` is `chart`, `image`, `shape`, `slicer` or `control` (a form button, slider or spin
+button); the same names go in the `kind` parameter of `object.delete`, `object.move`,
+`object.setAnchorMode` and the `arrange.*` commands. Form controls are worked with
+`control.setValue` and `control.press`, and listed by `control.list`.
 `selectedChart` remains for existing clients: the id when the selection is a chart, otherwise
 `null`. With an object selected, `ui.key {key: "Delete"}` (or Backspace) deletes the object
 instead of clearing cells, and Escape clears the selection.

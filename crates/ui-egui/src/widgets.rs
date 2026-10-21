@@ -126,13 +126,26 @@ fn paint_big_label(ui: &Ui, rect: Rect, lines: &[std::sync::Arc<egui::Galley>], 
 
 /// Small ribbon button: 16px icon with optional label to the right.
 pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    small(ui, icon, label, tip, dropdown, false)
+}
+
+/// A small ribbon button that shows a checked state while `on` (Insert › Controls while a
+/// control is being placed).
+pub fn small_toggle_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, on: bool) -> Response {
+    small(ui, icon, label, tip, false, on)
+}
+
+fn small(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool, on: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(12.5);
     let label = tr(ui, label);
     let tw = if label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0 };
     let w = 24.0 + tw + if dropdown { 12.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 23.0), Sense::click());
-    if resp.is_pointer_button_down_on() {
+    if on {
+        ui.painter().rect_filled(rect, 4.0, t.pressed);
+        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    } else if resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 4.0, t.pressed);
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);

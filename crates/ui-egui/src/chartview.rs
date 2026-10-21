@@ -1,5 +1,5 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
-//! we paint with egui), pictures, shapes and slicers.
+//! we paint with egui), pictures, shapes, slicers and form controls (`form_controls.rs`).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -380,6 +380,18 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         }
     }
     paint_slicers(p, geo, wb, si, sh);
+    // Form controls sit above every other object.
+    let hover = p.ctx().input(|i| i.pointer.hover_pos()).map(|h| geo.mirror_pos(h)).filter(|h| geo.in_cells(*h));
+    for c in &sh.controls {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        // A slider's value shows beside it while it is dragged.
+        if !r.expand(24.0).intersects(p.clip_rect()) {
+            continue;
+        }
+        let start = p.add(egui::Shape::Noop);
+        crate::form_controls::paint(p, r, c, geo.z, crate::form_controls::look(app, geo, c, r, hover));
+        done(start, r);
+    }
     // The selected object's frame and handles go over every object, and move with it on a
     // right-to-left sheet.
     if let Some(r) = app.selected_object.and_then(|o| object_rect(geo, sh, o))
@@ -509,11 +521,17 @@ pub fn object_rect(geo: &Geo, sh: &Sheet, o: ObjRef) -> Option<Rect> {
     sh.object_anchor(o).map(|a| anchor_rect(geo, sh, &a))
 }
 
-/// The topmost object under `p` and its rect: slicers paint on top, so they are hit first, then
-/// charts, pictures and shapes, each from the top of its stack.
+/// The topmost object under `p` and its rect: form controls paint on top, so they are hit
+/// first, then slicers, charts, pictures and shapes, each from the top of its stack.
 pub fn hit(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
     if !geo.cells.contains(p) {
         return None;
+    }
+    for c in sh.controls.iter().rev() {
+        let r = anchor_rect(geo, sh, &c.anchor);
+        if r.contains(p) {
+            return Some((ObjRef::new(ObjKind::Control, c.id), r));
+        }
     }
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);

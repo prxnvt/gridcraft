@@ -1,6 +1,6 @@
 //! Reading worksheet parts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
@@ -38,7 +38,9 @@ struct RowState {
 
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
 
-pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
+/// Reads the sheet part `part`, with the VML shape numbers of the form controls read into the
+/// model (pass-through keeps the other controls).
+pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, HashSet<u64>), IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
@@ -60,6 +62,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     drop(bytes);
 
     let mut fit_to_page = false;
+    let mut controls: Option<&El> = None;
     for e in &root.children {
         match e.name.as_str() {
             "sheetPr" => {
@@ -193,10 +196,22 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 }
             }
             "extLst" => read_ext(cx, e, &mut sheet),
+            "controls" | "AlternateContent" => {
+                if let Some(c) = crate::controls::controls_of(e) {
+                    controls = Some(c);
+                }
+            }
             "protectedRanges" => read_protected_ranges(e, &mut sheet),
             _ => {}
         }
     }
+    // Buttons, scroll bars and spin buttons: the <controls> list with its properties parts, else
+    // the VML shapes.
+    let read_controls = if controls.is_some() || rels.iter().any(|r| r.kind == "vmlDrawing") {
+        crate::controls::read(cx, controls, &rels, &mut sheet)
+    } else {
+        HashSet::new()
+    };
     // Comments are related to the sheet without an element in it.
     for rel in rels.iter().filter(|r| r.kind == "comments") {
         if let Some(x) = cx.optional_xml(&rel.target)? {
@@ -217,7 +232,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             }
         }
     }
-    Ok(sheet)
+    Ok((sheet, read_controls))
 }
 
 /// A protection password hash: the iterated attributes (`algorithmName`, `hashValue`,

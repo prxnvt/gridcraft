@@ -973,7 +973,12 @@ fn objects(b: &Sheet, a: &Sheet) -> (usize, usize, usize) {
         let changed = b.iter().filter(|x| a.iter().any(|y| id(y) == id(x) && y != *x)).count();
         (added, changed, removed)
     }
-    let parts = [count(&b.charts, &a.charts, |o| o.id), count(&b.images, &a.images, |o| o.id), count(&b.shapes, &a.shapes, |o| o.id)];
+    let parts = [
+        count(&b.charts, &a.charts, |o| o.id),
+        count(&b.images, &a.images, |o| o.id),
+        count(&b.shapes, &a.shapes, |o| o.id),
+        count(&b.controls, &a.controls, |o| o.id),
+    ];
     parts.iter().fold((0, 0, 0), |t, p| (t.0 + p.0, t.1 + p.1, t.2 + p.2))
 }
 
@@ -1041,6 +1046,11 @@ pub fn begin(s: &mut Session, name: &str, p: &Json) -> Result<Begun> {
         .ok_or_else(|| EngineError::Other(format!("There is no macro called '{name}'.")))?;
     let asks = gate(&m, trust)?;
     approve(s, &m, doc, &asks, p.get("approve").and_then(Json::as_bool).unwrap_or(false))?;
+    // A button can send the output to another cell than the macro's own anchor.
+    let mut m = m;
+    if let Some(o) = p.get("output").and_then(Json::as_str).map(str::trim).filter(|o| !o.is_empty()) {
+        m.output.anchor = Some(o.to_string());
+    }
     let prepared = prepare(s, &m, p.get("inputs"))?;
     let rule = conflict_rule(p, &m)?;
     let time_limit_ms = p.get("timeLimit").and_then(Json::as_f64).map(|t| (t * 1000.0).clamp(1.0, 600_000.0)).unwrap_or(DEFAULT_TIME_LIMIT_MS);

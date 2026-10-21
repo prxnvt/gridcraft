@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-10-11 · **Change:** major (created: the macro engine and its commands)
+> **Last updated:** 2026-10-12 · **Change:** minor (form buttons run macros; `macro.run` takes `output`)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -68,10 +68,12 @@ inserted rows.
 
 ## Running
 
-`macro.run {name, inputs?, onConflict?, overwrite?, approve?, timeLimit?}`:
+`macro.run {name, inputs?, output?, onConflict?, overwrite?, approve?, timeLimit?}` (`output`
+replaces the macro's output anchor for this run, as a form button that sends the output elsewhere
+does):
 
-1. **Policy.** File, app, window, automate and macro commands, and Undo and Redo, never run in a
-   macro. Reading or writing a file (`data.getData`, `data.fromTextCsv`, `insert.picture` or
+1. **Policy.** File, app, window, automate and macro commands, Undo and Redo, and pressing a form
+   control (`control.press`) never run in a macro. Reading or writing a file (`data.getData`, `data.fromTextCsv`, `insert.picture` or
    `pageLayout.background` with a `path`, or an export or print with a `path`) needs the command
    in the macro's `permissions`. A macro that touches files, or that came with a workbook opened
    from a file, runs once the person approves it: the call fails with `approve: …` and runs with
@@ -112,7 +114,18 @@ inputs, and an Automate script run by the script's steps.
 ## Other commands and storage
 
 `macro.list`, `macro.get`, `macro.save {macro, replace?}`, `macro.delete` and `macro.rename
-{name, to}`. Saving, renaming and deleting are undoable.
+{name, to}`. Saving, renaming and deleting are undoable. Renaming a macro also renames it in the
+form buttons that run it.
+
+## Form buttons
+
+A form button (Insert › Controls › Button, `insert.button`) runs a macro or one command when it is
+pressed (`control.press {id, approve?, onConflict?}`). `control.assign {id, macro, input?,
+output?}` makes it run a macro, on the selection when it is pressed (`input: "selection"`, the
+default) or always on one range (`input: "B2:D9"`), with an optional output cell; `control.assign
+{id, command, params}` makes it run a command with fixed parameters. A macro runs through
+`macro.run` with its checks; a command goes through the same policy as a macro step, so a button
+in a workbook opened from a file asks before it runs anything.
 
 Macros are saved in the workbook: as a field in GridCraft's JSON format, and in xlsx as hidden
 defined names (`_gc_macro_<n>_<k>`, the macro's JSON split into string literals within Excel's

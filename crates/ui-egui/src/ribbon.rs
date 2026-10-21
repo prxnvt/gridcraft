@@ -8,7 +8,7 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_toggle_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -1602,6 +1602,27 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
         for (label, kind) in [("Line", "line"), ("Column", "column"), ("Win/Loss", "winLoss")] {
             if ui.button(label).clicked() {
                 app.open_dialog("sparkline", json!({"type": kind}));
+            }
+        }
+    });
+    sep(ui);
+    // Form controls: draw a button, slider or spin button on the sheet (a click places it at its
+    // default size). Their key tips run the command at the active cell.
+    use gridcraft_engine::model::ControlKind;
+    let placing = app.grid.placing;
+    ui.vertical(|ui| {
+        for (icon, kind, label, tip, id) in [
+            (Icon::Button, ControlKind::Button, "Button", "Draw a button that runs a macro or a command", "insert.button"),
+            (Icon::Slider, ControlKind::Slider, "Slider", "Draw a slider that sets a whole number in a linked cell", "insert.slider"),
+            (Icon::Spin, ControlKind::Spin, "Spin Button", "Draw a spin button that steps a whole number in a linked cell", "insert.spinButton"),
+        ] {
+            let on = placing == Some(kind);
+            let r = small_toggle_button(ui, icon, label, tip, on);
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label));
+            control_keytip(app, ui, &r, id);
+            if r.clicked() {
+                app.grid.placing = if placing == Some(kind) { None } else { Some(kind) };
+                app.selected_object = None;
             }
         }
     });

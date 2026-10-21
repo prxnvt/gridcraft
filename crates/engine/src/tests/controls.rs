@@ -1,0 +1,377 @@
+//! Form controls: buttons, sliders and spin buttons (insert, format, assign, setValue, press).
+
+use gridcraft_core::Value;
+use gridcraft_model::{ControlAction, ControlKind, FormControl, MacroInput};
+use serde_json::{Value as Json, json};
+
+use super::{s, v};
+use crate::{EngineError, Session, Trust};
+
+fn id(r: &Json) -> u64 {
+    r["control"].as_u64().unwrap()
+}
+
+fn control(s: &Session, id: u64) -> FormControl {
+    s.doc().unwrap().wb.active().unwrap().controls.iter().find(|c| c.id as u64 == id).cloned().unwrap()
+}
+
+fn undo_len(s: &Session) -> usize {
+    s.doc().unwrap().undo.len()
+}
+
+fn err(r: crate::Result<Json>) -> String {
+    r.unwrap_err().to_string()
+}
+
+#[test]
+fn numbers_are_whole_and_each_rule_has_its_own_error() {
+    let mut s = s();
+    let ok = s.execute("insert.slider", json!({"at": "D2", "min": 10, "max": 50, "step": 5, "page": 10})).unwrap();
+    let c = control(&s, id(&ok));
+    assert_eq!((c.kind, c.min, c.max, c.step, c.page, c.value), (ControlKind::Slider, 10, 50, 5, 10, 10));
+    for (p, needle) in [
+        (json!({"min": 2.5}), "`min` must be a whole number from 0 to 30000"),
+        (json!({"min": -1}), "`min` must be a whole number"),
+        (json!({"max": 30001}), "`max` must be a whole number from 0 to 30000"),
+        (json!({"step": "two"}), "`step` must be a whole number"),
+        (json!({"max": 1e300}), "`max` must be a whole number"),
+        (json!({"min": 50, "max": 50}), "Maximum value (50) must be greater than Minimum value (50)"),
+        (json!({"min": 60, "max": 50}), "must be greater than Minimum"),
+        (json!({"step": 0}), "Incremental change must be at least 1"),
+        (json!({"min": 0, "max": 10, "step": 11}), "Incremental change (11) can be at most Maximum minus Minimum (10)"),
+        (json!({"step": 5, "page": 2}), "Page change (2) must be at least the incremental change (5)"),
+        (json!({"link": "not a cell"}), "isn't a cell of this workbook"),
+        (json!({"link": "Nowhere!A1"}), "isn't a cell of this workbook"),
+        (json!({"link": "A1:B2"}), "isn't a cell"),
+    ] {
+        let e = err(s.execute("insert.slider", p.clone()));
+        assert!(e.contains(needle), "{p}: {e}");
+    }
+    // A spin button has no page change, so a page below the step is fine.
+    s.execute("insert.spinButton", json!({"step": 5, "page": 2})).unwrap();
+    // Numbers in text are numbers.
+    let n = id(&s.execute("insert.spinButton", json!({"min": "3", "max": "9"})).unwrap());
+    let c = control(&s, n);
+    assert_eq!((c.min, c.max, c.value), (3, 9, 3));
+    // A larger step pulls a slider's default page up with it.
+    let n = id(&s.execute("insert.slider", json!({"max": 1000, "step": 50})).unwrap());
+    let c = control(&s, n);
+    assert_eq!(c.page, 50);
+    // The model checks the same rules.
+    let bad = FormControl { kind: ControlKind::Spin, min: 0, max: 30_001, ..Default::default() };
+    assert!(bad.check_numbers().is_err());
+    assert!(FormControl { kind: ControlKind::Button, max: 0, ..Default::default() }.check_numbers().is_ok());
+}
+
+#[test]
+fn set_value_clamps_snaps_and_writes_the_link_as_one_undo_step() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=B1*2"})).unwrap();
+    let c = id(&s.execute("insert.slider", json!({"link": "B1", "min": 10, "max": 100, "step": 5})).unwrap());
+    assert_eq!(control(&s, c).link.as_deref(), Some("$B$1"));
+    let before = undo_len(&s);
+    for (given, want) in [(37.0, 35.0), (38.0, 40.0), (-5.0, 10.0), (1e9, 100.0), (99.0, 100.0), (12.4, 10.0)] {
+        let r = s.execute("control.setValue", json!({"id": c, "value": given})).unwrap();
+        assert_eq!(r["value"], json!(want as u32), "{given}");
+        assert_eq!(v(&s, "B1"), Value::Number(want), "{given}");
+        assert_eq!(v(&s, "C1"), Value::Number(want * 2.0), "dependents recalculate");
+        assert_eq!(control(&s, c).value, want as u32);
+    }
+    assert_eq!(undo_len(&s), before + 5, "one undo step per change (99 snaps to the 100 it holds)");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(100.0));
+    assert_eq!(control(&s, c).value, 100);
+    // Setting the value it already has adds no step.
+    let n = undo_len(&s);
+    s.execute("control.setValue", json!({"id": c, "value": 100})).unwrap();
+    assert_eq!(undo_len(&s), n);
+    for p in [json!({"id": c}), json!({"id": c, "value": "x"}), json!({"id": 999, "value": 1}), json!({"value": 1})] {
+        assert!(s.execute("control.setValue", p).is_err());
+    }
+    // A button has no value.
+    let b = id(&s.execute("insert.button", json!({})).unwrap());
+    assert!(err(s.execute("control.setValue", json!({"id": b, "value": 1}))).contains("control.press"));
+}
+
+#[test]
+fn editing_the_linked_cell_moves_the_control() {
+    let mut s = s();
+    let c = id(&s.execute("insert.spinButton", json!({"link": "$B$2", "max": 20, "step": 2})).unwrap());
+    s.execute("cell.set", json!({"cell": "B2", "input": "7"})).unwrap();
+    assert_eq!(control(&s, c).value, 8, "snapped to the step");
+    s.execute("cell.set", json!({"cell": "B2", "input": "500"})).unwrap();
+    assert_eq!(control(&s, c).value, 20, "clamped");
+    s.execute("cell.set", json!({"cell": "B2", "input": "text"})).unwrap();
+    assert_eq!(control(&s, c).value, 20, "text leaves it where it was");
+    // A new control starts at what its cell holds.
+    s.execute("cell.set", json!({"cell": "D4", "input": "12"})).unwrap();
+    let d = id(&s.execute("insert.slider", json!({"link": "D4", "max": 20})).unwrap());
+    assert_eq!(control(&s, d).value, 12);
+    // A linked cell on another sheet.
+    s.execute("home.insertSheet", json!({"name": "Data Sheet"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let e = id(&s.execute("insert.slider", json!({"link": "'Data Sheet'!a1", "value": 30})).unwrap());
+    assert_eq!(control(&s, e).link.as_deref(), Some("'Data Sheet'!$A$1"));
+    let wb = &s.doc().unwrap().wb;
+    let other = wb.sheet(wb.sheet_index("Data Sheet").unwrap()).unwrap();
+    assert_eq!(other.cell(gridcraft_core::CellRef::new(0, 0)).unwrap().value, Value::Number(30.0));
+}
+
+#[test]
+fn links_follow_inserted_rows() {
+    let mut s = s();
+    let c = id(&s.execute("insert.slider", json!({"at": "E2", "link": "B3", "value": 40})).unwrap());
+    s.execute("selection.set", json!({"range": "1:1"})).unwrap();
+    s.execute("home.insertRows", json!({})).unwrap();
+    let ctl = control(&s, c);
+    assert_eq!(ctl.link.as_deref(), Some("$B$4"));
+    assert_eq!(ctl.anchor.cell.a1(), "E3");
+    assert_eq!(v(&s, "B4"), Value::Number(40.0));
+    s.execute("control.setValue", json!({"id": c, "value": 41})).unwrap();
+    assert_eq!(v(&s, "B4"), Value::Number(41.0));
+}
+
+#[test]
+fn format_and_assign() {
+    let mut s = s();
+    let c = id(&s.execute("insert.slider", json!({"link": "B1", "max": 100, "value": 80})).unwrap());
+    let r = s.execute("control.format", json!({"id": c, "max": 50, "name": "Rate", "horizontal": false})).unwrap();
+    assert_eq!(
+        (r["max"].clone(), r["value"].clone(), r["name"].clone(), r["horizontal"].clone()),
+        (json!(50), json!(50), json!("Rate"), json!(false))
+    );
+    assert_eq!(v(&s, "B1"), Value::Number(50.0), "the new maximum pulls the linked value in");
+    assert!(err(s.execute("control.format", json!({"id": c, "min": 50}))).contains("greater than Minimum"));
+    assert_eq!(control(&s, c).min, 0, "a refused change leaves the control as it was");
+    s.execute("control.format", json!({"id": c, "link": ""})).unwrap();
+    assert_eq!(control(&s, c).link, None);
+    s.execute("control.format", json!({"id": c, "value": 25})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(50.0), "without a link nothing is written");
+    // Buttons: text and action.
+    s.execute("macro.save", json!({"name": "Fill", "steps": [{"command": "cell.set", "params": {"cell": "A1", "input": "x"}}]})).unwrap();
+    let b = id(&s.execute("insert.button", json!({"text": "Go", "macro": "Fill", "input": "C2:D4", "output": "F2"})).unwrap());
+    let action = control(&s, b).action;
+    assert_eq!(action, Some(ControlAction::Macro { name: "Fill".into(), input: MacroInput::Fixed("C2:D4".into()), output: Some("F2".into()) }));
+    s.execute("control.assign", json!({"id": b, "command": "home.bold", "params": {"range": "A1"}})).unwrap();
+    assert!(matches!(control(&s, b).action, Some(ControlAction::Command { ref id, .. }) if id == "home.bold"));
+    assert!(err(s.execute("control.assign", json!({"id": b, "command": "file.saveAs"}))).contains("can't run file.saveAs"));
+    assert!(err(s.execute("control.assign", json!({"id": b, "command": "control.press", "params": {"id": b}}))).contains("can't run control.press"));
+    assert!(err(s.execute("control.assign", json!({"id": b, "command": "no.such"}))).contains("no command"));
+    assert!(err(s.execute("control.assign", json!({"id": b, "macro": "Fill", "input": "nonsense!!"}))).contains("`input`"));
+    assert!(err(s.execute("control.assign", json!({"id": b}))).contains("clear"));
+    assert!(err(s.execute("control.assign", json!({"id": c, "macro": "Fill"}))).contains("only buttons"));
+    s.execute("control.assign", json!({"id": b, "clear": true})).unwrap();
+    assert_eq!(control(&s, b).action, None);
+    // Renaming the macro keeps the button pointing at it.
+    s.execute("control.assign", json!({"id": b, "macro": "fill"})).unwrap();
+    s.execute("macro.rename", json!({"name": "Fill", "to": "Fill Block"})).unwrap();
+    assert!(matches!(control(&s, b).action, Some(ControlAction::Macro { ref name, .. }) if name == "Fill Block"));
+    let list = s.execute("control.list", json!({})).unwrap();
+    assert_eq!(list.as_array().map(Vec::len), Some(2));
+    assert_eq!(list[1]["text"], json!("Go"));
+}
+
+#[test]
+fn pressing_a_button_runs_its_macro_as_one_undo_step() {
+    let mut s = s();
+    s.execute(
+        "macro.save",
+        json!({"name": "Mark", "inputs": [{"name": "Input", "kind": "range"}], "steps": [{"command": "cell.set", "params": {"cell": "Input.cell(1,1)", "input": "done"}}], "output": {"onConflict": "overwrite"}}),
+    )
+    .unwrap();
+    let b = id(&s.execute("insert.button", json!({"macro": "Mark"})).unwrap());
+    s.execute("selection.set", json!({"range": "C3:D4"})).unwrap();
+    let before = undo_len(&s);
+    let r = s.execute("control.press", json!({"id": b})).unwrap();
+    assert_eq!(r["macro"], json!("Mark"));
+    assert_eq!(v(&s, "C3"), Value::text("done"));
+    assert_eq!(undo_len(&s), before + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "C3"), Value::Empty);
+    // A fixed input ignores the selection.
+    s.execute("control.assign", json!({"id": b, "macro": "Mark", "input": "F6:G7"})).unwrap();
+    s.execute("control.press", json!({"id": b})).unwrap();
+    assert_eq!((v(&s, "F6"), v(&s, "C3")), (Value::text("done"), Value::Empty));
+    // No action, a missing macro, not a button.
+    let empty = id(&s.execute("insert.button", json!({"text": "Nothing"})).unwrap());
+    assert!(err(s.execute("control.press", json!({"id": empty}))).contains("has no action"));
+    s.execute("control.assign", json!({"id": empty, "macro": "Gone"})).unwrap();
+    assert!(err(s.execute("control.press", json!({"id": empty}))).contains("no macro called"));
+    let spin = id(&s.execute("insert.spinButton", json!({})).unwrap());
+    assert!(err(s.execute("control.press", json!({"id": spin}))).contains("only buttons"));
+}
+
+#[test]
+fn a_command_button_goes_through_the_policy_with_the_documents_trust() {
+    let mut s = s();
+    let b = id(&s.execute("insert.button", json!({"command": "cell.set", "params": {"cell": "A1", "input": "7"}})).unwrap());
+    // A workbook made here runs it straight away, as one undo step.
+    let before = undo_len(&s);
+    s.execute("control.press", json!({"id": b})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(7.0));
+    assert_eq!(undo_len(&s), before + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    // From a file: it asks first, once.
+    s.doc_mut().unwrap().trust = Trust::FromFile;
+    match s.execute("control.press", json!({"id": b})) {
+        Err(EngineError::Approve(q)) => assert!(q.contains("came with a workbook you opened"), "{q}"),
+        other => panic!("expected a question, got {other:?}"),
+    }
+    assert_eq!(v(&s, "A1"), Value::Empty, "nothing ran");
+    s.execute("control.press", json!({"id": b, "approve": true})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(7.0));
+    s.execute("cell.set", json!({"cell": "A1", "input": ""})).unwrap();
+    s.execute("control.press", json!({"id": b})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(7.0), "approved for the session");
+    // A command that reads a file always asks.
+    s.doc_mut().unwrap().trust = Trust::Local;
+    let f = id(&s.execute("insert.button", json!({"command": "data.fromTextCsv", "params": {"path": "/nonexistent/x.csv"}})).unwrap());
+    assert!(matches!(s.execute("control.press", json!({"id": f})), Err(EngineError::Approve(q)) if q.contains("reads a file")));
+    // A denied command that a file brought in never runs.
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    if let Some(c) = sh.controls.iter_mut().find(|c| c.id as u64 == f) {
+        c.action = Some(ControlAction::Command { id: "file.saveAs".into(), params: json!({"path": "/tmp/x.xlsx"}) });
+    }
+    assert!(err(s.execute("control.press", json!({"id": f, "approve": true}))).contains("can't run file.saveAs"));
+    // A macro button in a file's workbook asks too (the runner's gate).
+    s.execute(
+        "macro.save",
+        json!({"name": "M", "steps": [{"command": "cell.set", "params": {"cell": "B1", "input": "1"}}], "output": {"onConflict": "overwrite"}}),
+    )
+    .unwrap();
+    let m = id(&s.execute("insert.button", json!({"macro": "M"})).unwrap());
+    s.doc_mut().unwrap().trust = Trust::FromFile;
+    assert!(matches!(s.execute("control.press", json!({"id": m})), Err(EngineError::Approve(_))));
+    s.execute("control.press", json!({"id": m, "approve": true})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(1.0));
+}
+
+#[test]
+fn hostile_params_are_refused() {
+    let mut s = s();
+    let c = id(&s.execute("insert.slider", json!({"width": 1e30, "height": -5, "at": "XFD1048576"})).unwrap());
+    let a = control(&s, c).anchor;
+    assert_eq!((a.width, a.height), (10_000.0, 4.0));
+    let long = "x".repeat(2_000);
+    assert!(s.execute("insert.button", json!({"text": long})).is_err());
+    assert!(s.execute("insert.button", json!({"text": 5})).is_err());
+    assert!(s.execute("insert.button", json!({"command": "cell.set", "params": [1]})).is_err());
+    assert!(s.execute("control.format", json!({"id": c, "link": 5})).is_err());
+    assert!(s.execute("control.format", json!({"id": c, "value": f64::MAX})).is_err());
+    assert!(s.execute("control.setValue", json!({"id": c, "value": f64::MIN})).is_ok());
+    assert_eq!(control(&s, c).value, 0);
+    // Snapping keeps the maximum reachable when the step doesn't divide the range.
+    let odd = FormControl { kind: ControlKind::Spin, min: 0, max: 10, step: 3, ..Default::default() };
+    assert_eq!((odd.snap(9.4), odd.snap(9.6), odd.snap(f64::NAN)), (9, 10, 0));
+}
+
+fn link(s: &Session, sheet_i: usize, id: u64) -> String {
+    let sh = s.doc().unwrap().wb.sheet(sheet_i).unwrap();
+    sh.controls.iter().find(|c| c.id as u64 == id).and_then(|c| c.link.clone()).unwrap_or_default()
+}
+
+#[test]
+fn links_follow_inserts_deletes_renames_and_cut_moves() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+    // A control on Data pointing back at Sheet1.
+    let back = id(&s.execute("insert.spinButton", json!({"at": "C3", "link": "Sheet1!$B$2"})).unwrap());
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let local = id(&s.execute("insert.slider", json!({"at": "E2", "link": "$B$2"})).unwrap());
+    let remote = id(&s.execute("insert.spinButton", json!({"at": "E6", "link": "Data!$A$1"})).unwrap());
+
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
+    assert_eq!(link(&s, 0, local), "$C$3");
+    assert_eq!(link(&s, 1, back), "Sheet1!$C$3");
+    assert_eq!(link(&s, 0, remote), "Data!$A$1", "edits on Sheet1 leave links into Data alone");
+
+    s.execute("cell.set", json!({"cell": "C3", "input": "7"})).unwrap();
+    s.execute("edit.cut", json!({"range": "C3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "G9"})).unwrap();
+    assert_eq!(link(&s, 0, local), "$G$9", "a cut-move takes the link with the cell");
+    assert_eq!(link(&s, 1, back), "Sheet1!$G$9");
+
+    s.execute("sheet.rename", json!({"sheet": 1, "name": "Inputs"})).unwrap();
+    assert_eq!(link(&s, 0, remote), "Inputs!$A$1");
+    s.execute("home.deleteRows", json!({"rows": "9:9"})).unwrap();
+    assert!(link(&s, 0, local).contains("#REF!"), "{}", link(&s, 0, local));
+    s.execute("home.deleteSheet", json!({"sheet": 1})).unwrap();
+    assert!(link(&s, 0, remote).contains("#REF!"), "{}", link(&s, 0, remote));
+    // A link to a deleted cell writes nothing.
+    s.execute("control.setValue", json!({"id": local, "value": 5})).unwrap();
+    for _ in 0..3 {
+        s.execute("edit.undo", json!({})).unwrap();
+    }
+    assert_eq!((link(&s, 0, local), link(&s, 0, remote)), ("$G$9".to_string(), "Inputs!$A$1".to_string()));
+}
+
+#[test]
+fn a_locked_control_on_a_protected_sheet_cannot_be_changed() {
+    let mut s = s();
+    let c = id(&s.execute("insert.slider", json!({"link": "B1"})).unwrap());
+    let b = id(&s.execute("insert.button", json!({})).unwrap());
+    s.execute("review.protectSheet", json!({})).unwrap();
+    assert!(err(s.execute("control.format", json!({"id": c, "max": 50}))).contains("protected"));
+    assert!(err(s.execute("control.assign", json!({"id": b, "command": "home.bold"}))).contains("protected"));
+}
+
+fn reopen(s: &mut Session) {
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let b64 = r["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+}
+
+#[test]
+fn every_kind_and_action_survives_xlsx() {
+    let mut s = s();
+    s.execute("macro.save", json!({"name": "Mark", "steps": [{"command": "cell.set", "params": {"cell": "Input.cell(1,1)", "input": "m"}}], "inputs": [{"name": "Input", "kind": "range"}], "output": {"onConflict": "overwrite"}})).unwrap();
+    s.execute("insert.slider", json!({"at": "D2", "link": "B1", "min": 10, "max": 200, "step": 10, "page": 50, "value": 70})).unwrap();
+    s.execute("insert.spinButton", json!({"at": "D6", "link": "B2", "max": 9, "value": 4})).unwrap();
+    s.execute("insert.button", json!({"at": "D9", "text": "Plain", "macro": "Mark"})).unwrap();
+    s.execute("insert.button", json!({"at": "D11", "text": "Fixed", "macro": "Mark", "input": "F1:G2", "output": "H1"})).unwrap();
+    s.execute("insert.button", json!({"at": "D13", "text": "Command", "command": "cell.set", "params": {"cell": "A9", "input": "cmd"}})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "a note"})).unwrap();
+    let before: Vec<Json> = s
+        .execute("control.list", json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            c.as_object_mut().unwrap().remove("id");
+            c
+        })
+        .collect();
+    reopen(&mut s);
+    let after: Vec<Json> = s
+        .execute("control.list", json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            c.as_object_mut().unwrap().remove("id");
+            c
+        })
+        .collect();
+    assert_eq!(before.len(), after.len());
+    for (b, a) in before.iter().zip(&after) {
+        for key in ["kind", "name", "at", "text", "link", "value", "min", "max", "step", "page", "horizontal", "action", "print", "locked"] {
+            assert_eq!(b.get(key), a.get(key), "{key}: {b} vs {a}");
+        }
+    }
+    assert!(s.doc().unwrap().wb.names.iter().all(|n| !n.name.contains("control_actions")), "the hidden name is taken back out");
+    assert_eq!(s.doc().unwrap().trust, Trust::FromFile);
+    // A workbook from a file: its command button asks before it runs.
+    let cmd = after.iter().position(|c| c["text"] == json!("Command")).unwrap();
+    let id = s.execute("control.list", json!({})).unwrap()[cmd]["id"].as_u64().unwrap();
+    assert!(matches!(s.execute("control.press", json!({"id": id})), Err(EngineError::Approve(_))));
+    s.execute("control.press", json!({"id": id, "approve": true})).unwrap();
+    assert_eq!(v(&s, "A9"), Value::text("cmd"));
+    // The linked cells still move the controls.
+    s.execute("cell.set", json!({"cell": "B1", "input": "120"})).unwrap();
+    assert_eq!(s.execute("control.list", json!({})).unwrap()[0]["value"], json!(120));
+}

@@ -93,6 +93,10 @@ pub struct Sheet {
     /// On-sheet slicer widgets (filter a table column by clicking value tiles).
     #[serde(default)]
     pub slicers: Vec<Slicer>,
+    /// Form controls (buttons, sliders, spin buttons). They paint above every other object and
+    /// take clicks first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<FormControl>,
     /// PivotTables whose output lives on this sheet.
     #[serde(default)]
     pub pivots: Vec<PivotTable>,
@@ -150,6 +154,7 @@ impl Sheet {
             shapes: vec![],
             sparklines: vec![],
             slicers: vec![],
+            controls: vec![],
             pivots: vec![],
             protection: None,
             edit_ranges: vec![],
@@ -175,6 +180,8 @@ impl Sheet {
             ObjKind::Shape
         } else if self.slicers.iter().any(|o| o.id == id) {
             ObjKind::Slicer
+        } else if self.controls.iter().any(|o| o.id == id) {
+            ObjKind::Control
         } else {
             return None;
         };
@@ -193,6 +200,7 @@ impl Sheet {
             ObjKind::Image => self.images.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
+            ObjKind::Control => self.controls.iter().find(|c| c.id == o.id).map(|c| c.anchor),
         }
     }
 
@@ -202,6 +210,7 @@ impl Sheet {
             ObjKind::Image => self.images.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
+            ObjKind::Control => self.controls.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
         }
     }
 
@@ -217,12 +226,13 @@ impl Sheet {
             ObjKind::Image => take(&mut self.images, |c| c.id == o.id),
             ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
             ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
+            ObjKind::Control => take(&mut self.controls, |c| c.id == o.id),
         }
     }
 
-    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers) that
-    /// [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old ones
-    /// and write them back in step.
+    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers, controls)
+    /// that [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old
+    /// ones and write them back in step.
     pub fn object_anchors(&self) -> impl Iterator<Item = &Anchor> {
         self.charts
             .iter()
@@ -230,6 +240,7 @@ impl Sheet {
             .chain(self.images.iter().map(|o| &o.anchor))
             .chain(self.shapes.iter().map(|o| &o.anchor))
             .chain(self.slicers.iter().map(|o| &o.anchor))
+            .chain(self.controls.iter().map(|o| &o.anchor))
     }
 
     pub fn object_anchors_mut(&mut self) -> impl Iterator<Item = &mut Anchor> {
@@ -239,6 +250,7 @@ impl Sheet {
             .chain(self.images.iter_mut().map(|o| &mut o.anchor))
             .chain(self.shapes.iter_mut().map(|o| &mut o.anchor))
             .chain(self.slicers.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.controls.iter_mut().map(|o| &mut o.anchor))
     }
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {

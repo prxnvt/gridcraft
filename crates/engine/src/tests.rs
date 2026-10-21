@@ -2796,6 +2796,7 @@ fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+mod controls;
 mod objects;
 
 #[test]
