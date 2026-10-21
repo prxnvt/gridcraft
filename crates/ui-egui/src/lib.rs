@@ -349,7 +349,22 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
+        // The macro editor's unsaved draft is part of the workbook: closing asks about it as it
+        // does about unsaved changes, and a workbook that closes takes the editor with it.
+        let closing = id == "file.close";
+        if closing
+            && params.get("force").and_then(Json::as_bool) != Some(true)
+            && macro_editor::has_unsaved_draft(self)
+            && let Some(d) = self.session.active()
+        {
+            let title = d.display_title();
+            self.open_dialog("saveChanges", json!({"title": title}));
+            return Ok(json!({"closed": false, "dirty": true}));
+        }
         let r = self.session.run(id, params);
+        if closing && r.as_ref().is_ok_and(|v| v.get("closed").and_then(Json::as_bool) == Some(true)) {
+            macro_editor::discard(self);
+        }
         self.after_engine();
         if id == "file.exportPdf"
             && let Ok(r) = &r

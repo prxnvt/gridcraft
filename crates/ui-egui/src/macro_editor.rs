@@ -539,6 +539,47 @@ fn ensure_saved(app: &mut SheetApp, ed: &mut Editor) -> bool {
     if ed.dirty || ed.saved_as.is_none() { save(app, ed) } else { true }
 }
 
+impl Editor {
+    /// The draft holds changes not yet saved into the workbook. A new macro counts once it
+    /// differs from the empty one the editor started with, whatever its name.
+    pub fn has_unsaved_changes(&self) -> bool {
+        let untouched = Macro { name: self.draft.name.clone(), inputs: vec![NamedInput::default()], ..Default::default() };
+        self.dirty && (self.saved_as.is_some() || self.draft != untouched)
+    }
+}
+
+/// The open editor holds changes not yet saved into the workbook (closing the workbook asks).
+pub fn has_unsaved_draft(app: &SheetApp) -> bool {
+    app.macros.editor.as_ref().is_some_and(Editor::has_unsaved_changes)
+}
+
+/// Saves the open editor's unsaved draft into the workbook. True when there is none or it was
+/// saved; false (with a message) when it could not be.
+pub fn save_draft(app: &mut SheetApp) -> bool {
+    if !has_unsaved_draft(app) {
+        return true;
+    }
+    let Some(mut ed) = app.macros.editor.take() else { return true };
+    let saved = save(app, &mut ed);
+    app.macros.editor = Some(ed);
+    saved
+}
+
+/// Shows the editor again with its draft, after a prompt took its place.
+pub fn reopen(app: &mut SheetApp) {
+    if let Some(ed) = app.macros.editor.as_ref() {
+        app.dialog = Some(Dialog::custom("macroEditor", &format!("Macro: {}", ed.draft.name), json!({})));
+    }
+}
+
+/// Closes the editor without saving, as when its workbook closes.
+pub fn discard(app: &mut SheetApp) {
+    if app.macros.editor.take().is_some() && app.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") {
+        app.dialog = None;
+    }
+    app.grid.macro_overlay = None;
+}
+
 /// The inputs a run from the editor uses: the first input's example.
 fn run_inputs(ed: &Editor) -> Json {
     match ed.draft.inputs.first() {

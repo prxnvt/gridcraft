@@ -148,7 +148,11 @@ limits), which other spreadsheet applications keep but do not run.
   reference boxes that take a typed reference or a selection on the grid and switch between a
   token relative to the example input (Rel) and an absolute reference (Abs); the Inputs tab sets
   each input's shape, header and column types, and Use current selection as example infers them;
-  the Output tab sets the anchor and what to do when results would land on data.
+  the Output tab sets the anchor and what to do when results would land on data. A draft with
+  unsaved changes counts as unsaved work when its workbook closes: the Save Changes? prompt asks
+  even if the workbook itself is saved, Save saves the macro into the workbook before saving the
+  file, Don't Save discards the draft, and Cancel brings the editor back with it. A new macro that
+  has not been edited does not ask.
 - **Debug bar.** Check dry-runs the macro and colours the grid: inputs blue, the cells it writes
   green, the cells among them that hold data red. Run runs it as one undo step. Step, Continue and
   Run to Here start the debugger when needed (`macro.debug` with the editor's breakpoints and

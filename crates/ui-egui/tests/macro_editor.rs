@@ -5,16 +5,20 @@ use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_engine::model::StepKind;
-use gridcraft_ui_egui::SheetApp;
+use gridcraft_engine::model::{Step, StepKind};
+use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness() -> Harness {
+    harness_with(Default::default())
+}
+
+fn harness_with(services: Services) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = SheetApp::new(session, services);
     app.ui.ribbon_tab = "Automate".into();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
@@ -212,4 +216,82 @@ fn run_from_the_editor_asks_before_writing_over_data() {
     assert!(h.state().macros.question.as_ref().is_some_and(|q| q.choices.len() == 3));
     click(&mut h, "Overwrite");
     assert_eq!(value(&h, "A2"), Value::Text("new".into()));
+}
+
+/// Gives the open editor's draft a step, as editing it does.
+fn edit_draft(h: &mut Harness) {
+    let ed = h.state_mut().macros.editor.as_mut().unwrap();
+    ed.draft.steps.push(Step::command("cell.set", json!({"cell": "A1", "input": "7"})));
+    ed.dirty = true;
+    h.run_steps(2);
+}
+
+fn dialog(h: &Harness) -> Option<&str> {
+    h.state().dialog.as_ref().map(|d| d.name())
+}
+
+/// Clicks a button of the Save Changes? prompt (the formula bar has a Cancel of its own).
+fn answer(h: &mut Harness, label: &str) {
+    h.query_all_by_label(label).last().unwrap().click();
+    h.run_steps(3);
+}
+
+#[test]
+fn closing_the_workbook_asks_about_an_unsaved_draft_and_cancel_brings_the_editor_back() {
+    let mut h = harness();
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    edit_draft(&mut h);
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert_eq!(dialog(&h), Some("saveChanges"));
+    answer(&mut h, "Cancel");
+    assert_eq!(dialog(&h), Some("macroEditor"));
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    // Don't Save closes the workbook and the editor, discarding the draft.
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert_eq!(dialog(&h), None);
+    assert!(h.state().session.active().unwrap().wb.macros.is_empty());
+}
+
+#[test]
+fn save_in_the_prompt_saves_the_draft_into_the_workbook_file() {
+    let path = std::env::temp_dir().join(format!("gridcraft-macro-draft-{}.xlsx", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let target = path.to_string_lossy().to_string();
+    let mut h = harness_with(Services { pick_save: Some(Box::new(move |_| Some(target.clone()))), ..Default::default() });
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    edit_draft(&mut h);
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(dialog(&h), Some("saveChanges"));
+    answer(&mut h, "Save");
+    // The workbook was saved and closed, and the editor with it.
+    assert!(h.state().macros.editor.is_none());
+    assert!(h.state().session.documents().iter().all(|d| d.path.is_none()));
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path.to_str().unwrap()})).unwrap();
+    let wb = &s.active().unwrap().wb;
+    assert_eq!(wb.macros.len(), 1);
+    assert_eq!(wb.macros[0].steps.len(), 1);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn an_untouched_new_macro_does_not_make_closing_ask() {
+    let mut h = harness();
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    assert!(h.state().macros.editor.as_ref().unwrap().dirty);
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], true);
+    h.run_steps(3);
+    assert_eq!(dialog(&h), None);
+    assert!(h.state().macros.editor.is_none());
 }

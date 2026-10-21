@@ -1058,8 +1058,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         if ui.button("Cancel").clicked() {
                             open = false;
                         }
-                        // File operations must include the cell the user is still editing (as the File > Save menu item already does).
-                        if ui.button("Save").clicked() && app.commit_edit(0, 0, false, false) {
+                        // File operations must include the cell the user is still editing (as the File > Save menu item already does)
+                        // and the macro editor's draft (a refused commit or macro keeps the prompt open with its message).
+                        if ui.button("Save").clicked() && app.commit_edit(0, 0, false, false) && crate::macro_editor::save_draft(app) {
                             app.run_or_alert("file.save", json!({}));
                             if app.session.active().is_some_and(|x| !x.is_dirty()) {
                                 app.run_or_alert("file.close", json!({"force": true}));
@@ -1148,6 +1149,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     } else if confirm {
         open = false;
+    }
+    // The unsaved-changes prompt took the macro editor's place: unless the workbook closed (which
+    // closes the editor too), bring the editor back with its draft.
+    if !open && d.name == "saveChanges" && app.dialog.is_none() {
+        crate::macro_editor::reopen(app);
     }
     if let Some(child) = app.dialog.as_mut() {
         // The body opened another dialog (Name Manager › New…). It takes over; this one waits
