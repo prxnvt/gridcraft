@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-10-21 · **Change:** minor (recording macros and the management commands)
+> **Last updated:** 2026-10-21 · **Change:** minor (the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -9,9 +9,7 @@ error (a file it already wrote stays), checks where its results will land before
 and does not touch files without permission.
 Agents run macros with `macro.run` like any other command.
 
-This page describes the engine and its commands. The macro interface (a Macros list, a recorder
-button and a step editor) is not part of it yet.
-
+This page describes the engine, its commands and the macro interface in the window.
 
 ## A macro
 
@@ -118,9 +116,13 @@ of the step that just ran, and the cells changed so far.
 
 ## Recording
 
-`macro.record` toggles recording (`relative: false` for absolute references; `name` and
-`description` when stopping; a name that another macro has gets a suffix, such as `Tidy (2)`, so
-stopping never replaces a macro). The macro is saved in the workbook where recording started, even if
+`macro.record` toggles recording (`relative: false` for absolute references). When it starts,
+`name`, `shortcut` and `description` give the macro its name, Ctrl+Shift shortcut letter
+(`"Ctrl+Shift+K"` or `"K"`) and description; they are checked at once, so a name that is taken,
+too long or holds line breaks, or a letter that GridCraft or another macro uses, is refused
+before anything is recorded. Without a name the macro is called `Macro1`, `Macro2` and so on. A
+`name` or `description` given when stopping wins over the one given when starting; a name that
+another macro has by then gets a suffix (`Tidy (2)`), so stopping never replaces a macro. The macro is saved in the workbook where recording started, even if
 another one is active; if that workbook was closed, stopping ends the recording without saving it.
 When saving the recording fails (a name the check refuses, a workbook at its macro limit, a
 macro being debugged in that workbook), recording goes on, so stopping again keeps what was
@@ -133,6 +135,10 @@ them back sets them rather than flipping them. Commands a macro may not run are 
 listed in the result, also from the steps of a macro or script run while recording; a macro run
 while recording is replaced by its steps when it has no inputs, no output and only plain commands
 (otherwise it is left out and listed), and an Automate script run by the script's steps.
+
+GridCraft keeps the Ctrl+Shift letters it uses itself on some platform: F, G, H, J, K, L, R, S, T
+and Z (`macros::RESERVED_SHORTCUTS`). A shortcut a file brings with it on one of these letters is
+kept but does not run the macro.
 
 ## Other commands and storage
 
@@ -148,6 +154,46 @@ file is opened, a macro that is damaged, over the limits or in a newer format (a
 left out with one warning, and the rest of the workbook and its other macros open. A newer
 macro is never read in part, so a save can't write it back with its newer fields missing; a
 macro that was left out is not in the saved file.
+
+## In the window
+
+- **Automate › Macros group.** Macros opens the Macros dialog. Record Macro opens the Record
+  Macro dialog (name, Ctrl+Shift shortcut letter, description, Use Relative References); OK
+  starts recording and stays off while the name or the letter cannot be used, with the reason
+  under the fields. While recording, the button reads Stop Recording, the status bar shows a red
+  dot, "Recording · N steps" and Stop, and Use Relative References is locked. Run Macro runs the
+  macro run last (or the only one); its menu lists the recent macros, then every macro. New
+  Macro opens the step editor on a new macro.
+- **Macros dialog** (Automate › Macros, View › Macros, Alt+F8). It lists the workbook's macros
+  (with their shortcuts), then its Automate scripts, and says when the file carries a VBA project.
+  Run runs the selected macro on the selection or the selected script; Step Into, Edit and Create
+  open the step editor; Delete asks first; Options sets a macro's shortcut letter and description. The dialog keeps the result of `view.macros`,
+  as before macros existed.
+- **Step editor.** A resizable window that works on a draft and saves it with `macro.save`. The
+  step list shows each step's number, a breakpoint dot in the gutter (click to set or clear), a
+  category icon, a summary, an error marker and an enabled checkbox; Repeat bodies and If branches
+  are indented under their step, and rows drag to reorder within their list. Add Step opens a
+  command picker (control steps first; commands a macro may never run are left out); Duplicate and
+  Delete act on the selected step. The inspector's Details tab edits the selected step, with
+  reference boxes that take a typed reference or a selection on the grid and switch between a
+  token relative to the example input (Rel) and an absolute reference (Abs); the Inputs tab sets
+  each input's shape, header and column types, and Use current selection as example infers them;
+  the Output tab sets the anchor and what to do when results would land on data.
+- **Debug bar.** Check dry-runs the macro and colours the grid: inputs blue, the cells it writes
+  green, the cells among them that hold data red. Run runs it as one undo step. Step, Continue and
+  Run to Here start the debugger when needed (`macro.debug` with the editor's breakpoints and
+  `breakpointsOnly: true`, so a dot cleared while paused takes effect at once); the current step is
+  selected, its parameters are shown as they will run, and its target is outlined on the grid.
+  Stop asks whether to keep the changes so far or undo them. While a macro is debugged the status
+  bar says "Debugging" with the macro's name, and Show reopens the editor.
+- **Questions.** A macro that needs approval offers Run; a macro whose output would land on data
+  offers Overwrite, Shift Down and Shift Right. Each button runs the command again with
+  `approve: true` or the chosen `onConflict`.
+- **Shortcuts.** Ctrl+Shift+letter (⌘⇧letter on a Mac) on the grid runs the macro with that
+  letter. The letters GridCraft uses itself keep their own meaning.
+
+Commands with empty parameters never open these dialogs: `macro.record {}` starts recording
+under the next free name, and the dialogs are opened only from the ribbon, the menus and keys.
 
 ## Automate scripts and VBA
 
