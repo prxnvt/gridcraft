@@ -30,8 +30,8 @@ pub const MAX_ITEM_CHARS: usize = 4 * 1024 * 1024;
 pub fn get(wb: &Workbook, key: &str) -> Option<String> {
     let mut chunks: BTreeMap<u64, &str> = BTreeMap::new();
     let mut legacy = None;
-    for n in wb.names.iter().filter(|n| n.scope.is_none()) {
-        match parse_name(&n.name) {
+    for n in wb.names.iter() {
+        match item_of(n) {
             Some((k, Some(i))) if k.eq_ignore_ascii_case(key) => {
                 chunks.entry(i).or_insert(&n.formula);
             }
@@ -72,7 +72,7 @@ pub fn set(wb: &mut Workbook, key: &str, text: &str) -> Result<()> {
 
 /// Removes the item stored under `key`.
 pub fn remove(wb: &mut Workbook, key: &str) {
-    wb.names.retain(|n| n.scope.is_some() || !parse_name(&n.name).is_some_and(|(k, _)| k.eq_ignore_ascii_case(key)));
+    wb.names.retain(|n| !item_of(n).is_some_and(|(k, _)| k.eq_ignore_ascii_case(key)));
 }
 
 /// The item under `key` as JSON (`None` when missing or not JSON).
@@ -89,8 +89,7 @@ pub fn keys(wb: &Workbook, prefix: &str) -> Vec<String> {
     let mut keys: Vec<String> = wb
         .names
         .iter()
-        .filter(|n| n.scope.is_none())
-        .filter_map(|n| parse_name(&n.name).map(|(k, _)| k.to_ascii_lowercase()))
+        .filter_map(|n| item_of(n).map(|(k, _)| k.to_ascii_lowercase()))
         .filter(|k| k.starts_with(&prefix.to_ascii_lowercase()))
         .collect();
     keys.sort();
@@ -101,6 +100,16 @@ pub fn keys(wb: &Workbook, prefix: &str) -> Vec<String> {
 /// The item a hidden name belongs to, lower-cased: `_gc_<key>_<k>` and `_sc_<key>` give `<key>`.
 pub fn item_key(name: &str) -> Option<String> {
     parse_name(name).map(|(k, _)| k.to_ascii_lowercase())
+}
+
+/// The item a name holds a part of: a hidden workbook-scope `_gc_<key>_<k>` name, or a legacy
+/// `_sc_<key>` one. A visible name of the `_gc_` shape is someone's own name, not an item: it is
+/// neither read, nor listed, nor removed on write.
+fn item_of(n: &DefinedName) -> Option<(&str, Option<u64>)> {
+    if n.scope.is_some() {
+        return None;
+    }
+    parse_name(&n.name).filter(|(_, chunk)| chunk.is_none() || n.hidden)
 }
 
 /// `_gc_<key>_<k>` → (`key`, `Some(k)`); `_sc_<key>` → (`key`, `None`).
@@ -311,6 +320,22 @@ mod tests {
             wb.names.push(name(&format!("_gc_huge_{i}"), &big));
         }
         assert_eq!(get(&wb, "huge"), None);
+    }
+
+    #[test]
+    fn a_visible_name_of_the_item_shape_is_not_an_item() {
+        // Someone's own visible `_gc_watch_0` is not storage: it is not read or listed, and
+        // writing or removing the item leaves it alone.
+        let mut wb = Workbook::new();
+        let own = DefinedName { hidden: false, ..name("_gc_watch_0", "\"mine\"") };
+        wb.names.push(own.clone());
+        assert_eq!(get(&wb, "watch"), None);
+        assert!(keys(&wb, "").is_empty());
+        set(&mut wb, "watch", "theirs").unwrap();
+        assert_eq!(get(&wb, "watch").as_deref(), Some("theirs"));
+        assert!(wb.names.contains(&own));
+        remove(&mut wb, "watch");
+        assert_eq!(wb.names, vec![own]);
     }
 
     #[test]
