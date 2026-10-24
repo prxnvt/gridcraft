@@ -928,6 +928,194 @@ fn a_failing_step_ends_the_debugged_run_and_rolls_it_back() {
     assert_eq!(debug(&mut s, json!({"name": "Empty"}))["state"], "finished");
 }
 
+// ---------------------------------------------------------------- commands and the recorder
+
+#[test]
+fn macros_are_saved_listed_renamed_and_deleted() {
+    let mut s = s();
+    s.execute("macro.save", json!({"macro": totals()})).unwrap();
+    // The fields can also come at the top level.
+    let r = s
+        .execute("macro.save", json!({"name": "Second", "description": "two", "shortcut": "Ctrl+Shift+Q", "steps": [{"command": "home.bold"}]}))
+        .unwrap();
+    assert_eq!(r, json!({"name": "Second", "steps": 1}));
+    let list = s.execute("macro.list", json!({})).unwrap();
+    assert_eq!(list[0], json!({"name": "Totals", "description": "", "steps": 3, "inputs": ["Input"], "onConflict": "ask", "permissions": []}));
+    assert_eq!(list[1]["shortcut"], "Ctrl+Shift+Q");
+    let got = s.execute("macro.get", json!({"name": "totals"})).unwrap();
+    assert_eq!(crate::macros::parse_macro(&got).unwrap(), crate::macros::parse_macro(&totals()).unwrap());
+    assert!(s.execute("macro.save", json!({"macro": totals(), "replace": false})).unwrap_err().to_string().contains("already exists"));
+    assert!(s.execute("macro.save", json!({"macro": {"name": "Bad", "steps": [{"type": "warp"}]}})).is_err());
+    assert!(s.execute("macro.rename", json!({"name": "Second", "to": "TOTALS"})).unwrap_err().to_string().contains("already exists"));
+    s.execute("macro.rename", json!({"name": "Second", "to": "Third"})).unwrap();
+    s.execute("macro.rename", json!({"name": "third", "to": "THIRD"})).unwrap();
+    s.execute("macro.delete", json!({"name": "Totals"})).unwrap();
+    let names: Vec<String> =
+        s.execute("macro.list", json!({})).unwrap().as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, ["THIRD"]);
+    assert!(s.execute("macro.delete", json!({"name": "Totals"})).unwrap_err().to_string().contains("no macro called"));
+    // Saving, renaming and deleting are undoable.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.execute("macro.list", json!({})).unwrap().as_array().unwrap().len(), 2);
+    // Macros are kept apart from Automate scripts: View › Macros still lists the scripts.
+    assert_eq!(s.execute("view.macros", json!({})).unwrap(), json!([]));
+    assert!(s.execute("macro.rename", json!({"name": "THIRD", "to": "a\nb"})).is_err());
+}
+
+#[test]
+fn macros_and_automate_scripts_live_side_by_side() {
+    let mut s = s();
+    let steps = json!([{"command": "cell.set", "params": {"cell": "B1", "input": "from script"}}]);
+    s.execute("automate.newScript", json!({"name": "Inner", "commands": steps})).unwrap();
+    s.execute("macro.save", json!({"name": "Inner", "steps": [{"command": "cell.set", "params": {"cell": "C1", "input": "from macro"}}], "output": {"onConflict": "overwrite"}})).unwrap();
+    // Recording a script run keeps the script's steps, so the macro stands on its own.
+    s.execute("macro.record", json!({"relative": false})).unwrap();
+    set(&mut s, "A1", "typed");
+    s.execute("automate.runScript", json!({"name": "Inner"})).unwrap();
+    s.execute("automate.recordActions", json!({})).unwrap();
+    s.execute("automate.recordActions", json!({"stop": true, "name": "Empty"})).unwrap();
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Recorded"})).unwrap();
+    assert_eq!(r["skipped"], json!(["automate.recordActions", "automate.recordActions"]));
+    let m = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": "Recorded"})).unwrap()).unwrap();
+    let ids: Vec<String> = crate::macros::command_steps(&m.steps).iter().map(|(_, id, p)| format!("{id} {p}")).collect();
+    assert_eq!(ids, ["cell.set {\"cell\":\"A1\",\"input\":\"typed\"}", "cell.set {\"cell\":\"B1\",\"input\":\"from script\"}"]);
+    // Both lists keep their own entries, under the same name if need be.
+    let scripts = s.execute("automate.allScripts", json!({})).unwrap();
+    assert_eq!(scripts, json!([{"name": "Empty", "steps": 0, "trusted": true}, {"name": "Inner", "steps": 1, "trusted": true}]));
+    let macros: Vec<Json> = s.execute("macro.list", json!({})).unwrap().as_array().unwrap().iter().map(|m| m["name"].clone()).collect();
+    assert_eq!(macros, [json!("Inner"), json!("Recorded")]);
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("automate.runScript", json!({"name": "Inner"})).unwrap();
+    s.execute("macro.run", json!({"name": "Inner"})).unwrap();
+    assert_eq!((v(&s, "B1").display(), v(&s, "C1").display()), ("from script".into(), "from macro".into()));
+    // Both survive an xlsx round trip unchanged.
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "both.xlsx", "base64": b64})).unwrap();
+    // Opened from a file, the scripts are not trusted yet (#2178); their names and steps are the same.
+    let names_and_steps = |v: &Json| v.as_array().unwrap().iter().map(|s| (s["name"].clone(), s["steps"].clone())).collect::<Vec<_>>();
+    assert_eq!(names_and_steps(&s.execute("automate.allScripts", json!({})).unwrap()), names_and_steps(&scripts));
+    assert_eq!(s.execute("macro.list", json!({})).unwrap().as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_relative_recording_plays_back_on_another_block() {
+    let mut s = s();
+    data(&mut s);
+    put(
+        &mut s,
+        json!({"name": "Plain", "steps": [{"command": "cell.set", "params": {"cell": "A20", "input": "plain"}}], "output": {"onConflict": "overwrite"}}),
+    );
+    put(&mut s, json!({"name": "Shaped", "inputs": [{"name": "Input"}], "steps": []}));
+    s.execute("selection.set", json!({"range": "B2:C5"})).unwrap();
+    let r = s.execute("macro.record", json!({})).unwrap();
+    assert_eq!(r, json!({"recording": true, "relative": true, "input": "B2:C5"}));
+    // Clicking a cell and typing, a formula over the amounts, bold header, italic on a selection.
+    s.execute("selection.set", json!({"cell": "E2"})).unwrap();
+    set(&mut s, "E2", "Total");
+    set(&mut s, "E3", "=SUM(C3:C5)");
+    s.execute("home.bold", json!({"range": "B2:C2"})).unwrap();
+    s.execute("selection.set", json!({"cell": "C3"})).unwrap();
+    s.execute("selection.set", json!({"cell": "C4"})).unwrap();
+    s.execute("home.italic", json!({})).unwrap();
+    set(&mut s, "C6", "end");
+    // Not kept: commands macros don't run, and a macro with inputs; a plain macro's steps are
+    // inlined.
+    s.execute("window.activate", json!({"index": 0})).unwrap();
+    s.execute("macro.run", json!({"name": "Plain"})).unwrap();
+    s.execute("macro.run", json!({"name": "Shaped", "inputs": "A1"})).unwrap();
+    // The journal can be trimmed meanwhile.
+    s.journal.clear();
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Sum it", "description": "made by recording"})).unwrap();
+    assert!(!s.is_recording());
+    assert_eq!(r["saved"], "Sum it");
+    assert_eq!(r["skipped"], json!(["window.activate", "macro.run"]));
+    assert_eq!(r["inputs"], json!(["Input"]));
+    let m = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": "Sum it"})).unwrap()).unwrap();
+    assert_eq!(m.description, "made by recording");
+    let input = &m.inputs[0];
+    assert!(input.header);
+    assert_eq!((input.cols, input.col_types.clone()), ([2, 2], vec![gridcraft_model::ColType::Text, gridcraft_model::ColType::Number]));
+    let steps: Vec<(String, Json)> = m
+        .steps
+        .iter()
+        .map(|st| match &st.kind {
+            gridcraft_model::StepKind::Command { id, params } => (id.clone(), params.clone()),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        vec![
+            ("selection.set".to_string(), json!({"cell": "Input.cell(1,4)"})),
+            ("cell.set".into(), json!({"cell": "Input.cell(1,4)", "input": "Total"})),
+            ("cell.set".into(), json!({"cell": "Input.cell(2,4)", "input": "=SUM({{Input.rows(2..).col(2)}})"})),
+            ("home.bold".into(), json!({"range": "Input.row(1)", "on": true})),
+            ("selection.set".into(), json!({"cell": "Input.cell(3,2)"})),
+            ("home.italic".into(), json!({"on": true})),
+            ("cell.set".into(), json!({"cell": "Input.col(2).below", "input": "end"})),
+            ("cell.set".into(), json!({"cell": "A20", "input": "plain"})),
+        ]
+    );
+    // Play it back on a longer block somewhere else.
+    for (cell, input) in [
+        ("G10", "Who"),
+        ("H10", "Paid"),
+        ("G11", "A"),
+        ("H11", "1"),
+        ("G12", "B"),
+        ("H12", "2"),
+        ("G13", "C"),
+        ("H13", "3"),
+        ("G14", "D"),
+        ("H14", "4"),
+    ] {
+        set(&mut s, cell, input);
+    }
+    s.execute("macro.run", json!({"name": "Sum it", "inputs": "G10:H14", "onConflict": "overwrite"})).unwrap();
+    assert_eq!((v(&s, "J10").display(), v(&s, "J11").display()), ("Total".into(), "10".into()));
+    assert!(bold(&s, "G10") && bold(&s, "H10"));
+    assert_eq!(v(&s, "H15").display(), "end");
+    // Toggles were recorded with the state they set: a second run keeps the header bold.
+    s.execute("macro.run", json!({"name": "Sum it", "inputs": "G10:H14", "onConflict": "overwrite"})).unwrap();
+    assert!(bold(&s, "G10") && bold(&s, "H10"));
+    let d = s.doc().unwrap();
+    assert!(d.wb.styles.get(d.wb.active().unwrap().style_id(gridcraft_core::CellRef::parse("H12").unwrap())).font.italic);
+    // The input is checked like any other: text in the amounts is refused.
+    set(&mut s, "H12", "two");
+    let err = s.execute("macro.run", json!({"name": "Sum it", "inputs": "G10:H14"})).unwrap_err().to_string();
+    assert!(err.contains("Input column 2 (Paid) must hold numbers; H12 holds text."), "{err}");
+}
+
+#[test]
+fn an_absolute_recording_keeps_its_references() {
+    let mut s = s();
+    s.execute("selection.set", json!({"range": "B2:C3"})).unwrap();
+    s.execute("macro.record", json!({"relative": false})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    set(&mut s, "B2", "x");
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    set(&mut s, "C3", "y");
+    let r = s.execute("macro.record", json!({})).unwrap();
+    assert_eq!(r["saved"], "Macro1");
+    let m = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": "Macro1"})).unwrap()).unwrap();
+    assert!(m.inputs.is_empty());
+    let ids: Vec<String> = crate::macros::command_steps(&m.steps).iter().map(|(_, id, p)| format!("{id} {p}")).collect();
+    assert_eq!(
+        ids,
+        [
+            "home.insertSheet {\"name\":\"Two\"}",
+            "sheet.activate {\"sheet\":\"Two\"}",
+            "selection.set {\"active\":\"A1\",\"range\":\"A1\"}",
+            "cell.set {\"cell\":\"B2\",\"input\":\"x\"}",
+            "sheet.activate {\"sheet\":\"Sheet1\"}",
+            "selection.set {\"active\":\"A1\",\"range\":\"A1\"}",
+            "cell.set {\"cell\":\"C3\",\"input\":\"y\"}",
+        ]
+    );
+    // Stopping when nothing records says so.
+    assert_eq!(s.execute("macro.record", json!({"stop": true})).unwrap(), json!({"recording": false}));
+}
+
 #[test]
 fn only_the_workbooks_a_debugged_run_touched_wait() {
     let mut s = s();
@@ -956,4 +1144,317 @@ fn only_the_workbooks_a_debugged_run_touched_wait() {
     assert_eq!(s.active_index(), 0);
     debug(&mut s, json!({"action": "stop"}));
     set(&mut s, "A1", "free");
+}
+
+/// The commands of saved macro `name`, as `id params`.
+fn recorded(s: &mut Session, name: &str) -> Vec<String> {
+    let m = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": name})).unwrap()).unwrap();
+    crate::macros::command_steps(&m.steps).iter().map(|(_, id, p)| format!("{id} {p}")).collect()
+}
+
+#[test]
+fn a_recording_is_kept_when_saving_it_fails() {
+    let mut s = s();
+    s.execute("macro.record", json!({"relative": false})).unwrap();
+    set(&mut s, "A1", "typed");
+    // A name the macro check refuses: still recording, and a good name saves what was recorded.
+    assert!(s.execute("macro.record", json!({"stop": true, "name": "Bad\u{1}name"})).is_err());
+    assert!(s.is_recording());
+    set(&mut s, "A2", "more");
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Good"})).unwrap();
+    assert_eq!(r["saved"], "Good");
+    assert!(!s.is_recording());
+    assert_eq!(recorded(&mut s, "Good"), ["cell.set {\"cell\":\"A1\",\"input\":\"typed\"}", "cell.set {\"cell\":\"A2\",\"input\":\"more\"}"]);
+
+    // A workbook at its macro limit: freeing a slot and stopping again saves it.
+    s.execute("macro.record", json!({"relative": false})).unwrap();
+    set(&mut s, "B1", "full");
+    let d = s.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    let filler = wb.macros[0].clone();
+    while wb.macros.len() < gridcraft_model::MAX_MACROS {
+        let mut m = filler.clone();
+        m.name = format!("Filler{}", wb.macros.len());
+        wb.macros.push(m);
+    }
+    d.wb = Arc::new(wb);
+    let err = s.execute("macro.record", json!({"stop": true, "name": "Late"})).unwrap_err().to_string();
+    assert!(err.contains("at most"), "{err}");
+    assert!(s.is_recording());
+    let d = s.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    wb.macros.pop();
+    d.wb = Arc::new(wb);
+    s.execute("macro.record", json!({"stop": true, "name": "Late"})).unwrap();
+    assert_eq!(recorded(&mut s, "Late"), ["cell.set {\"cell\":\"B1\",\"input\":\"full\"}"]);
+}
+
+#[test]
+fn a_relative_recording_keeps_references_on_another_sheet() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    data(&mut s);
+    s.execute("selection.set", json!({"range": "B2:C5"})).unwrap();
+    s.execute("macro.record", json!({})).unwrap();
+    s.execute("home.bold", json!({"range": "B2:C2"})).unwrap();
+    // On the other sheet, C4 and C3:C5 are that sheet's cells, not the input's.
+    s.execute("sheet.activate", json!({"sheet": "Two"})).unwrap();
+    set(&mut s, "C4", "x");
+    set(&mut s, "D2", "=SUM(C3:C5)");
+    s.execute("macro.record", json!({"stop": true, "name": "Both"})).unwrap();
+    let steps = recorded(&mut s, "Both");
+    assert!(steps.contains(&"cell.set {\"cell\":\"C4\",\"input\":\"x\"}".to_string()), "{steps:?}");
+    assert!(steps.contains(&"cell.set {\"cell\":\"D2\",\"input\":\"=SUM(C3:C5)\"}".to_string()), "{steps:?}");
+    // Played back on another block of Sheet1, it writes Two's cells.
+    set(&mut s, "C4", "");
+    set(&mut s, "D2", "");
+    set(&mut s, "C3", "5");
+    set(&mut s, "C5", "7");
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    for (cell, input) in [("G10", "Who"), ("H10", "Paid"), ("G11", "A"), ("H11", "100"), ("G12", "B"), ("H12", "200"), ("G13", "C"), ("H13", "300")] {
+        set(&mut s, cell, input);
+    }
+    s.execute("macro.run", json!({"name": "Both", "inputs": "G10:H13", "onConflict": "overwrite"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert!(bold(&s, "G10") && bold(&s, "H10"));
+    // Nothing was written into or beside the input.
+    assert_eq!((v(&s, "H12").display(), v(&s, "I10").display()), ("200".into(), String::new()));
+    s.execute("sheet.activate", json!({"sheet": "Two"})).unwrap();
+    assert_eq!((v(&s, "C4").display(), v(&s, "D2").display()), ("x".into(), "12".into()));
+}
+
+#[test]
+fn a_step_that_names_another_sheet_keeps_its_references() {
+    // `sheet` names where the step runs whatever sheet is active, so its C4 is that sheet's C4.
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    data(&mut s);
+    s.execute("selection.set", json!({"range": "B2:C5"})).unwrap();
+    s.execute("macro.record", json!({})).unwrap();
+    s.execute("cell.set", json!({"sheet": "Two", "cell": "C4", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"sheet": "Sheet1", "cell": "C4", "input": "90"})).unwrap();
+    s.execute("macro.record", json!({"stop": true, "name": "Named"})).unwrap();
+    let steps = recorded(&mut s, "Named");
+    assert!(steps.contains(&"cell.set {\"cell\":\"C4\",\"input\":\"x\",\"sheet\":\"Two\"}".to_string()), "{steps:?}");
+    assert!(steps.contains(&"cell.set {\"cell\":\"Input.cell(3,2)\",\"input\":\"90\",\"sheet\":\"Sheet1\"}".to_string()), "{steps:?}");
+}
+
+#[test]
+fn inlining_recorded_runs_stops_at_the_step_limit() {
+    // A recorded run of a long macro adds all of its steps; the conversion gathers at most the
+    // macro's step limit and counts the rest, instead of expanding every run first.
+    let mut s = s();
+    let steps: Vec<Json> = (0..6_000).map(|_| json!({"command": "cell.set", "params": {"cell": "A1", "input": "x"}})).collect();
+    put(&mut s, json!({"name": "Big", "output": {"onConflict": "overwrite"}, "steps": steps}));
+    s.execute("macro.record", json!({})).unwrap();
+    s.execute("macro.run", json!({"name": "Big"})).unwrap();
+    s.execute("macro.run", json!({"name": "Big"})).unwrap();
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Twice"})).unwrap();
+    assert_eq!((r["steps"].as_u64(), r["dropped"].as_u64()), (Some(10_000), Some(2_000)), "{r}");
+}
+
+#[test]
+fn a_recording_can_be_cancelled() {
+    let mut s = s();
+    data(&mut s);
+    let before = s.execute("macro.list", json!({})).unwrap();
+    s.execute("macro.record", json!({})).unwrap();
+    set(&mut s, "E2", "x");
+    let r = s.execute("macro.record", json!({"cancel": true})).unwrap();
+    assert_eq!(r, json!({"recording": false, "cancelled": true}));
+    assert!(!s.is_recording() && s.macro_recording.is_none());
+    assert_eq!(s.execute("macro.list", json!({})).unwrap(), before, "nothing was saved");
+    assert_eq!(s.execute("macro.record", json!({"cancel": true})).unwrap()["cancelled"], false);
+    // Recording works again afterwards.
+    s.execute("macro.record", json!({})).unwrap();
+    assert!(s.is_recording());
+    s.execute("macro.record", json!({"cancel": true})).unwrap();
+}
+
+#[test]
+fn formulas_are_tokenized_by_reading_their_references() {
+    // An example as large as a sheet has a million rows: each reference in the formula is read
+    // and matched on its own, instead of a list of every column and row of the example.
+    let mut s = s();
+    s.execute("selection.set", json!({"range": "A1:Z1000000"})).unwrap();
+    s.execute("macro.record", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "AB1", "input": "=SUM(A1:A1000000)+SUM(A1:A3)+B2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "AB2", "input": "=SUM(A1:Z1000000)&\"A1:A1000000\""})).unwrap();
+    s.execute("macro.record", json!({"stop": true, "name": "Wide"})).unwrap();
+    let steps = recorded(&mut s, "Wide");
+    // A single cell inside a formula stays as it is: only the input, its columns and its rows
+    // become tokens there.
+    assert!(steps.iter().any(|st| st.contains("=SUM({{Input.col(1)}})+SUM(A1:A3)+B2")), "{steps:?}");
+    assert!(steps.iter().any(|st| st.contains("=SUM({{Input}})&\\\"A1:A1000000\\\"")), "{steps:?}");
+}
+
+#[test]
+fn a_selection_of_several_areas_keeps_its_active_cell_as_it_is() {
+    let mut s = s();
+    data(&mut s);
+    s.execute("selection.set", json!({"range": "B2:C5"})).unwrap();
+    s.execute("macro.record", json!({})).unwrap();
+    // Several areas picked with the mouse: no command, so the recording adds a selection.set
+    // with the active cell before the next step.
+    let (a, b) = (gridcraft_core::RangeRef::parse("B2:C5").unwrap(), gridcraft_core::RangeRef::parse("E2:E5").unwrap());
+    s.doc_mut().unwrap().selection = crate::Selection { active: b.start, anchor: b.start, ranges: vec![a, b] };
+    s.execute("home.bold", json!({})).unwrap();
+    s.execute("macro.record", json!({"stop": true, "name": "Areas"})).unwrap();
+    let steps = recorded(&mut s, "Areas");
+    assert!(steps.contains(&"selection.set {\"active\":\"E2\",\"range\":\"B2:C5,E2:E5\"}".to_string()), "{steps:?}");
+    assert!(steps.iter().all(|st| !st.contains("\"active\":\"Input")), "{steps:?}");
+}
+
+#[test]
+fn steps_recorded_in_another_workbook_are_counted() {
+    let mut s = s();
+    data(&mut s);
+    let home = s.active_index();
+    s.execute("macro.record", json!({})).unwrap();
+    s.new_workbook();
+    set(&mut s, "A1", "elsewhere");
+    set(&mut s, "A2", "too");
+    s.set_active(home);
+    set(&mut s, "E2", "here");
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Home"})).unwrap();
+    assert_eq!((r["steps"].as_u64(), r["dropped"].as_u64()), (Some(1), Some(2)), "{r}");
+}
+
+#[test]
+fn a_recorded_macro_run_is_inlined_only_when_its_steps_stand_alone() {
+    let mut s = s();
+    put(
+        &mut s,
+        json!({"name": "Branchy", "output": {"onConflict": "overwrite"}, "steps": [
+            {"type": "if", "cell": "A1", "op": "empty",
+             "then": [{"command": "cell.set", "params": {"cell": "B1", "input": "empty"}}],
+             "else": [{"command": "cell.set", "params": {"cell": "B1", "input": "full"}}]}
+        ]}),
+    );
+    put(
+        &mut s,
+        json!({"name": "Placed", "output": {"anchor": "D1", "onConflict": "overwrite"}, "steps": [
+            {"command": "cell.set", "params": {"cell": "Output", "input": "out"}}
+        ]}),
+    );
+    put(
+        &mut s,
+        json!({"name": "Plain", "output": {"onConflict": "overwrite"}, "steps": [
+            {"command": "cell.set", "params": {"cell": "C1", "input": "plain"}},
+            {"command": "cell.set", "params": {"cell": "C2", "input": "off"}, "enabled": false}
+        ]}),
+    );
+    s.execute("macro.record", json!({"relative": false})).unwrap();
+    for name in ["Branchy", "Placed", "Plain"] {
+        s.execute("macro.run", json!({"name": name})).unwrap();
+    }
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Rec"})).unwrap();
+    assert_eq!(r["skipped"], json!(["macro.run", "macro.run"]));
+    assert_eq!(recorded(&mut s, "Rec"), ["cell.set {\"cell\":\"C1\",\"input\":\"plain\"}"]);
+}
+
+#[test]
+fn a_recorded_script_run_leaves_out_the_steps_a_macro_may_not_run() {
+    let mut s = s();
+    let steps = json!([
+        {"command": "cell.set", "params": {"cell": "B1", "input": "kept"}},
+        {"command": "window.activate", "params": {"index": 0}},
+        {"command": "macro.list", "params": {}}
+    ]);
+    s.execute("automate.newScript", json!({"name": "Mixed", "commands": steps})).unwrap();
+    s.execute("macro.record", json!({"relative": false})).unwrap();
+    s.execute("automate.runScript", json!({"name": "Mixed"})).unwrap();
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Rec"})).unwrap();
+    assert_eq!(r["skipped"], json!(["window.activate", "macro.list"]));
+    assert_eq!(recorded(&mut s, "Rec"), ["cell.set {\"cell\":\"B1\",\"input\":\"kept\"}"]);
+    s.execute("macro.run", json!({"name": "Rec", "onConflict": "overwrite"})).unwrap();
+}
+
+#[test]
+fn a_recording_is_saved_in_the_workbook_where_it_started() {
+    let mut s = s();
+    data(&mut s);
+    let first = s.doc().unwrap().uid;
+    s.execute("selection.set", json!({"range": "B2:C5"})).unwrap();
+    s.execute("macro.record", json!({})).unwrap();
+    set(&mut s, "E2", "Total");
+    s.new_workbook();
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Here"})).unwrap();
+    assert_eq!(r["saved"], "Here");
+    // The active workbook stays active and gets nothing.
+    assert_ne!(s.doc().unwrap().uid, first);
+    assert!(s.doc().unwrap().wb.macros.is_empty());
+    s.set_active(0);
+    let m = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": "Here"})).unwrap()).unwrap();
+    // The input's shape comes from the workbook where recording started.
+    assert!(m.inputs[0].header);
+    assert_eq!(recorded(&mut s, "Here"), ["cell.set {\"cell\":\"Input.cell(1,4)\",\"input\":\"Total\"}"]);
+
+    // When that workbook was closed, stopping says so and ends the recording.
+    s.execute("macro.record", json!({})).unwrap();
+    set(&mut s, "E3", "x");
+    s.set_active(1);
+    s.close_document(0);
+    let err = s.execute("macro.record", json!({"stop": true, "name": "Gone"})).unwrap_err().to_string();
+    assert!(err.contains("was closed"), "{err}");
+    assert!(!s.is_recording());
+    assert!(s.doc().unwrap().wb.macros.is_empty());
+}
+
+#[test]
+fn a_name_given_when_recording_stops_never_replaces_a_macro() {
+    let mut s = s();
+    let original = json!({"command": "cell.set", "params": {"cell": "Z9", "input": "mine"}});
+    put(&mut s, json!({"name": "Tidy", "description": "keep me", "steps": [original]}));
+    s.execute("macro.record", json!({"relative": false})).unwrap();
+    set(&mut s, "A1", "recorded");
+    let r = s.execute("macro.record", json!({"stop": true, "name": "tidy"})).unwrap();
+    assert_eq!(r["saved"], "tidy (2)");
+    let kept = crate::macros::parse_macro(&s.execute("macro.get", json!({"name": "Tidy"})).unwrap()).unwrap();
+    assert_eq!((kept.name.as_str(), kept.description.as_str(), kept.steps.len()), ("Tidy", "keep me", 1));
+    assert_eq!(recorded(&mut s, "Tidy"), ["cell.set {\"cell\":\"Z9\",\"input\":\"mine\"}"]);
+    assert_eq!(recorded(&mut s, "tidy (2)"), ["cell.set {\"cell\":\"A1\",\"input\":\"recorded\"}"]);
+}
+
+#[test]
+fn steps_past_the_macro_limit_are_counted_as_dropped() {
+    let mut s = s();
+    s.execute("macro.record", json!({"relative": false})).unwrap();
+    let (doc, selection) = (s.doc().unwrap().uid, s.doc().unwrap().selection.clone());
+    let rec = s.recorder.as_mut().unwrap();
+    for i in 0..gridcraft_model::MAX_MACRO_STEPS + 5 {
+        rec.push(crate::record::RecordedStep {
+            doc,
+            sheet: 0,
+            sheet_name: "Sheet1".into(),
+            selection: selection.clone(),
+            id: "cell.set".into(),
+            params: json!({"cell": "A1", "input": i.to_string()}),
+        });
+    }
+    rec.dropped = 3;
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Long"})).unwrap();
+    assert_eq!(r["steps"], gridcraft_model::MAX_MACRO_STEPS);
+    assert_eq!(r["dropped"], 8, "{r}");
+}
+
+#[test]
+fn a_recording_waits_while_a_macro_in_its_workbook_is_debugged() {
+    let mut s = s();
+    stepper(&mut s);
+    s.execute("macro.record", json!({"relative": false})).unwrap();
+    set(&mut s, "Z1", "typed");
+    debug(&mut s, json!({"name": "Walk", "inputs": "B2:C5"}));
+    debug(&mut s, json!({"action": "step"}));
+    // Saved now, the macro would go into the run's undo group, and stopping the run without
+    // keeping its changes would delete it again.
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Typed"}));
+    assert!(matches!(&r, Err(EngineError::Disabled(id, why)) if id == "macro.record" && why == crate::macros::debug::BUSY), "{r:?}");
+    assert!(s.is_recording());
+    debug(&mut s, json!({"action": "stop"}));
+    let r = s.execute("macro.record", json!({"stop": true, "name": "Typed"})).unwrap();
+    assert_eq!(r["saved"], "Typed");
+    assert_eq!(recorded(&mut s, "Typed"), ["cell.set {\"cell\":\"Z1\",\"input\":\"typed\"}"]);
 }

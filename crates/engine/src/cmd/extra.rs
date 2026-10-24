@@ -1096,6 +1096,23 @@ fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"ran": n}))
 }
 
+/// The command steps of the Automate script called `name`, as `automate.runScript` runs them
+/// (steps that run other scripts are left out), or `None` when there is no such script.
+pub(crate) fn script_steps(wb: &Workbook, name: &str) -> Option<Vec<(String, Json)>> {
+    let all = stash_get(wb, SCRIPTS_NAME);
+    let steps = all.get(name)?.as_array()?;
+    Some(
+        steps
+            .iter()
+            .take(100_000)
+            .filter_map(|st| {
+                let id = st["command"].as_str()?;
+                (!id.starts_with("automate.")).then(|| (id.to_string(), st["params"].clone()))
+            })
+            .collect(),
+    )
+}
+
 /// Automate › Stop Action: rolls back the undo groups open on the active workbook, so Undo and
 /// Redo work there again.
 fn stop_action(s: &mut Session, _: &Json) -> Result<Json> {
