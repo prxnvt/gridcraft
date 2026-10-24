@@ -53,6 +53,12 @@ pub enum EngineError {
     NoDocument,
     #[error("{0}")]
     Other(String),
+    /// The command would replace something; run it again with `overwrite: true` to go ahead.
+    #[error("confirm: {0} (run again with `overwrite: true`)")]
+    Confirm(String),
+    /// Active content (a macro) asks to run; run it again with `approve: true` to allow it.
+    #[error("approve: {0} (run again with `approve: true`)")]
+    Approve(String),
     #[error("internal error in `{0}` (the workbook was kept as it was): {1}")]
     Internal(String, String),
 }
@@ -200,6 +206,9 @@ pub struct DocState {
     /// workbook is opened from a file, carried by content pasted from such a workbook, and never
     /// changed by a trust decision.
     pub trust: Trust,
+    /// While a macro's footprint is measured: every cell a command wrote, by sheet name, even
+    /// where it wrote what was already there.
+    pub touched: Option<Vec<(String, CellRef)>>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -290,6 +299,7 @@ impl DocState {
             content_kind: None,
             scripts_trusted,
             trust,
+            touched: None,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -399,6 +409,9 @@ pub struct Session {
     /// Serialized size of each journal entry, measured once when it is pushed, and their sum.
     journal_sizes: Vec<usize>,
     journal_bytes: usize,
+    /// Entries the journal has dropped from its front to stay within its limits, ever; a dry run
+    /// that puts the journal back needs to know how many went while it ran.
+    journal_dropped: u64,
     pub ui_requests: Vec<UiRequest>,
     /// Format painter source style (sticky when double-clicked).
     pub format_painter: Option<(Arc<Workbook>, usize, RangeRef, bool)>,
@@ -413,6 +426,9 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
+    /// Macros the person allowed to run in this session: (document uid, the macro's content as
+    /// canonical JSON, from [`macros::fingerprint`]).
+    pub macro_approvals: std::collections::HashSet<(u64, String)>,
     /// Windows hidden with View › Hide.
     pub hidden_windows: Vec<usize>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
@@ -520,8 +536,24 @@ impl Session {
             self.journal.drain(..n);
             self.journal_sizes.drain(..n);
             self.journal_bytes = kept;
+            self.journal_dropped = self.journal_dropped.saturating_add(n as u64);
             self.recording = self.recording.map(|r| r.saturating_sub(n));
         }
+    }
+
+    /// Entries dropped from the journal's front so far, for a caller that puts the journal back.
+    pub(crate) fn journal_dropped(&self) -> u64 {
+        self.journal_dropped
+    }
+
+    /// Cuts the journal back to its first `keep` entries, with its size bookkeeping.
+    pub(crate) fn truncate_journal(&mut self, keep: usize) {
+        if self.journal_sizes.len() == self.journal.len() {
+            self.journal_sizes.truncate(keep);
+            self.journal_bytes = self.journal_sizes.iter().sum();
+        }
+        self.journal.truncate(keep);
+        self.recording = self.recording.map(|r| r.min(self.journal.len()));
     }
 
     pub fn commands(&self) -> Vec<CommandInfo> {

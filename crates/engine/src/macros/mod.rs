@@ -14,7 +14,9 @@ use serde_json::{Value as Json, json};
 
 use crate::cmd::stash;
 
+pub mod policy;
 pub mod resolve;
+pub mod run;
 
 /// The hidden-data key prefix of a stored macro (`macro_<n>`).
 const MACRO_KEY: &str = "macro_";
@@ -93,6 +95,13 @@ pub fn macro_json(m: &Macro) -> Json {
 pub fn find(wb: &Workbook, name: &str) -> Option<usize> {
     let name = name.trim();
     wb.macros.iter().position(|m| m.name.eq_ignore_ascii_case(name))
+}
+
+/// A macro's content as canonical JSON text (object keys sorted): approval to run a macro holds
+/// until the macro changes. It is the text itself rather than a hash, so no two different macros
+/// share it.
+pub fn fingerprint(m: &Macro) -> String {
+    macro_json(m).to_string()
 }
 
 /// A copy of `wb` for xlsx with each macro in hidden names (`_gc_macro_<n>_<k>`) instead of the

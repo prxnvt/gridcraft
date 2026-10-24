@@ -12,6 +12,7 @@ pub mod format;
 pub mod formulas;
 pub mod insert;
 pub mod inspect;
+pub mod macros;
 pub mod pivot;
 pub mod print;
 pub mod review;
@@ -143,6 +144,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(view::specs());
         v.extend(inspect::specs());
         v.extend(extra::specs());
+        v.extend(macros::specs());
         v.extend(draw::specs());
         v.extend(spelling::specs());
         v.extend(solver::specs());
@@ -364,6 +366,13 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if !structural {
         check_arrays(&d.wb, &wb)?;
     }
+    if let Some(log) = d.touched.as_mut() {
+        for (si, c) in changed.iter().take(TOUCH_LOG_LIMIT.saturating_sub(log.len())) {
+            if let Some(sh) = wb.sheet(*si) {
+                log.push((sh.name.clone(), *c));
+            }
+        }
+    }
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
@@ -390,6 +399,11 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     d.selection = sel;
     Ok(r)
 }
+
+/// The most written cells a macro's footprint check records.
+/// The most cells a dry run's touch log keeps; a footprint whose log is full may be missing writes
+/// that kept a cell's value, so a shift is refused then.
+pub(crate) const TOUCH_LOG_LIMIT: usize = 1_000_000;
 
 /// Excel's message for an edit of a locked cell on a protected sheet.
 pub(crate) const PROTECTED: &str = "The cell or chart you're trying to change is on a protected sheet.";
