@@ -448,7 +448,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit Name" => "Modifica nome",
         "New Name" => "Nuovo nome",
         "Format Cells" => "Formato celle",
-        "Formula Builder" => "Generatore di formule",
         "Find and Replace" => "Trova e sostituisci",
         "Go To" => "Vai a",
         "Insert Calculated Field" => "Inserisci campo calcolato",

@@ -459,7 +459,6 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Edit Name", "名前の編集"),
     ("New Name", "新しい名前"),
     ("Format Cells", "セルの書式設定"),
-    ("Formula Builder", "数式ビルダー"),
     ("Find and Replace", "検索と置換"),
     ("Go To", "ジャンプ"),
     ("Insert Calculated Field", "計算のフィールドの挿入"),

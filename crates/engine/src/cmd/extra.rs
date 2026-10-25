@@ -271,7 +271,7 @@ pub fn specs() -> Vec<CommandSpec> {
             new_cell_style
         ),
         cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through MCP and scripts instead of add-ins", always, |_, _| Ok(json!({"addIns": [], "hint": "Use gridcraft-cli mcp or Automate › scripts"}))),
-        cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → recently used functions in this workbook", has_doc, recently_used),
+        cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → the functions most recently entered in formulas, newest first", has_doc, recently_used),
         cmd!(query "formulas.financial", "Financial", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Financial"}))),
         cmd!(query "formulas.logical", "Logical", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Logical"}))),
         cmd!(query "formulas.text", "Text", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Text"}))),
@@ -1247,25 +1247,10 @@ fn new_cell_style(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Formulas › Recently Used: the functions most recently entered in a formula, newest first
+/// ([`crate::Prefs::recent_functions`]).
 fn recently_used(s: &mut Session, _: &Json) -> Result<Json> {
-    let mut seen: Vec<String> = Vec::new();
-    for (id, p) in s.journal.iter().rev() {
-        if id != "cell.set" {
-            continue;
-        }
-        let input = p.get("input").and_then(Json::as_str).unwrap_or("");
-        if let Ok(e) = gridcraft_formula::parse(input.trim_start_matches('=')) {
-            for f in e.functions() {
-                if !seen.iter().any(|x| x == f) {
-                    seen.push(f.to_string());
-                }
-            }
-        }
-        if seen.len() >= 10 {
-            break;
-        }
-    }
-    Ok(json!(seen))
+    Ok(json!(s.prefs.recent_functions))
 }
 
 fn use_in_formula(s: &mut Session, p: &Json) -> Result<Json> {

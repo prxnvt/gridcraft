@@ -448,7 +448,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit Name" => "Editare nume",
         "New Name" => "Nume nou",
         "Format Cells" => "Formatare celule",
-        "Formula Builder" => "Generator de formule",
         "Find and Replace" => "Găsire și înlocuire",
         "Go To" => "Salt la",
         "Insert Calculated Field" => "Inserare câmp calculat",

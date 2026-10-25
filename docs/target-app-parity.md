@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (the Insert Function dialog is named as in Excel; no score change; earlier: Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -314,7 +314,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   galleries (cell styles, table styles, colour palettes, conditional formatting menus),
   contextual Table/Chart Design tabs, formula bar with Name Box, virtualised grid (smooth
   scrolling, zoom, frozen panes, text overflow), sheet tabs (rename, reorder, colour, hide),
-  status bar with Sum/Count/Average and zoom, dialogs (Format Cells, Formula Builder, Find and
+  status bar with Sum/Count/Average and zoom, dialogs (Format Cells, Insert Function, Find and
   Replace, Sort, Name Manager, Data Validation, Paste Special…), command palette, dark mode.
 - Agents: every action is an engine command; JSON control channel in the desktop app (pointer,
   keyboard, dialogs, screenshots); MCP server (headless or bridged); CLI (`info`, `convert`,
@@ -334,6 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | The Insert Function dialog is named as in Excel (it was called Formula Builder); no score change |
 | 2026-10-21 | minor | Page Setup paper sizes: `B4`/`B5`/`B6` are the JIS sizes Japanese Excel uses (ISO B4/B5/B6 by name), and Japanese Postcard, Japanese Double Postcard, the chou/kaku envelopes and A6 are added; PDF MediaBox and `file.print` follow, and the Size menu lists them |
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |

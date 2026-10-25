@@ -1,5 +1,6 @@
 //! Formulas › Function Library: the labelled buttons, their category menus, the More Functions
-//! cascade, the AutoSum big split button and the Recently Used keytip.
+//! cascade, the AutoSum big split button, the Recently Used keytip and list, and the Insert Function
+//! dialog's categories.
 
 use egui::os::OperatingSystem;
 use egui::{Event, Key, Modifiers, vec2};
@@ -174,4 +175,105 @@ fn the_recently_used_keytip_opens_its_menu() {
     h.get_by_label("Insert Function…");
     pick(&mut h, "AVERAGE");
     assert_eq!(editor_text(&h).as_deref(), Some("=AVERAGE("));
+}
+
+#[test]
+fn recently_used_lists_the_engines_list_newest_first() {
+    let mut h = formulas_tab(1440.0);
+    // The ribbon and the control channel go through app.run; MCP and scripts through the session.
+    // The engine keeps the list (see the engine's recently_used tests); the menu shows it.
+    h.state_mut().run("cell.set", json!({"cell": "A1", "input": "=NPV(0.1,1,2)"})).unwrap();
+    h.state_mut().session.execute("cell.set", json!({"cell": "A2", "input": "=IRR({-10,6,6})+ROUND(1,0)"})).unwrap();
+    h.state_mut().session.execute("range.setValues", json!({"range": "B1", "values": [["=FV(0.1,2,-1)", 4, "text"]]})).unwrap();
+    h.run_steps(2);
+    assert_eq!(&h.state().session.prefs.recent_functions[..4], ["FV", "IRR", "ROUND", "NPV"]);
+    click(&mut h, "Recently Used");
+    let top = |h: &Harness, name: &str| h.get_by_label(name).rect().top();
+    assert!(top(&h, "FV") < top(&h, "IRR") && top(&h, "IRR") < top(&h, "ROUND") && top(&h, "ROUND") < top(&h, "NPV"));
+}
+
+/// Opens the Insert Function category list (the dialog's only combo box).
+fn open_categories(h: &mut Harness) {
+    h.get_by_role(egui::accesskit::Role::ComboBox).click();
+    h.run_steps(3);
+}
+
+/// Picks a category from the open list (the ribbon has buttons with the same names).
+fn choose(h: &mut Harness, category: &str) {
+    h.get_all_by_label(category).last().expect("the category is listed").click();
+    h.run_steps(3);
+}
+
+fn row(name: &str, category: &str) -> String {
+    format!("{name} ({category})")
+}
+
+#[test]
+fn insert_function_has_its_title_and_a_working_category_list() {
+    let mut h = formulas_tab(1440.0);
+    h.state_mut().run("cell.set", json!({"cell": "A1", "input": "=NPV(0.1,1,2)"})).unwrap();
+    h.run_steps(2);
+    click(&mut h, "Insert Function");
+    let d = h.state().dialog.as_ref().expect("Insert Function opens");
+    assert_eq!(d.title, "Insert Function");
+    // Most Recently Used comes first, newest first.
+    let npv = h.get_by_label(&row("NPV", "Financial")).rect();
+    assert!(npv.top() < h.get_by_label(&row("SUM", "Math & Trig")).rect().top());
+    assert!(h.query_by_label(&row("PMT", "Financial")).is_some(), "the default list follows");
+    // Pick a category from the list.
+    open_categories(&mut h);
+    choose(&mut h, "Date & Time");
+    assert!(h.query_by_label(&row("TODAY", "Date & Time")).is_some());
+    assert!(h.query_by_label(&row("NPV", "Financial")).is_none());
+    // All lists everything; a category given by its engine id works too (control channel).
+    open_categories(&mut h);
+    choose(&mut h, "All");
+    assert!(h.query_by_label(&row("TODAY", "Date & Time")).is_some() && h.query_by_label(&row("NPV", "Financial")).is_some());
+    h.state_mut().dialog.as_mut().unwrap().values.insert("category".into(), json!("MathTrig"));
+    h.run_steps(2);
+    assert!(h.query_by_label(&row("ROUND", "Math & Trig")).is_some() && h.query_by_label(&row("TODAY", "Date & Time")).is_none());
+    // A search looks through every category.
+    h.state_mut().dialog.as_mut().unwrap().search = "lookup".into();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("category"), Some(&json!("All")));
+    assert!(h.query_by_label(&row("XLOOKUP", "Lookup & Reference")).is_some());
+    // OK starts the formula. The function counts as recently used once the formula is entered,
+    // not before (the edit may still be cancelled, or there may be no cell to edit).
+    pick(&mut h, &row("XLOOKUP", "Lookup & Reference"));
+    click(&mut h, "   OK   ");
+    assert_eq!(editor_text(&h).as_deref(), Some("=XLOOKUP("));
+    assert_ne!(h.state().session.prefs.recent_functions[0], "XLOOKUP");
+}
+
+/// The text shapes the last frame painted, with their left edge and width.
+fn painted_text(h: &Harness) -> Vec<(String, f32, f32)> {
+    let mut out = Vec::new();
+    for clipped in &h.output().shapes {
+        if let egui::Shape::Text(t) = &clipped.shape {
+            out.push((t.galley.text().to_string(), t.pos.x, t.galley.size().x));
+        }
+    }
+    out
+}
+
+#[test]
+fn insert_function_keeps_the_category_column_clear_of_long_names() {
+    let mut h = formulas_tab(1440.0);
+    // A wide interface font (as on some Windows and Linux desktops, or a long formula language)
+    // makes every name wider than the dialog was laid out for.
+    h.ctx.all_styles_mut(|s| {
+        s.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(20.0));
+    });
+    click(&mut h, "Insert Function");
+    // Some of the longest function names in the catalog, and a short one, in one list (the
+    // signature under the list starts with a name too, and is not a row).
+    h.state_mut().dialog.as_mut().unwrap().search = "forecast".into();
+    h.run_steps(3);
+    let shapes = painted_text(&h);
+    let names: Vec<&(String, f32, f32)> = shapes.iter().filter(|(t, _, _)| t.starts_with("FORECAST") && !t.contains('(')).collect();
+    let column = shapes.iter().filter(|(t, _, _)| t == "Statistical").map(|(_, x, _)| *x).fold(f32::INFINITY, f32::min);
+    assert!(names.iter().any(|(t, _, _)| t == "FORECAST.ETS.SEASONALITY"), "the long name is listed: {shapes:?}");
+    for (name, x, w) in names {
+        assert!(x + w < column, "{name} ends at {} and the category column starts at {column}", x + w);
+    }
 }

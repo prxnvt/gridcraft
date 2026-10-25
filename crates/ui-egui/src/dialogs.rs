@@ -797,7 +797,7 @@ impl Dialog {
             "insertFunction" => {
                 // A Function Library menu opens it on its own category.
                 let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();
-                Dialog::custom("insertFunction", "Formula Builder", json!({"category": category}))
+                Dialog::custom("insertFunction", "Insert Function", json!({"category": category}))
             }
             "find" => {
                 let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
@@ -2152,33 +2152,82 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
     }
 }
 
-/// Insert Function: searches names (as the formula language spells them) and descriptions, shows
-/// each hit's category and description, and starts editing `=NAME(` (or appends to the formula).
+/// Insert Function: search names (as the formula language spells them) and descriptions, or pick
+/// a category (Most Recently Used, All or one category), then a function; each hit shows its
+/// category and description. OK starts editing `=NAME(` (or appends to the formula).
 fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    use crate::function_library::{self as lib, ALL, MOST_RECENTLY_USED};
     let language = app.ui.language;
     ui.horizontal(|ui| {
         ui.label(language.tr("Search:"));
         let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(language.tr("e.g. lookup, average, date")));
         r.request_focus();
     });
+    // A new search (typed, or set through the control channel) looks through every function, as
+    // Excel's does.
+    if d.values.get("searched").and_then(Json::as_str) != Some(d.search.as_str()) {
+        d.list_index = 0;
+        if !d.search.trim().is_empty() {
+            d.values.insert("category".into(), json!(ALL));
+        }
+        d.values.insert("searched".into(), json!(d.search));
+    }
+    // The category may be given by label or by engine id (a Function Library menu, `ui.dialog.set`).
+    let saved = d.values.get("category").and_then(Json::as_str).unwrap_or(MOST_RECENTLY_USED).to_string();
+    let mut category = if saved.eq_ignore_ascii_case(ALL) {
+        ALL.to_string()
+    } else {
+        lib::category_id(&saved).map(lib::category_label).unwrap_or(MOST_RECENTLY_USED).to_string()
+    };
+    ui.horizontal(|ui| {
+        ui.label(language.tr("Or select a category:"));
+        egui::ComboBox::from_id_salt("insertFunctionCategory").width(220.0).selected_text(language.tr(&category)).show_ui(ui, |ui| {
+            for c in [MOST_RECENTLY_USED, ALL].into_iter().chain(lib::CATEGORIES.iter().map(|(_, l)| *l)) {
+                ui.selectable_value(&mut category, c.to_string(), language.tr(c));
+            }
+        });
+    });
+    if category != saved {
+        d.list_index = 0;
+    }
+    d.values.insert("category".into(), json!(category));
     let locale = language.formula_locale();
-    let list = gridcraft_engine::cmd::formulas::function_list();
     // The names and descriptions searched are the ones shown, so in the interface language.
-    let q = d.search.to_lowercase();
-    let hits: Vec<&Json> = list
-        .iter()
-        .filter(|f| {
-            q.is_empty()
-                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_lowercase().contains(&q))
-                || f["description"].as_str().is_some_and(|n| language.function_description(n).unwrap_or(n).to_lowercase().contains(&q))
-        })
-        .take(300)
-        .collect();
-    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-        for (i, f) in hits.iter().enumerate() {
-            let name = locale.function_name(f["name"].as_str().unwrap_or(""));
-            let category = language.tr(crate::function_library::category_label(f["category"].as_str().unwrap_or("")));
-            let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{name:<18} {category}")).min_size(vec2(480.0, 20.0)));
+    let q = d.search.trim().to_lowercase();
+    let matches = |f: &lib::FnEntry| {
+        q.is_empty()
+            || locale.function_name(&f.name).to_lowercase().contains(&q)
+            || language.function_description(&f.description).unwrap_or(&f.description).to_lowercase().contains(&q)
+    };
+    let hits: Vec<&lib::FnEntry> = if category == MOST_RECENTLY_USED {
+        lib::recent(app).iter().filter_map(|n| lib::find(n)).filter(|f| matches(f)).collect()
+    } else {
+        let id = lib::category_id(&category);
+        // The catalog is fixed (some 500 functions), so All lists every one.
+        lib::all().iter().filter(|f| id.is_none_or(|id| f.category == id) && matches(f)).collect()
+    };
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let rows: Vec<(&str, &str)> = hits.iter().map(|f| (locale.function_name(&f.name), language.tr(lib::category_label(&f.category)))).collect();
+    // The category column starts after the widest name shown, so a long name in any formula
+    // language or font never runs into it.
+    let name_w = rows.iter().map(|(n, _)| ui.painter().layout_no_wrap(n.to_string(), font.clone(), t.text).size().x).fold(0.0_f32, f32::max);
+    egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, false]).show(ui, |ui| {
+        if rows.is_empty() {
+            ui.label(egui::RichText::new(language.tr("No functions match.")).italics());
+        }
+        let row_h = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+        for (i, (name, category)) in rows.iter().enumerate() {
+            let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width().max(name_w + 120.0), row_h), egui::Sense::click());
+            if i == d.list_index {
+                ui.painter().rect_filled(rect, 3.0, ui.visuals().selection.bg_fill);
+            } else if r.hovered() {
+                ui.painter().rect_filled(rect, 3.0, t.hover);
+            }
+            let color = if i == d.list_index { ui.visuals().selection.stroke.color } else { t.text };
+            ui.painter().text(rect.left_center() + vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, *name, font.clone(), color);
+            ui.painter().text(rect.left_center() + vec2(6.0 + name_w + 16.0, 0.0), egui::Align2::LEFT_CENTER, *category, font.clone(), t.text_dim);
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, i == d.list_index, format!("{name} ({category})")));
             if r.clicked() {
                 d.list_index = i;
             }
@@ -2189,15 +2238,16 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
         }
     });
     if let Some(f) = hits.get(d.list_index) {
-        let name = f["name"].as_str().unwrap_or("");
         ui.separator();
-        ui.label(egui::RichText::new(crate::formula_locale::signature(name, locale, language).unwrap_or_default()).strong());
-        ui.label(crate::formula_locale::description(name, locale, language).unwrap_or_default());
+        ui.label(egui::RichText::new(crate::formula_locale::signature(&f.name, locale, language).unwrap_or_default()).strong());
+        ui.label(crate::formula_locale::description(&f.name, locale, language).unwrap_or_default());
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(n) = hits.get(d.list_index).and_then(|f| f["name"].as_str()) {
-        let n = app.session.active().map(|doc| crate::formula_locale::completion_name(n, locale, &doc.wb, doc.wb.active_sheet)).unwrap_or(n);
+    // The function counts as recently used once the formula is entered (the engine notes it).
+    if *confirm && let Some(f) = hits.get(d.list_index) {
+        let n =
+            app.session.active().map(|doc| crate::formula_locale::completion_name(&f.name, locale, &doc.wb, doc.wb.active_sheet)).unwrap_or(&f.name);
         let cur = app.editor.as_ref().map(|e| e.text.clone());
         let text = match cur {
             Some(t) if t.starts_with('=') => format!("{t}{n}("),

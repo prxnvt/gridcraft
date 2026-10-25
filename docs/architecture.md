@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (Function Library module; accent icons) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (recently used functions kept in the preferences; Function Library module; accent icons) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -71,7 +71,8 @@ drawing its own:
 - **Function Library**: `function_library.rs` holds the function categories (engine id and
   label, in the Insert Function dialog's order), the function list built once from
   `cmd::formulas::function_list`, and the menus of Formulas › Function Library, including the
-  AutoSum menu that Home › Editing shares.
+  AutoSum menu that Home › Editing shares. Recently Used and the Insert Function dialog's Most
+  Recently Used category list what `formulas.recentlyUsed` returns.
 - **Code editor**: `widgets::code_editor(ui, id, &mut text, Lang, max_lines)` (`code_editor.rs`)
   edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
   including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
@@ -106,6 +107,14 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   debugger the person abandons, a caller that dropped its token), so Undo works there again. The
   history limit is applied when the outermost command finishes; until then the steps made inside
   it are bounded on their own.
+- **Recently used functions** (`recent.rs`). `Prefs::recent_functions` holds the ten functions
+  most recently entered in a formula, newest first. `Session::execute` updates it for every
+  `cell.*` and `range.*` command it journals, from any source (interface, control channel, MCP,
+  script). It reads at most 2,000 of the formulas a command enters, starting from the last one
+  (the most recent), so a large paste costs no more than that; `formulas.recentlyUsed` returns
+  it. It is kept with the other preferences (`prefs.json`, the browser's storage on the
+  web) and read leniently, so a malformed value loses only this list. It does not read the
+  journal back, so the journal's trimming does not affect it.
 - **Recording buffer** (`record.rs`). `Session::start_recording` collects each successful
   top-level command with the document, sheet and selection it ran in, without secret parameters.
   Commands run by other commands are not recorded, nor is a menu-style call that only opened a
@@ -156,6 +165,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-24 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`); labelled ribbon buttons report their label |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |

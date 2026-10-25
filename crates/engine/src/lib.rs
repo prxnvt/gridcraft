@@ -19,6 +19,7 @@ pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+pub mod recent;
 pub mod record;
 pub mod sample;
 pub mod selection;
@@ -353,6 +354,10 @@ pub struct Prefs {
     pub formula_bar: bool,
     /// The statistics the status bar shows for a selection (right-click the status bar).
     pub status_bar: StatusBarStats,
+    /// Formulas › Recently Used: the functions most recently entered in a formula, newest first
+    /// (at most [`recent::MAX`]; see [`recent`]). An application list, as in Excel.
+    #[serde(deserialize_with = "recent::lenient")]
+    pub recent_functions: Vec<String>,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -387,6 +392,7 @@ impl Default for Prefs {
             user_dictionary: vec![],
             formula_bar: true,
             status_bar: StatusBarStats::default(),
+            recent_functions: recent::defaults(),
         }
     }
 }
@@ -653,6 +659,7 @@ impl Session {
                 rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params: cmd::journal_params(&params) });
             }
             self.push_journal(id, cmd::journal_params(&params));
+            recent::note(&mut self.prefs.recent_functions, id, &params);
         }
         // Inside an undo group the group owns the step. A command that ended a group open before
         // it leaves the group its step and makes one of its own for what it changed after the end.

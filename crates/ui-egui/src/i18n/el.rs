@@ -572,7 +572,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit Name" => "Επεξεργασία ονόματος",
         "New Name" => "Νέο όνομα",
         "Format Cells" => "Μορφοποίηση κελιών",
-        "Formula Builder" => "Δημιουργός τύπων",
         "Find and Replace" => "Εύρεση και αντικατάσταση",
         "Go To" => "Μετάβαση",
         "Insert Calculated Field" => "Εισαγωγή υπολογιζόμενου πεδίου",
