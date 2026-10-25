@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 /// characters add `"&"`, so the limit on the code itself depends on what the code holds.
 pub const MAX_FORMULA_CHARS: usize = 8_192;
 
+/// The most cells a Python result may have (a crafted file can claim any size).
+pub const MAX_RESULT_CELLS: usize = 1_000_000;
+
 /// The prefix files put before `PY(`, as Excel writes it ([MS-XLSX]: `_xlfn._xlws.PY`).
 pub const FILE_PREFIX: &str = "_xlfn._xlws.";
 

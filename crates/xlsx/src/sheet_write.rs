@@ -119,7 +119,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let dynamic: BTreeMap<CellRef, RangeRef> = sheet
         .spill_ranges
         .iter()
-        .filter(|(a, r)| !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.formula.as_ref().is_some_and(|f| f.array.is_none())))
+        .filter(|(a, r)| {
+            !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.py.is_some() || c.formula.as_ref().is_some_and(|f| f.array.is_none()))
+        })
         .map(|(a, r)| (*a, *r))
         .collect();
     let mut extra: BTreeMap<CellRef, Value> = BTreeMap::new();
@@ -686,6 +688,9 @@ fn write_cell(
         return;
     }
     let formula = if ov.is_some() { None } else { cell.and_then(|x| x.formula.as_ref()) };
+    // A Python cell is saved as Excel saves it, `_xlfn._xlws.PY("code"&"code",0|1)`, with its
+    // cached value; an application without Python shows the value (and #NAME? if it recalculates).
+    let py_text = if ov.is_some() || formula.is_some() { None } else { cell.and_then(|x| x.py.as_ref()).map(|p| p.to_file_formula()) };
     let value: Value = match (ov, extra) {
         (Some(t), _) => Value::text(t.as_str()),
         (None, Some(v)) => v.clone(),
@@ -709,11 +714,12 @@ fn write_cell(
     let own = formula.filter(|f| f.dynamic && f.array.is_none()).map(|_| RangeRef::cell(c));
     let dynamic = dynamic.or(own.as_ref());
     // A non-spilling formula may still need array evaluation to avoid implicit intersection.
-    if dynamic.is_some() && formula.is_some_and(|f| f.array.is_none()) {
+    if dynamic.is_some() && (formula.is_some_and(|f| f.array.is_none()) || py_text.is_some()) {
         s.push_str(" cm=\"1\"");
         out.dynamic_arrays = true;
     }
-    if let Some(f) = formula {
+    let text = formula.map(|f| esc(&crate::fmla::to_file(f))).or_else(|| py_text.map(|t| esc(&t)));
+    if let Some(text) = text {
         let t = match &value {
             Value::Text(_) => " t=\"str\"",
             Value::Bool(_) => " t=\"b\"",
@@ -722,8 +728,7 @@ fn write_cell(
         };
         s.push_str(t);
         s.push('>');
-        let text = esc(&crate::fmla::to_file(f));
-        match (f.array, dynamic) {
+        match (formula.and_then(|f| f.array), dynamic) {
             (Some(r), _) => {
                 let _ = write!(s, "<f t=\"array\" ref=\"{}\">{text}</f>", r.a1());
             }

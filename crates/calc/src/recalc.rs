@@ -436,6 +436,10 @@ struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// The kept results of the Python cells in the pass: a Python cell isn't evaluated, its
+    /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
+    /// `pending` until it is laid out, so a formula that reads it first gets its new value.
+    python: HashMap<Key, Value>,
 }
 
 impl<'a> PassHost<'a> {
@@ -468,7 +472,16 @@ impl<'a> PassHost<'a> {
             taint: false,
             stack_top: 0,
             out_of_stack: false,
+            python: HashMap::default(),
         }
+    }
+
+    /// Adds the dirty Python cells of the pass and their kept results: like the formulas, they
+    /// are pending until laid out, so every read path calculates them before reading them.
+    fn with_python(mut self, python: HashMap<Key, Value>) -> Self {
+        self.pending.extend(python.keys().copied());
+        self.python = python;
+        self
     }
 }
 
@@ -483,7 +496,10 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let own = sh.spill_ranges.get(&anchor);
     let spilled_over = |c: CellRef| {
         !own.is_some_and(|o| o.contains(c))
-            && sh.spill_ranges.iter().any(|(o, r)| *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)))
+            && sh.spill_ranges.iter().any(|(o, r)| {
+                // A formula or Python cell recalculated in this pass lays its array out again.
+                *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)) && !host.python.contains_key(&(sheet, *o))
+            })
     };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
@@ -559,6 +575,9 @@ impl PassHost<'_> {
                 self.taint = true;
             }
             return v;
+        }
+        if let Some(result) = self.python.get(&k).cloned() {
+            return self.python_result(k, result);
         }
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
@@ -666,6 +685,36 @@ impl PassHost<'_> {
             v => v,
         };
         // An array that can't spill is #SPILL! for the formulas evaluated after it in this pass too.
+        let v = match self.spills.get(&k) {
+            Some(a) if spill_blocked(self, k, a) => {
+                self.spills.remove(&k);
+                Value::Error(CellError::Spill)
+            }
+            _ => v,
+        };
+        self.results.insert(k, v.clone());
+        v
+    }
+
+    /// A Python cell's kept result as its value: an array spills from the cell unless it is
+    /// blocked, malformed or larger than [`gridcraft_model::python::MAX_RESULT_CELLS`] (only a
+    /// crafted file holds one), which shows `#SPILL!`.
+    fn python_result(&mut self, k: Key, result: Value) -> Value {
+        self.pending.remove(&k);
+        let v = match result {
+            Value::Array(a) => {
+                let sane = a.rows >= 1
+                    && a.cols >= 1
+                    && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= gridcraft_model::python::MAX_RESULT_CELLS);
+                if sane {
+                    self.spills.insert(k, a.clone());
+                    a.data.first().cloned().unwrap_or_default()
+                } else {
+                    Value::Error(CellError::Spill)
+                }
+            }
+            v => v,
+        };
         let v = match self.spills.get(&k) {
             Some(a) if spill_blocked(self, k, a) => {
                 self.spills.remove(&k);
@@ -817,12 +866,12 @@ impl Host for PassHost<'_> {
         let (h, w) = (range.height() as usize, range.width() as usize);
         let mut out = vec![Value::Empty; h * w];
         let Some(sh) = self.wb.sheet(sheet) else { return out };
-        // Sparse walk: only stored cells; formula cells that are (or were) dirty go through
-        // `compute`, constants are copied straight from the store.
+        // Sparse walk: only stored cells; formula and Python cells that are (or were) dirty go
+        // through `compute`, constants are copied straight from the store.
         let mut formulas: Vec<(usize, CellRef)> = Vec::new();
         for (c, cell) in sh.cells.iter_range(range) {
             let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
-            if cell.formula.is_some() {
+            if cell.formula.is_some() || cell.py.is_some() {
                 formulas.push((i, c));
             } else if let Some(slot) = out.get_mut(i) {
                 *slot = cell.value.clone();
@@ -888,11 +937,11 @@ impl Host for PassHost<'_> {
     fn visit_range(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
         let wb = self.wb;
         let Some(sh) = wb.sheet(sheet) else { return false };
-        // Formula cells first, in row-major order like `range_values`: reading one calculates it
-        // and the pass remembers the value, so the walk below gets the same value again without
-        // this method holding any.
+        // Formula and Python cells first, in row-major order like `range_values`: reading one
+        // calculates it (a Python cell lays out its result) and the pass remembers the value, so
+        // the walk below gets the same value again without this method holding any.
         for (c, cell) in sh.cells.iter_range(range) {
-            if cell.formula.is_some() {
+            if cell.formula.is_some() || cell.py.is_some() {
                 let _ = self.cell_value(sheet, c);
             }
         }
@@ -902,7 +951,7 @@ impl Host for PassHost<'_> {
             return false;
         }
         for (c, cell) in sh.cells.iter_range(range) {
-            let go = if cell.formula.is_some() { f(&self.cell_value(sheet, c)) } else { f(&cell.value) };
+            let go = if cell.formula.is_some() || cell.py.is_some() { f(&self.cell_value(sheet, c)) } else { f(&cell.value) };
             if !go {
                 break;
             }
@@ -953,6 +1002,10 @@ impl Calc {
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
                     }
+                } else if cell.py.is_some() {
+                    // A Python cell lays out its kept result, so it is calculated like a formula
+                    // that reads nothing: its spill is blocked and unblocked like a formula's.
+                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false });
                 }
             }
         }
@@ -1074,11 +1127,14 @@ impl Calc {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
+            let python = wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.py.is_some());
             match formula.and_then(|f| f.expr()) {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
                     self.graph.insert(k, Node { areas, dynamic });
                 }
+                // See `rebuild`: its spill is laid out again from its result when it is calculated.
+                None if python => self.graph.insert(k, Node { areas: Vec::new(), dynamic: false }),
                 None => {
                     self.graph.remove(k);
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.
@@ -1206,11 +1262,15 @@ impl Calc {
                     exprs.insert(*k, e);
                 }
             }
+            let python: HashMap<Key, Value> = dirty
+                .iter()
+                .filter_map(|k| wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref()).and_then(|p| p.result_value()).map(|v| (*k, v)))
+                .collect();
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
             let (results, spills, cycles) = {
-                let mut host = PassHost::new(wb, &exprs, &mut rng, now);
+                let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
                     host.calculate(*k);
