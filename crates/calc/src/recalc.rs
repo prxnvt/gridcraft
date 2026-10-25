@@ -677,6 +677,17 @@ impl PassHost<'_> {
         v
     }
 
+    /// Whether `c` holds a value spilled earlier by a formula being evaluated now. That formula
+    /// is laying out a new array, so its old one is not there for it (or for what it reads) to
+    /// read: the cell reads as empty, as it does in a full recalculation, which clears every spill
+    /// first. Otherwise a formula that reads its own spill area (`=SORT(K16:O20)` spilling over
+    /// K16:L16) would sort its own previous result into the new one.
+    fn in_own_old_spill(&self, sheet: usize, c: CellRef) -> bool {
+        let Some(sh) = self.wb.sheet(sheet) else { return false };
+        !sh.spill_ranges.is_empty()
+            && self.in_progress.iter().any(|a| a.0 == sheet && a.1 != c && sh.spill_ranges.get(&a.1).is_some_and(|r| r.contains(c)))
+    }
+
     /// A formula's previous value for iterative calculation: from the last iteration, else the
     /// value it shows. Blank, and the `#CIRC!` of a loop calculated with iteration off, are 0.
     fn previous(&self, k: Key) -> Value {
@@ -811,6 +822,9 @@ impl Host for PassHost<'_> {
                 }
             }
         }
+        if self.in_own_old_spill(sheet, c) {
+            return Value::Empty;
+        }
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
     }
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
@@ -829,7 +843,7 @@ impl Host for PassHost<'_> {
             }
         }
         for (c, v) in sh.spill.range(range.start..=range.end) {
-            if range.contains(*c) {
+            if range.contains(*c) && !self.in_own_old_spill(sheet, *c) {
                 let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
                 if let Some(slot) = out.get_mut(i)
                     && slot.is_empty()

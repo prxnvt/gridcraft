@@ -4905,3 +4905,24 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     assert_eq!(v(&saved, "B1"), Value::Number(6.0));
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
 }
+
+/// Found by the command-sequence fuzzer: a formula that reads its own spill area (SORT over
+/// K16:O20 spilling into H12:L16) must not read its previous result when it recalculates, so an
+/// edit gives what a full recalculation gives.
+#[test]
+fn a_formula_reading_its_own_spill_area_agrees_with_a_full_recalc() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "H12", "input": "=SORT(K16:O20)"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().spill_ranges.get(&CellRef::parse("H12").unwrap()).map(|r| r.a1()), Some("H12:L16".into()));
+    for (cell, input) in [("K18", "24"), ("K19", "349"), ("K17", "5"), ("K18", "")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        let wb = &s.doc().unwrap().wb;
+        let mut fresh = (**wb).clone();
+        gridcraft_calc::Calc::new().recalc_all(&mut fresh);
+        for c in gridcraft_core::RangeRef::parse("H12:L16").unwrap().iter() {
+            assert_eq!(wb.active().unwrap().value(c), fresh.active().unwrap().value(c), "{c} after {cell}={input}");
+        }
+    }
+    assert_eq!(v(&s, "H12"), Value::Number(5.0));
+    assert_eq!(v(&s, "H13"), Value::Number(349.0));
+}
