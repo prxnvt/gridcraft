@@ -698,8 +698,10 @@ fn write_cell(
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
-        // caches them); Excel itself caches them as #VALUE!.
-        Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
+        // caches them); Excel itself caches them as #VALUE!. The Python errors are the same kind.
+        Value::Error(CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked) => {
+            Value::Error(CellError::Value)
+        }
         v => v,
     };
     // A formula read with dynamic-array metadata keeps it, even where the shape analysis would

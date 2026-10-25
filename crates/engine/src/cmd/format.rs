@@ -665,8 +665,7 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
                         let others: Vec<CellRef> = sh.cells.iter_range(*r).map(|(c, _)| c).filter(|c| *c != r.start).collect();
                         for c in others {
                             if let Some(mut cell) = sh.cells.get(c).cloned() {
-                                cell.value = gridcraft_core::Value::Empty;
-                                cell.formula = None;
+                                cell.clear_content();
                                 sh.set_cell(c, cell);
                             }
                             touched.push((sheet, c));
