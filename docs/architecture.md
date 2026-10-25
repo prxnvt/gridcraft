@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-25 · **Change:** minor (Python cells as data; earlier: engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -125,6 +125,24 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   under (a hidden workbook-scope name of either shape; a visible one is the person's own), and
   `formulas.createFromSelection` skips such labels, unless `force: true` is passed.
 
+## Python cells
+
+A Python cell is a `Cell` whose `py` holds a `model::PyCode`: the code, the return type (an Excel
+value or a Python object, the `0` or `1` of Excel's `PY(code, return_type)`), the last result and a
+stale flag. Its `value` is the cached result, so formulas, display and saving read it like any
+other cell. `model::python` has the text forms: `PY("…"&"…",n)` with literals of at most 255
+characters, the `_xlfn._xlws.` prefix files use, the 8,192-character limit measured on that encoded
+formula (`PyCode::fits`), and the `xl("…")` literals in code, which structural edits rewrite like
+formula references.
+
+Calc treats a Python cell as a graph node that reads nothing: a pass takes its kept result instead
+of evaluating it, so an array result spills, is blocked and unblocked, and reaches its dependents
+through the same code as a formula's. The xlsx reader and writer map Python cells to and from
+`_xlfn._xlws.PY` formulas with cached values; `io::adopt_python` and `io::enforce_python_limits`
+bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
+size). This build runs no Python: `python.set` stores code, and new or changed code shows
+`#BLOCKED!`.
+
 ## Agent control
 
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
@@ -150,6 +168,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, and the limits on open |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

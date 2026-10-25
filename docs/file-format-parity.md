@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (.xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (Python cells in `.xlsx` as Excel writes them, `_xlfn._xlws.PY(…)` with cached values, and in GridCraft JSON, with limits on open; earlier: .xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -93,6 +93,16 @@ Server, Access, ODBC, …), web pages, SharePoint and online services, through P
 GridCraft imports CSV/TSV, JSON and HTML tables only, with no query editor, no connections and no
 refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
+## Python cells
+
+| Where | GridCraft | Notes |
+|---|---|---|
+| `.xlsx` | read and write | Written as Excel writes the PY function, `_xlfn._xlws.PY("…"&"…",n)`: string literals of at most 255 characters and the return type `n`, 0 for an Excel value or 1 for a Python object, with the cached value. A spilling result is written as a dynamic array with its spilled values cached. Read back with or without the `_xlfn.` and `_xlws.` prefixes, so Python cells from Excel open as Python cells with their cached values and spills. Python errors are cached as `#VALUE!`, as Excel caches `#SPILL!` and `#CALC!` |
+| `.xls`, `.xlsb`, `.ods` | read | A `PY("…",0)` or `PY("…",1)` formula read from any format becomes a Python cell; the `.xlsb` and `.ods` imports keep values only, so Python cells there come in as their cached values |
+| GridCraft JSON | read and write | The whole Python cell: code, return type, the last result and the exact error |
+| Limits on open | — | A PY formula longer than Excel's 8,192 characters keeps only its cached value, with a warning. A kept result that is not a well-formed array of at most 1,000,000 cells is dropped, a spill range larger than that is ignored, and results are rebuilt for at most 4,000,000 cells over the workbook. Opening runs nothing |
+| Not kept | — | Python object results stored as rich values (Excel's `richData` parts) come in as their cached values |
+
 ## Work (76–114 h)
 
 | Work | Hours |
@@ -110,6 +120,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Python cells: `.xlsx` reads and writes `_xlfn._xlws.PY("…",0 or 1)` with cached values and spills, other formats adopt PY formulas, GridCraft JSON keeps the whole cell, and opening limits code size, result size and spill ranges |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
 | 2026-10-20 | minor | A workbook theme's major/minor per-script typefaces (`<a:font script="Arab" typeface="…"/>`, also Hebr, Jpan and the rest) are read and written back in file order after `<a:cs>`; they were dropped before. A hostile file is held to 64 entries of 256 characters |

@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-25 · **Change:** minor (the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called; earlier: number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-25 · **Change:** minor (the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: the LAMBDA row lists the recursion limit and its `#NUM!`, and the error a defined name holding an error gives when called; earlier: number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -93,7 +93,8 @@ This improves series preparation; it does not change the model-fitting or season
 | External workbook references (`[Book.xlsx]Sheet1!A1`) | parsed; links dropped on open, no update |
 | Localized function names and `;` separators | **missing** (#45); en-US only |
 | Long flat operator chains (`=A1+A2+…`, `-`, `*`, `/`, `^`, `&`, comparisons) | done: no operand limit below Excel's 8,192-character formula limit (Excel, observed: `=1+1+…` with 4,096 operands is exactly 8,192 characters with the `=` and calculates; one more character is refused). Evaluated (#484), printed (#628), stored, copied, adjusted, saved and reopened without recursing once per operand, on a 1 MiB stack (#916); written to XLSX as plain formulas, not dynamic arrays; Spanish entry accepts them |
-| Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA` done; `#FIELD!`, `#BLOCKED!`, `#CONNECT!`, `#BUSY!`, `#UNKNOWN!`, `#PYTHON!` missing (minor: they come from data types, cloud and Python features) |
+| Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA`, and the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!`, `#BLOCKED!` done; `#FIELD!`, `#CONNECT!`, `#UNKNOWN!` missing (minor: they come from data types and cloud features). `ERROR.TYPE` gives 11 for `#BLOCKED!` as Excel does; Microsoft documents no number for `#PYTHON!`, `#BUSY!` or `#TIMEOUT!`, and GridCraft gives them 19, 20 and 21 |
+| Python in cells | partial: Python cells are stored, edited (`python.set`), copied, moved and saved, and Excel's `_xlfn._xlws.PY` cells open with their cached results; the code doesn't run, so new or changed code shows `#BLOCKED!`. Typing `=PY(` is refused with a pointer to `python.set`, so `PY` stays counted as missing above |
 
 ## Depth (estimated)
 
@@ -123,6 +124,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |
 | 2026-10-23 | minor | Number text coercion (VALUE, arithmetic, typed entry): a dollar sign before accounting parentheses (`$(1,234)`, `$ (5)`) and a percent sign after them (`(5)%`) read as negatives; `(-5)`, `((5))`, `($-5)`, `$5%`, `$(5)%` and dates or times in parentheses are `#VALUE!`, as observed in Excel 365 |
 | 2026-10-23 | minor | INDEX with only a row index on a reference of several rows and columns (`INDEX(A1:C3,2)`, `INDEX(A1:C3,0)`) is `#REF!`, as observed in Excel, so it also fails as a range endpoint and inside other functions; an empty column argument (`INDEX(A1:C3,2,)`) still gives the row. Checked that a column array with one index stays a 1×1 array (`TYPE` 64), which is what Excel returns |
