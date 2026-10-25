@@ -245,6 +245,30 @@ fn insert_function_has_its_title_and_a_working_category_list() {
     assert_ne!(h.state().session.prefs.recent_functions[0], "XLOOKUP");
 }
 
+#[test]
+fn insert_function_lets_tab_reach_the_category_list() {
+    use egui::accesskit::Role;
+    let mut h = formulas_tab(1440.0);
+    click(&mut h, "Insert Function");
+    h.run_steps(3);
+    let search_focused = |h: &Harness| h.get_all_by_role(Role::TextInput).any(|n| n.is_focused());
+    assert!(search_focused(&h), "the search box takes the focus when the dialog opens");
+    h.input_mut().events.push(Event::Text("npv".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.search.as_str()), Some("npv"));
+    // Tab moves on to the category list, and the search box does not take the focus back.
+    h.input_mut().events.extend([key_event(Key::Tab, true), key_event(Key::Tab, false)]);
+    h.run_steps(5);
+    assert!(h.get_by_role(Role::ComboBox).is_focused(), "Tab reaches the category list");
+    assert!(!search_focused(&h));
+    // The list opens from the keyboard (its Date & Time joins the ribbon's).
+    let listed = |h: &Harness| h.get_all_by_label("Date & Time").count();
+    let before = listed(&h);
+    h.input_mut().events.extend([key_event(Key::Space, true), key_event(Key::Space, false)]);
+    h.run_steps(3);
+    assert_eq!(listed(&h), before + 1, "the list is open");
+}
+
 /// The text shapes the last frame painted, with their left edge and width.
 fn painted_text(h: &Harness) -> Vec<(String, f32, f32)> {
     let mut out = Vec::new();

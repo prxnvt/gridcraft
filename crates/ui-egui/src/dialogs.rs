@@ -797,7 +797,9 @@ impl Dialog {
             "insertFunction" => {
                 // A Function Library menu opens it on its own category.
                 let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();
-                Dialog::custom("insertFunction", "Insert Function", json!({"category": category}))
+                let mut d = Dialog::custom("insertFunction", "Insert Function", json!({"category": category}));
+                d.focus_first_field = true;
+                d
             }
             "find" => {
                 let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
@@ -2161,7 +2163,8 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     ui.horizontal(|ui| {
         ui.label(language.tr("Search:"));
         let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(language.tr("e.g. lookup, average, date")));
-        r.request_focus();
+        // Once only, so Tab can move on to the category list.
+        take_first_focus(d, &r);
     });
     // A new search (typed, or set through the control channel) looks through every function, as
     // Excel's does.
