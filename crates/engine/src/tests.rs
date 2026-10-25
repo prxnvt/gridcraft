@@ -5094,6 +5094,7 @@ fn a_script_cannot_switch_windows() {
 }
 
 mod python_cells;
+mod python_commands;
 mod seams;
 
 #[test]

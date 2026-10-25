@@ -1146,6 +1146,7 @@ impl SheetApp {
             None => (current.clone(), false),
         };
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar);
+        ed.code_edit = !replace && sh.cell(at).is_some_and(|c| c.py.is_some());
         ed.window = self.session.active_window();
         ed.locale = locale;
         if replace && self.ui.autocomplete && !ed.is_formula() {
@@ -1207,11 +1208,14 @@ impl SheetApp {
             _ => ed.text.clone(),
         };
         // F2 then Enter (or a file command) on an untouched draft: nothing to write.
-        if !fill_selection && !array && ed.original.as_ref() == Some(&text) {
+        if (ed.code_edit || (!fill_selection && !array)) && ed.original.as_ref() == Some(&text) {
             if dr != 0 || dc != 0 {
                 self.move_after_enter(dr, dc);
             }
             return true;
+        }
+        if ed.code_edit {
+            return self.commit_code_edit(ed, text, dr, dc);
         }
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
             Some(Ok(text)) => text,
@@ -1262,6 +1266,34 @@ impl SheetApp {
         } else {
             self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
         };
+        match r {
+            Ok(_) => {
+                if dr != 0 || dc != 0 {
+                    self.move_after_enter(dr, dc);
+                }
+                self.after_engine();
+                true
+            }
+            Err(e) => {
+                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.editor = Some(ed);
+                self.session.mode = gridcraft_engine::Mode::Edit;
+                false
+            }
+        }
+    }
+
+    /// Commits a changed edit of a Python cell's code through `python.set`, which keeps the cell's
+    /// return type; `cell.set` would replace the Python cell with an ordinary one holding the code
+    /// as text. When the command refuses the code, its message shows and the edit stays open.
+    fn commit_code_edit(&mut self, ed: editor::EditState, code: String, dr: i64, dc: i64) -> bool {
+        // Point mode can leave another sheet active; the edit belongs to the sheet it started on.
+        let r = if self.session.active().is_some_and(|d| d.wb.active_sheet() != ed.sheet) {
+            self.session.run("sheet.activate", json!({"sheet": ed.sheet}))
+        } else {
+            Ok(Json::Null)
+        };
+        let r = r.and_then(|_| self.session.run("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": code})));
         match r {
             Ok(_) => {
                 if dr != 0 || dc != 0 {

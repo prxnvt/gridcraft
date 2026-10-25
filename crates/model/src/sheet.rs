@@ -202,6 +202,19 @@ impl Sheet {
         self.spill_ranges.iter().find(|(anchor, range)| **anchor != c && range.contains(c)).map(|(anchor, _)| *anchor)
     }
 
+    /// Removes the spilled values inside `r`. The work is bounded by the values stored, not by
+    /// the size of `r`, so a range from a file that claims the whole sheet costs no more than the
+    /// values it holds.
+    pub fn clear_spill(&mut self, r: RangeRef) {
+        if r.count() <= self.spill.len() as u64 {
+            for c in r.iter() {
+                self.spill.remove(&c);
+            }
+        } else {
+            self.spill.retain(|c, _| !r.contains(*c));
+        }
+    }
+
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
         match self.cells.get(c) {
