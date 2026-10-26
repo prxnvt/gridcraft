@@ -1,10 +1,16 @@
-//! Python in cells: the worker that runs the user's own Python, and the protocol to it.
+//! Python in cells: the worker that runs the user's own Python, and the client that drives it.
 //!
 //! - [`interp`] finds an interpreter (Python 3.11 or newer).
 //! - `shim.py` is what that interpreter runs: it reads requests, keeps the globals the cells
 //!   share, gives each cell its `xl()` inputs and converts the result.
 //! - [`protocol`] is the JSON-lines protocol between them, with a cap on every field.
-//! - `process::ProcessTransport` starts the interpreter (not in the web build).
+//! - [`client::Client`] runs one request at a time with an absolute deadline, and kills the
+//!   worker at any limit or at anything the protocol doesn't allow.
+//! - [`process::ProcessTransport`] starts the interpreter; [`fake::FakeTransport`] stands in for
+//!   it in tests on every system.
+//!
+//! The web build has no processes: its [`client::Client`] reports every request as failed to
+//! start, and detection finds nothing.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -13,8 +19,17 @@ pub mod protocol;
 pub mod run;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod client;
+#[cfg(target_arch = "wasm32")]
+#[path = "client_web.rs"]
+pub mod client;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod fake;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod process;
 
+pub use client::Client;
 pub use protocol::{Input, Output, PyError, SelfTest};
 pub use run::{Busy, Limits, Outcome, RunResult, Transport};
 

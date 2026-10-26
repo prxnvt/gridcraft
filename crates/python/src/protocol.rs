@@ -94,7 +94,7 @@ impl Request {
         out
     }
 
-    /// Reads a request line (the worker's side).
+    /// Reads a request line (the worker's side, and the fake worker in tests).
     pub fn parse(line: &[u8]) -> Result<Request, String> {
         let raw: RawRequest = serde_json::from_slice(line).map_err(|e| e.to_string())?;
         match raw.kind {
@@ -158,7 +158,7 @@ impl Reply {
         raw.validate()
     }
 
-    /// The reply as one line, with its newline (the worker's side).
+    /// The reply as one line, with its newline (the fake worker in tests writes these).
     pub fn to_line(&self) -> Vec<u8> {
         let mut out = match serde_json::to_vec(&WireReply(self)) {
             Ok(v) => v,

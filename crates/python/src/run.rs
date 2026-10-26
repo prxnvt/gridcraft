@@ -1,4 +1,5 @@
-//! What a request produced, the limits it ran under, and the pipe to a worker.
+//! What a request produced, the limits it ran under, and the pipe to a worker: shared by the
+//! client and its web stand-in.
 
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -131,7 +132,8 @@ pub trait MemoryProbe: Send {
     fn interval(&self) -> Duration;
 }
 
-/// Starts and stops workers.
+/// Starts and stops workers. The real one runs the interpreter (`ProcessTransport`); the fake one
+/// (`FakeTransport`) runs a script on a thread, so tests run on every system without Python.
 pub trait Transport: Send {
     /// Starts a worker (stopping the one before, if any) and returns its pipes.
     fn start(&mut self) -> Result<Pipes, String>;
