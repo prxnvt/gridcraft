@@ -32,6 +32,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod python_card;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -870,6 +871,7 @@ impl SheetApp {
                 }
                 Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
             }
+            "ui.pythonCard" => python_card::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)

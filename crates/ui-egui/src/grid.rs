@@ -153,6 +153,8 @@ pub struct GridState {
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
     pub context_menu: Option<Pos2>,
+    /// The Python cell whose card is open (its cached result's type and preview).
+    pub py_card: Option<crate::python_card::Card>,
     /// The frame a right-click opened `context_menu` in: that click's own press doesn't close it.
     pub context_menu_frame: u64,
     /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.
@@ -838,7 +840,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
     // Interaction.
-    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
+    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu, app.grid.py_card);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
         app.grid.touch_pan = false;
@@ -865,6 +867,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     fill_options_tag(app, ui, &geo, sh);
     object_menu(app, ui);
     error_check_tag(app, ui, &geo, sh);
+    crate::python_card::show(app, ui, &geo, sh, previous_popups.4 == app.grid.py_card);
     let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.
@@ -1251,10 +1254,16 @@ pub(crate) fn paint_quadrant(
             }
         }
         let mut text_left = rect.left();
+        // A Python cell carries a PY tag at its start; its text goes in the rest of the cell.
+        let python = sh.cell(c).is_some_and(|x| x.py.is_some());
+        if python && let Some(tag) = crate::python_card::tag_rect(*rect, text_left, z, lk.style.align.v) {
+            crate::python_card::paint_tag(p, tag, t);
+            text_left = tag.right();
+        }
         if let Some(l) = cfl
             && let Some((set, idx)) = &l.icon
         {
-            let r = Rect::from_min_size(pos2(rect.left() + 2.0, rect.center().y - 6.0 * z), vec2(12.0 * z, 12.0 * z));
+            let r = Rect::from_min_size(pos2(text_left + 2.0, rect.center().y - 6.0 * z), vec2(12.0 * z, 12.0 * z));
             paint_cf_icon(p, r, set, *idx);
             text_left += 15.0 * z;
         }
@@ -1279,7 +1288,9 @@ pub(crate) fn paint_quadrant(
         }
         // Align and clip header text inside the content area, away from the dropdown.
         let filter_space = sh.filter_button_space(c) * z;
-        let text_rect = Rect::from_min_max(rect.min, pos2((rect.right() - filter_space).max(rect.left()), rect.bottom()));
+        // A Python cell's text stays clear of its PY tag.
+        let text_min = if python { pos2(text_left.min(rect.right()), rect.top()) } else { rect.min };
+        let text_rect = Rect::from_min_max(text_min, pos2((rect.right() - filter_space).max(text_min.x), rect.bottom()));
         let rect = &text_rect;
         let st = &lk.style;
         let size = st.font.size * 96.0 / 72.0 * z;
@@ -1390,7 +1401,7 @@ pub(crate) fn paint_quadrant(
                     cc += 1;
                 }
             }
-            if matches!(halign, HAlign::Right | HAlign::Center) {
+            if matches!(halign, HAlign::Right | HAlign::Center) && !python {
                 let mut cc = c.col;
                 while rect.right() - left < w + 2.0 * pad && cc > 0 && empty_ok(CellRef::new(c.row, cc - 1)) && cc + 20 > c0 {
                     cc -= 1;
@@ -1417,6 +1428,8 @@ pub(crate) fn paint_quadrant(
             HAlign::Right => rect.right() - pad - w - indent,
             _ => text_left + pad + indent,
         };
+        // Text too wide for a Python cell starts after its PY tag rather than over it.
+        let x = if python { x.max(text_left + pad) } else { x };
         let gh = galley.size().y;
         let y = cell_text_y(st.align.v, *rect, gh, z);
         let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
@@ -2403,6 +2416,17 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         // Filter dropdown buttons.
         if is_filter_button(sh, geo, p) {
             app.grid.filter_menu = Some((c.col, c.row, geo.mirror_pos(p)));
+            return;
+        }
+        // A Python cell's PY tag selects the cell and opens its card.
+        if primary_clicked
+            && app.editor.is_none()
+            && app.dialog.is_none()
+            && !mods.any()
+            && crate::python_card::tag_at(geo, wb, sh, c).is_some_and(|tag| tag.contains(p))
+        {
+            let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
+            let _ = crate::python_card::open(app);
             return;
         }
         // A dialog's formula box in point mode (New Formatting Rule) takes the reference; the
@@ -3423,6 +3447,10 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let resp = egui::Area::new(egui::Id::unique("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
+            // On a Python cell: its return type.
+            if crate::python_card::menu_items(app, ui) {
+                close = true;
+            }
             let insert_copied = insert_copied_item(app);
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
