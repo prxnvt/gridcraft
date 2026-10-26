@@ -1362,6 +1362,16 @@ impl SheetApp {
         self.session.mode = gridcraft_engine::Mode::Edit;
     }
 
+    /// Formulas › Insert Python: Python mode on the active cell. An entry in progress becomes
+    /// code; Python mode already on stays on.
+    pub fn insert_python(&mut self) {
+        match &self.editor {
+            Some(ed) if ed.python => {}
+            Some(_) => self.toggle_python_mode(),
+            None => self.begin_python_edit(),
+        }
+    }
+
     /// Commits a Python mode edit through `python.set`, on the sheet the edit started on. When the
     /// command refuses the code (longer than a cell holds, a protected cell), its message shows
     /// and the edit stays open with the code as typed.

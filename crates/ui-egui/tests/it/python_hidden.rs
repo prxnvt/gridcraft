@@ -1,6 +1,6 @@
 //! A Python cell formatted Hidden on a protected sheet keeps its code out of view, as a hidden
 //! formula does: the formula bar shows nothing, and F2, a double-click, the formula bar,
-//! Ctrl+Alt+Shift+P and the PY badge start no edit that would show the code, or
+//! Ctrl+Alt+Shift+P, the PY badge and Insert Python start no edit that would show the code, or
 //! that would write blank code over it.
 
 use egui::{Event, Key, Modifiers, vec2};
@@ -110,6 +110,8 @@ fn python_mode_starts_no_edit_on_hidden_code() {
     h.get_by_label("Python Mode").click();
     h.run_steps(3);
     assert_eq!(editor(&h), None, "the PY badge");
+    h.state_mut().insert_python();
+    assert_eq!(editor(&h), None, "Insert Python");
     assert_eq!(h.state_mut().run("ui.pythonMode", json!({"on": true})).unwrap()["on"], false, "ui.pythonMode");
     assert!(!bar_shows_code(&h));
     // Ctrl+Enter with no edit open writes nothing over the code.
