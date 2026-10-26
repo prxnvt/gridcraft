@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-25 · **Change:** minor (Python cells as data; earlier: engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-26 · **Change:** minor (Python cells in the interface; earlier: Python cells as data; earlier: engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -141,7 +141,14 @@ through the same code as a formula's. The xlsx reader and writer map Python cell
 `_xlfn._xlws.PY` formulas with cached values; `io::adopt_python` and `io::enforce_python_limits`
 bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
 size). This build runs no Python: `python.set` stores code, and new or changed code shows
-`#BLOCKED!`.
+`#BLOCKED!`. `python.output` switches a cell's return type and lays its kept result out again.
+
+In ui-egui, Python mode is a state of the shared cell editor (`EditState::python`) that edits in
+the formula bar only, through `code_editor::code_field`: the code editor's in-order key handling
+(`apply_in_order_until`) with stop keys for commit, cancel and leaving the mode. Every commit path
+of a Python edit runs `python.set`. `python_card.rs` holds the PY tag (painted in the grid's
+logical coordinates, so the grid's mirroring places it on right-to-left sheets), the card
+(`ui.pythonCard`) and the cell menu's return-type items.
 
 ## Agent control
 
@@ -168,6 +175,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Python cells in the interface: Python mode on the shared editor, `code_field` and its stop keys, `python_card.rs`, `python.output` |
 | 2026-10-25 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, and the limits on open |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
