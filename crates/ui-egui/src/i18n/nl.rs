@@ -152,6 +152,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Formules weergeven",
         "Error Checking" => "Foutopsporing",
         "Circular References" => "Kringverwijzingen",
+        "Python Mode" => "Python-modus",
+        "Python Object" => "Python-object",
+        "Excel Value" => "Excel-waarde",
+        "This version of GridCraft stores Python code but does not run it." => {
+            "Deze versie van GridCraft bewaart Python-code, maar voert die niet uit."
+        }
+        "Insert\nPython" => "Python\ninvoegen",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Python invoegen (Ctrl+Alt+Shift+P)",
         "Evaluate Formula" => "Formule evalueren",
         "Watch Window" => "Bewakingsvenster",
         "Calculation\nOptions" => "Berekenings-\nopties",

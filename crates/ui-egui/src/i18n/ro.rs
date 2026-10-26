@@ -154,6 +154,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Afișare formule",
         "Error Checking" => "Verificare erori",
         "Circular References" => "Referințe circulare",
+        "Python Mode" => "Mod Python",
+        "Python Object" => "Obiect Python",
+        "Excel Value" => "Valoare Excel",
+        "This version of GridCraft stores Python code but does not run it." => {
+            "Această versiune GridCraft stochează codul Python, dar nu îl rulează."
+        }
+        "Insert\nPython" => "Inserare\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Inserare Python (Ctrl+Alt+Shift+P)",
         "Evaluate Formula" => "Evaluare formulă",
         "Watch Window" => "Fereastră de urmărire",
         "Calculation\nOptions" => "Opțiuni de\ncalcul",
