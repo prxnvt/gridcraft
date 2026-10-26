@@ -956,6 +956,23 @@ fn spill_and_calc_errors_are_cached_as_value_errors() {
     }
 }
 
+/// The Python errors aren't error codes of the file format either: they are cached as `#VALUE!`.
+#[test]
+fn python_errors_are_cached_as_value_errors() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let errors = [CellError::Python, CellError::Busy, CellError::Timeout, CellError::Blocked, CellError::Connect];
+    for (row, e) in errors.iter().enumerate() {
+        s.cells.set(at(&format!("A{}", row + 1)), Cell { value: Value::Error(*e), ..Cell::formula(Formula::new("1/0")) });
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    for e in errors {
+        assert!(!xml.contains(e.as_str()), "{e} in {xml}");
+    }
+    assert_eq!(xml.matches("<v>#VALUE!</v>").count(), errors.len(), "{xml}");
+}
+
 /// `CT_IconSet` needs one `cfvo` per icon (at least two); a rule without stored thresholds
 /// gets Excel's defaults, one without the lower bound gets it prepended (#235).
 #[test]

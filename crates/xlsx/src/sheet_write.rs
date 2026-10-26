@@ -774,9 +774,9 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
         // caches them); Excel itself caches them as #VALUE!. The Python errors are the same kind.
-        Value::Error(CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked) => {
-            Value::Error(CellError::Value)
-        }
+        Value::Error(
+            CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked | CellError::Connect,
+        ) => Value::Error(CellError::Value),
         v => v,
     };
     // A formula read with dynamic-array metadata keeps it, even where the shape analysis would

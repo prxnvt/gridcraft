@@ -436,8 +436,9 @@ fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
             // A file caches the Python errors as #VALUE! (they aren't error codes of the file
             // format), in a Python cell and in the formulas that read one; reading it back runs
             // nothing.
-            let python_error = matches!(va, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked))
-                && vb == Value::Error(CellError::Value);
+            let python_error =
+                matches!(va, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked | CellError::Connect))
+                    && vb == Value::Error(CellError::Value);
             if !same_value(&va, &vb) && !python_error {
                 let f = x.cell(c).and_then(|c| c.formula.as_ref()).map(|f| format!(" (formula ={})", f.text)).unwrap_or_default();
                 return Some(format!("{}!{c}{f}: {va:?} in memory, {vb:?} after {what}", x.name));
