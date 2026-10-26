@@ -89,3 +89,65 @@ fn set_over_a_spilling_formula_takes_the_spill_away() {
     assert_eq!(v(&s, "A3"), Value::Empty);
     assert!(s.doc().unwrap().wb.sheet(0).unwrap().spill_ranges.is_empty());
 }
+
+/// A cached result as a file would have kept it on the cell: `[[1], [2], [3]]`, a list.
+fn cache_list(s: &mut crate::Session, cell: &str) {
+    let at = gridcraft_core::CellRef::parse(cell).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let sh = wb.sheet_mut(0).unwrap();
+    let py = std::sync::Arc::make_mut(sh.cells.get_mut(at).unwrap().py.as_mut().unwrap());
+    let arr = gridcraft_core::Array::new(3, 1, vec![1.0.into(), 2.0.into(), 3.0.into()]).map(Value::from).unwrap();
+    py.output = Some(gridcraft_model::PyOutput { value: arr, type_name: "list".into(), preview: "[1, 2, 3]".into(), convertible: true });
+}
+
+#[test]
+fn output_switches_the_return_type_and_lays_the_result_out_again() {
+    let mut s = s();
+    set(&mut s, "A1", "[1, 2, 3]");
+    cache_list(&mut s, "A1");
+    // The cached list shows as values once the cell is laid out again.
+    let r = s.execute("python.output", json!({"cell": "A1", "mode": "value"})).unwrap();
+    assert_eq!(r["output"], "value");
+    let r = s.execute("python.output", json!({"cell": "A1", "mode": "object"})).unwrap();
+    assert_eq!(r["output"], "object");
+    assert_eq!(v(&s, "A1"), Value::text("list"), "a Python object shows its type name");
+    assert_eq!(v(&s, "A3"), Value::Empty, "and doesn't spill");
+    // Without `mode` it switches back: the list spills again.
+    s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    let r = s.execute("python.output", json!({})).unwrap();
+    assert_eq!(r["output"], "value");
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(v(&s, "A3"), Value::Number(3.0));
+    assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["python"]["code"], "[1, 2, 3]", "the code stays");
+    // Each switch is one undo step.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("list"));
+    assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["python"]["output"], "object");
+    // The mode it already has changes nothing and adds no undo step.
+    let undo = s.execute("history.list", json!({})).unwrap()["undo"].as_array().map(Vec::len);
+    s.execute("python.output", json!({"cell": "A1", "mode": "object"})).unwrap();
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"].as_array().map(Vec::len), undo);
+    // A cell with no result keeps showing #BLOCKED!.
+    set(&mut s, "C1", "x = 1");
+    s.execute("python.output", json!({"cell": "C1"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::Error(CellError::Blocked));
+    assert_eq!(s.execute("cell.get", json!({"cell": "C1"})).unwrap()["python"]["output"], "object");
+}
+
+#[test]
+fn output_refuses_cells_without_python_and_bad_modes() {
+    let mut s = s();
+    // Empty params: the active cell, which holds no Python code.
+    let e = s.execute("python.output", json!({})).unwrap_err();
+    assert!(e.to_string().contains("isn't a Python cell"), "{e}");
+    s.execute("cell.set", json!({"cell": "B1", "input": "=1+1"})).unwrap();
+    assert!(s.execute("python.output", json!({"cell": "B1"})).is_err());
+    set(&mut s, "A1", "1");
+    for p in [json!({"cell": "A1", "mode": "sideways"}), json!({"cell": "A1", "mode": 1}), json!({"cell": "nowhere"})] {
+        assert!(s.execute("python.output", p.clone()).is_err(), "{p}");
+    }
+    assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["python"]["output"], "value");
+    // python.set refuses a return type that isn't text too, rather than ignoring it.
+    assert!(s.execute("python.set", json!({"cell": "A1", "code": "1", "output": true})).is_err());
+}
