@@ -1,0 +1,343 @@
+# GridCraft's Python worker, run by the user's own Python (3.11 or newer).
+#
+# GridCraft starts it as `python -I -S -E shim.py` with an empty environment, from a private copy
+# of this file. It speaks the JSON-lines protocol in crates/python/src/protocol.rs: requests arrive
+# one per line on standard input; each gets exactly one reply line on standard output. This file
+# is data that the user's interpreter runs; it is the one file in the repository that is not Rust.
+#
+# Everything lives inside one function, whose name is removed from the module before it runs, so
+# the cells' code finds no helpers in `__main__`, and the protocol's pipes are held in closures.
+# That keeps honest code away from the protocol; it can't stop code that goes looking, which is
+# why GridCraft treats every line from here as untrusted.
+
+
+def _gridcraft_worker():
+    import ast
+    import builtins
+    import io
+    import json
+    import math
+    import os
+    import sys
+    import sysconfig
+    import types
+
+    globals().pop("_gridcraft_worker", None)
+
+    # The caps of protocol.rs. GridCraft kills the worker for a line that breaks one, so the shim
+    # keeps its replies within them.
+    MAX_LINE_BYTES = 67108864
+    MAX_TEXT_BYTES = 131072
+    MAX_MESSAGE_BYTES = 8192
+    MAX_TYPE_NAME_BYTES = 256
+    MAX_PREVIEW_CHARS = 255
+    MAX_STDOUT_BYTES = 1048576
+    MAX_ARRAY_CELLS = 1000000
+
+    ERRORS = frozenset(
+        ("#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA", "#SPILL!",
+         "#CALC!", "#PYTHON!", "#BUSY!", "#TIMEOUT!", "#BLOCKED!", "#CONNECT!")
+    )
+
+    # Installed packages, without `site` (which would run .pth files): the interpreter's own
+    # site-packages folders go on the path directly.
+    try:
+        paths = sysconfig.get_paths()
+    except Exception:
+        paths = {}
+    for key in ("purelib", "platlib"):
+        p = paths.get(key)
+        if p and p not in sys.path and os.path.isdir(p):
+            sys.path.append(p)
+
+    # The protocol's pipes are private copies. Standard input becomes an empty pipe, so input()
+    # can't read requests, and standard output goes to standard error, so text that C code or a
+    # child process prints can't break a line.
+    proto_in = os.fdopen(os.dup(0), "rb")
+    proto_out = os.fdopen(os.dup(1), "wb")
+    r, w = os.pipe()
+    os.close(w)
+    os.dup2(r, 0)
+    os.close(r)
+    os.dup2(2, 1)
+    sys.stdin = io.StringIO("")
+    encode = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode
+    decode = json.JSONDecoder().decode
+    try:
+        import signal
+
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
+
+    def send(msg):
+        try:
+            data = encode(msg).encode("utf-8", "replace")
+        except Exception:
+            data = None
+        if data is None or len(data) > MAX_LINE_BYTES:
+            data = encode(done_error(msg.get("id"), "The result is too large to send to GridCraft", None)).encode("utf-8")
+        proto_out.write(data + b"\n")
+        proto_out.flush()
+
+    def done_error(rid, message, line, stdout=""):
+        err = {"message": cut_bytes(message, MAX_MESSAGE_BYTES)}
+        if isinstance(line, int) and not isinstance(line, bool) and 0 <= line <= 4294967295:
+            err["line"] = line
+        msg = {"type": "done", "id": rid, "ok": False, "error": err}
+        if stdout:
+            msg["stdout"] = stdout
+        return msg
+
+    def cut_bytes(s, n):
+        b = s.encode("utf-8", "replace")
+        return s if len(b) <= n else b[:n].decode("utf-8", "ignore")
+
+    def cut_chars(s, n):
+        return s if len(s) <= n else s[: n - 3] + "..."
+
+    class TooBig(Exception):
+        pass
+
+    # Excel's error values, as Python sees them: xl() gives them for error cells, and a result
+    # that holds one becomes that error again.
+    class ExcelError:
+        __slots__ = ("text",)
+
+        def __init__(self, text):
+            self.text = text
+
+        def __repr__(self):
+            return self.text
+
+        __str__ = __repr__
+
+        def __eq__(self, other):
+            return isinstance(other, ExcelError) and other.text == self.text
+
+        def __hash__(self):
+            return hash(self.text)
+
+    ExcelError.__module__ = "gridcraft"
+
+    # Inputs: wire values to Python.
+    def to_py(v):
+        if isinstance(v, float):
+            return int(v) if v.is_integer() and abs(v) < 2**53 else v
+        if v is None or isinstance(v, (bool, int, str)):
+            return v
+        if isinstance(v, dict):
+            if "error" in v:
+                return ExcelError(str(v["error"]))
+            a = v.get("array")
+            if isinstance(a, dict):
+                rows, cols, data = a.get("rows", 0), a.get("cols", 0), a.get("data", [])
+                return [[to_py(x) for x in data[i * cols:(i + 1) * cols]] for i in range(rows)]
+        return None
+
+    state = {"inputs": None}
+
+    def xl(reference, headers=False):
+        """xl(reference): the value of a cell, or a range as a list of rows. The reference must be
+        written as text in the cell's code, such as xl("A1:B5")."""
+        inputs = state["inputs"]
+        if inputs is None:
+            raise RuntimeError("xl() only works while a cell runs")
+        if not isinstance(reference, str):
+            raise TypeError('xl() takes a reference written as text, such as xl("A1:B5")')
+        entry = inputs.get(reference)
+        if not isinstance(entry, dict):
+            raise ValueError(
+                'xl("%s"): only references written as text in this cell\'s code can be read' % cut_chars(reference, 100)
+            )
+        return to_py(entry.get("value"))
+
+    # Results: Python to wire values.
+    NOT_SCALAR = object()
+
+    def number(x):
+        try:
+            f = float(x)
+        except (OverflowError, ValueError, TypeError):
+            return {"error": "#NUM!"}
+        return f if math.isfinite(f) else {"error": "#NUM!"}
+
+    def scalar(v):
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return number(v)
+        if isinstance(v, str):
+            if len(v) * 4 > MAX_TEXT_BYTES and len(str.encode(v, "utf-8", "replace")) > MAX_TEXT_BYTES:
+                raise TooBig("A text result can have at most %d bytes" % MAX_TEXT_BYTES)
+            return str(v)
+        if isinstance(v, ExcelError):
+            return {"error": v.text} if v.text in ERRORS else {"error": "#VALUE!"}
+        return NOT_SCALAR
+
+    def safe_repr(v):
+        try:
+            return str(repr(v))
+        except BaseException:
+            return "<%s object>" % type_name(v)
+
+    def type_name(v):
+        try:
+            return cut_bytes(str(type(v).__name__), MAX_TYPE_NAME_BYTES)
+        except BaseException:
+            return "object"
+
+    def element(x):
+        s = scalar(x)
+        return cut_chars(safe_repr(x), MAX_PREVIEW_CHARS) if s is NOT_SCALAR else s
+
+    def grid(rows):
+        cols = max((len(r) for r in rows), default=0)
+        if cols == 0:
+            return {"error": "#CALC!"}
+        if len(rows) * cols > MAX_ARRAY_CELLS:
+            raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
+        data = []
+        for r in rows:
+            data.extend(element(x) for x in r)
+            # Short rows are padded with #N/A, as Excel pads arrays.
+            data.extend({"error": "#N/A"} for _ in range(cols - len(r)))
+        return {"array": {"rows": len(rows), "cols": cols, "data": data}}
+
+    def output(v):
+        s = scalar(v)
+        if s is not NOT_SCALAR:
+            return s
+        if isinstance(v, (list, tuple)):
+            if not v:
+                return {"error": "#CALC!"}
+            if all(isinstance(r, (list, tuple)) for r in v):
+                return grid(v)
+            # A flat list is one column.
+            if len(v) > MAX_ARRAY_CELLS:
+                raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
+            return grid([[x] for x in v])
+        return {"object": {"typeName": type_name(v), "preview": cut_chars(safe_repr(v), MAX_PREVIEW_CHARS)}}
+
+    # Printed output, kept up to the cap.
+    class Capture(io.TextIOBase):
+        CUT = "\n[output cut off]\n"
+
+        def __init__(self):
+            self.parts = []
+            self.left = MAX_STDOUT_BYTES - len(self.CUT)
+            self.cut = False
+
+        def writable(self):
+            return True
+
+        def write(self, s):
+            s = str(s)
+            if self.cut:
+                return len(s)
+            b = s.encode("utf-8", "replace")
+            if len(b) <= self.left:
+                self.parts.append(s)
+                self.left -= len(b)
+            else:
+                self.parts.append(b[: self.left].decode("utf-8", "ignore"))
+                self.parts.append(self.CUT)
+                self.left = 0
+                self.cut = True
+            return len(s)
+
+        def text(self):
+            return "".join(self.parts)
+
+    def error_line(e):
+        if isinstance(e, SyntaxError) and e.filename == "<cell>":
+            return e.lineno
+        line = None
+        tb = e.__traceback__
+        while tb is not None:
+            if tb.tb_frame.f_code.co_filename == "<cell>":
+                line = tb.tb_lineno
+            tb = tb.tb_next
+        return line
+
+    def error_message(e):
+        name = type_name(e)
+        if isinstance(e, SyntaxError):
+            return "%s: %s" % (name, e.msg)
+        try:
+            text = str(e)
+        except BaseException:
+            text = ""
+        return "%s: %s" % (name, text) if text else name
+
+    def compile_cell(code):
+        tree = ast.parse(code, "<cell>", "exec")
+        last = None
+        if tree.body and isinstance(tree.body[-1], ast.Expr):
+            last = ast.Expression(tree.body.pop().value)
+        body = compile(tree, "<cell>", "exec")
+        return body, (compile(last, "<cell>", "eval") if last is not None else None)
+
+    namespace = {}
+
+    def fresh():
+        # The cells share one `__main__`, as in Excel; Reset starts a new one.
+        main = types.ModuleType("__main__")
+        main.__dict__["__builtins__"] = builtins
+        main.__dict__["xl"] = xl
+        sys.modules["__main__"] = main
+        namespace["globals"] = main.__dict__
+
+    def run(req):
+        rid = req.get("id")
+        code = req.get("code")
+        inputs = req.get("inputs")
+        capture = Capture()
+        saved = sys.stdout
+        try:
+            if not isinstance(code, str):
+                raise TypeError("no code")
+            state["inputs"] = inputs if isinstance(inputs, dict) else {}
+            sys.stdout = capture
+            try:
+                body, last = compile_cell(code)
+                g = namespace["globals"]
+                exec(body, g)
+                value = eval(last, g) if last is not None else None
+            finally:
+                sys.stdout = saved
+                state["inputs"] = None
+            msg = {"type": "done", "id": rid, "ok": True, "value": output(value)}
+            if capture.text():
+                msg["stdout"] = capture.text()
+            return msg
+        except TooBig as e:
+            return done_error(rid, str(e), None, capture.text())
+        except BaseException as e:  # noqa: BLE001 - whatever the cell raised is its result
+            return done_error(rid, error_message(e), error_line(e), capture.text())
+
+    fresh()
+    send({"type": "ready", "selfTest": {"status": "notChecked"}})
+    while True:
+        line = proto_in.readline()
+        if not line:
+            break
+        try:
+            req = decode(line.decode("utf-8"))
+        except ValueError:
+            break
+        kind = req.get("type") if isinstance(req, dict) else None
+        if kind == "run":
+            send(run(req))
+        elif kind == "reset":
+            fresh()
+            send({"type": "done", "id": req.get("id"), "ok": True, "value": None})
+        else:
+            break
+    # GridCraft closed the pipe: stop now, without waiting for threads the cells started.
+    os._exit(0)
+
+
+_gridcraft_worker()

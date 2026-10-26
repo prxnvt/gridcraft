@@ -20,7 +20,8 @@
 //! result, `{"object":{"typeName":"…","preview":"…"}}`.
 //!
 //! Everything the worker writes is untrusted: [`Reply::parse`] refuses a line that breaks the
-//! shape or goes over any cap below, and the client kills the worker for it.
+//! shape or goes over any cap below, and the client kills the worker for it. `shim.py` holds the
+//! same caps and keeps its own output within them.
 
 use std::collections::BTreeMap;
 use std::fmt;

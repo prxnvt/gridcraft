@@ -3,7 +3,7 @@ name = "gridcraft-python"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GridCraft Python cells: the JSON-lines protocol between GridCraft and the worker that runs Python"
+description = "GridCraft Python cells: interpreter detection, the worker shim and its JSON-lines protocol"
 
 [lints]
 workspace = true

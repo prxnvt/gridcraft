@@ -204,3 +204,24 @@ fn inputs_never_carry_objects_and_odd_numbers_become_errors() {
     assert_eq!(inputs["A1"].value, Value::Error(CellError::Num));
     assert_eq!(inputs["B1:B2"].value, array(2, 1, vec![Value::Error(CellError::Value), Value::Error(CellError::Num)]));
 }
+
+/// The shim keeps its output within the same caps, so a change on one side must be made on both.
+#[test]
+fn the_shim_has_the_same_caps() {
+    let shim = include_str!("../shim.py");
+    for (name, value) in [
+        ("MAX_LINE_BYTES", MAX_LINE_BYTES),
+        ("MAX_TEXT_BYTES", MAX_TEXT_BYTES),
+        ("MAX_MESSAGE_BYTES", MAX_MESSAGE_BYTES),
+        ("MAX_TYPE_NAME_BYTES", MAX_TYPE_NAME_BYTES),
+        ("MAX_PREVIEW_CHARS", MAX_PREVIEW_CHARS),
+        ("MAX_STDOUT_BYTES", MAX_STDOUT_BYTES),
+        ("MAX_ARRAY_CELLS", MAX_ARRAY_CELLS),
+    ] {
+        assert!(shim.contains(&format!("    {name} = {value}\n")), "{name} = {value} in shim.py");
+    }
+    // And knows every error value.
+    for e in CellError::ALL {
+        assert!(shim.contains(&format!("\"{}\"", e.as_str())), "{e} in shim.py");
+    }
+}
