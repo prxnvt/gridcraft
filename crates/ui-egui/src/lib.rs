@@ -861,6 +861,15 @@ impl SheetApp {
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
             }
+            "ui.pythonMode" => {
+                // `{"on": true}` starts Python mode on the active cell (or switches the edit in
+                // progress to it), `{"on": false}` leaves it; without `on` it switches.
+                let on = self.editor.as_ref().is_some_and(|e| e.python);
+                if p.get("on").and_then(Json::as_bool).unwrap_or(!on) != on {
+                    self.toggle_python_mode();
+                }
+                Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
+            }
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
@@ -1132,6 +1141,19 @@ impl SheetApp {
         if text.is_none() && sh.cell_pictures.contains_key(&at) {
             return;
         }
+        // Editing a Python cell edits its code, in Python mode; typing replaces it as in Excel.
+        if text.is_none()
+            && let Some(py) = sh.cell(at).and_then(|c| c.py.as_deref())
+        {
+            // Code hidden on a protected sheet isn't loaded into an edit, and a blank edit would
+            // write over it on commit: no edit starts. Typing still replaces the cell.
+            if gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+                return;
+            }
+            self.editor = Some(editor::EditState::python(d.uid, d.wb.active_sheet(), at, py.code.clone()));
+            self.session.mode = gridcraft_engine::Mode::Edit;
+            return;
+        }
         let locale = self.ui.language.formula_locale();
         let current = if sh.cell_pictures.contains_key(&at) {
             String::new()
@@ -1146,7 +1168,6 @@ impl SheetApp {
             None => (current.clone(), false),
         };
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar);
-        ed.code_edit = !replace && sh.cell(at).is_some_and(|c| c.py.is_some());
         ed.window = self.session.active_window();
         ed.locale = locale;
         if replace && self.ui.autocomplete && !ed.is_formula() {
@@ -1201,6 +1222,15 @@ impl SheetApp {
     }
 
     fn commit_edit_here(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
+        // Python code goes in through `python.set`, whichever way the edit is committed (the
+        // formula bar's Enter button, a click on the sheet).
+        if self.editor.as_ref().is_some_and(|e| e.python) {
+            let ok = self.commit_python_edit();
+            if ok && (dr != 0 || dc != 0) {
+                self.move_after_enter(dr, dc);
+            }
+            return ok;
+        }
         let Some(ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
         let text = match &ed.completion {
@@ -1208,14 +1238,11 @@ impl SheetApp {
             _ => ed.text.clone(),
         };
         // F2 then Enter (or a file command) on an untouched draft: nothing to write.
-        if (ed.code_edit || (!fill_selection && !array)) && ed.original.as_ref() == Some(&text) {
+        if !fill_selection && !array && ed.original.as_ref() == Some(&text) {
             if dr != 0 || dc != 0 {
                 self.move_after_enter(dr, dc);
             }
             return true;
-        }
-        if ed.code_edit {
-            return self.commit_code_edit(ed, text, dr, dc);
         }
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
             Some(Ok(text)) => text,
@@ -1283,34 +1310,6 @@ impl SheetApp {
         }
     }
 
-    /// Commits a changed edit of a Python cell's code through `python.set`, which keeps the cell's
-    /// return type; `cell.set` would replace the Python cell with an ordinary one holding the code
-    /// as text. When the command refuses the code, its message shows and the edit stays open.
-    fn commit_code_edit(&mut self, ed: editor::EditState, code: String, dr: i64, dc: i64) -> bool {
-        // Point mode can leave another sheet active; the edit belongs to the sheet it started on.
-        let r = if self.session.active().is_some_and(|d| d.wb.active_sheet() != ed.sheet) {
-            self.session.run("sheet.activate", json!({"sheet": ed.sheet}))
-        } else {
-            Ok(Json::Null)
-        };
-        let r = r.and_then(|_| self.session.run("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": code})));
-        match r {
-            Ok(_) => {
-                if dr != 0 || dc != 0 {
-                    self.move_after_enter(dr, dc);
-                }
-                self.after_engine();
-                true
-            }
-            Err(e) => {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
-                self.editor = Some(ed);
-                self.session.mode = gridcraft_engine::Mode::Edit;
-                false
-            }
-        }
-    }
-
     /// Commits the edit with an arrow key. The arrow is an ordinary move, so it ends a run of Tabs
     /// instead of continuing it (Right) or going back to its column like Enter (Down), as in Excel.
     pub fn commit_edit_arrow(&mut self, dr: i64, dc: i64) -> bool {
@@ -1323,6 +1322,76 @@ impl SheetApp {
     pub fn cancel_edit(&mut self) {
         self.editor = None;
         self.session.mode = gridcraft_engine::Mode::Ready;
+    }
+
+    /// Starts editing the active cell in Python mode, in the formula bar: its code, or no code
+    /// yet for a cell that isn't a Python cell. A cell inside a spill isn't edited, as with the
+    /// formula bar's other entry paths.
+    pub fn begin_python_edit(&mut self) {
+        if formula_bar::active_spill_anchor(self).is_some() {
+            return;
+        }
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some(("Text Box".into(), clean_error(&e)));
+            return;
+        }
+        let Some(d) = self.session.active() else { return };
+        let Some(sh) = d.wb.active() else { return };
+        let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        let py = sh.cell(at).and_then(|c| c.py.as_deref());
+        // A Python cell's code hidden on a protected sheet stays out of view, and Python mode
+        // doesn't start on it with no code, which a commit would write over the hidden code.
+        if py.is_some() && gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+            return;
+        }
+        let code = py.map(|py| py.code.clone()).unwrap_or_default();
+        self.editor = Some(editor::EditState::python(d.uid, d.wb.active_sheet(), at, code));
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Ctrl+Alt+Shift+P (and the PY badge): Python mode on or off. An edit in progress keeps its
+    /// text; with no edit, Python mode starts on the active cell.
+    pub fn toggle_python_mode(&mut self) {
+        match self.editor.as_mut() {
+            Some(ed) if ed.python => ed.leave_python(),
+            Some(ed) => ed.enter_python(),
+            None => return self.begin_python_edit(),
+        }
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Commits a Python mode edit through `python.set`, on the sheet the edit started on. When the
+    /// command refuses the code (longer than a cell holds, a protected cell), its message shows
+    /// and the edit stays open with the code as typed.
+    pub fn commit_python_edit(&mut self) -> bool {
+        let Some(ed) = self.editor.take() else { return true };
+        self.session.mode = gridcraft_engine::Mode::Ready;
+        // The code of a Python cell committed unchanged: nothing to write (no undo step, the
+        // workbook stays clean), as with F2 then Enter on any other cell.
+        let code = gridcraft_engine::model::python::normalize_code(&ed.text);
+        let unchanged = self
+            .session
+            .active()
+            .and_then(|d| d.wb.sheet(ed.sheet))
+            .and_then(|sh| sh.cell(ed.cell))
+            .and_then(|c| c.py.as_deref())
+            .is_some_and(|py| py.code == code);
+        if unchanged {
+            return true;
+        }
+        let r = self.session.run("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": ed.text}));
+        match r {
+            Ok(_) => {
+                self.after_engine();
+                true
+            }
+            Err(e) => {
+                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.editor = Some(ed);
+                self.session.mode = gridcraft_engine::Mode::Edit;
+                false
+            }
+        }
     }
 
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.

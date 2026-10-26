@@ -47,10 +47,9 @@ pub struct EditState {
     /// The cell's text when an F2-style edit began. Committing it unchanged leaves the cell alone
     /// (no undo step, the workbook stays clean). `None` for an edit started by typing.
     pub original: Option<String>,
-    /// The edit began on a Python cell's existing content (F2, a double click or the formula
-    /// bar), so the text is the cell's code: a change goes in as new code through `python.set`.
-    /// `false` for an edit started by typing, which replaces the cell as it does a formula.
-    pub code_edit: bool,
+    /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
+    /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
+    pub python: bool,
 }
 
 impl EditState {
@@ -79,14 +78,60 @@ impl EditState {
             caret_to_end: true,
             completion: None,
             original,
-            code_edit: false,
+            python: false,
         }
     }
 
+    /// An edit of a cell's Python code, in the formula bar.
+    pub fn python(doc: u64, sheet: usize, cell: CellRef, code: String) -> EditState {
+        let mut ed = EditState::new(doc, sheet, cell, code, false, true);
+        ed.python = true;
+        ed
+    }
+
+    /// Whether the text is the `=PY` that Tab turns into Python mode, as in Excel (`=PY(` too,
+    /// in any letter case).
+    pub fn is_py_trigger(&self) -> bool {
+        let t = self.text.trim();
+        !self.python && (t.eq_ignore_ascii_case("=PY") || t.eq_ignore_ascii_case("=PY("))
+    }
+
+    /// Switches the edit to Python mode, in the formula bar. The `=PY` trigger becomes empty code;
+    /// other text is kept as the code, so the shortcut pressed mid-edit loses nothing.
+    pub fn enter_python(&mut self) {
+        if self.is_py_trigger() {
+            self.text.clear();
+        }
+        self.python = true;
+        self.from_formula_bar = true;
+        self.enter_mode = false;
+        self.point = None;
+        self.point_cell = None;
+        self.point_anchor = None;
+        self.autocomplete.clear();
+        self.completion = None;
+        self.caret = self.text.chars().count();
+        self.anchor = self.caret;
+        self.caret_to_end = false;
+        self.request_focus = true;
+        self.sync_caret = true;
+    }
+
+    /// Leaves Python mode: the edit goes on as an ordinary entry of the same text.
+    pub fn leave_python(&mut self) {
+        self.python = false;
+        self.caret = self.text.chars().count();
+        self.anchor = self.caret;
+        self.request_focus = true;
+        self.sync_caret = true;
+    }
+
+    /// Whether the text is a formula (never in Python mode: there it is code).
     pub fn is_formula(&self) -> bool {
-        self.text.starts_with('=')
-            || (self.text.starts_with('+') && self.text.len() > 1)
-            || (self.text.starts_with('-') && self.text.len() > 1 && !self.text[1..].starts_with(|c: char| c.is_ascii_digit()))
+        !self.python
+            && (self.text.starts_with('=')
+                || (self.text.starts_with('+') && self.text.len() > 1)
+                || (self.text.starts_with('-') && self.text.len() > 1 && !self.text[1..].starts_with(|c: char| c.is_ascii_digit())))
     }
 
     fn byte_caret(&self) -> usize {
@@ -162,7 +207,7 @@ impl EditState {
     /// Updates function autocomplete for the word before the caret.
     pub fn update_autocomplete(&mut self, names: &[String]) {
         self.autocomplete.clear();
-        if !self.is_formula() {
+        if self.python || !self.is_formula() {
             return;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
@@ -236,7 +281,7 @@ impl EditState {
 
     /// The function call the caret is inside and the argument index (for the hint tooltip).
     pub fn current_function(&self) -> Option<(String, usize)> {
-        if !self.is_formula() {
+        if self.python || !self.is_formula() {
             return None;
         }
         let before = self.text.get(..self.byte_caret())?;

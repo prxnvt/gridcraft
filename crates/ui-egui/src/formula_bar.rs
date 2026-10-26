@@ -1,9 +1,11 @@
-//! The formula bar (Name Box, ✕ ✓ fx, formula field) and the shared cell editor widget.
+//! The formula bar (Name Box, ✕ ✓ fx, the PY badge, formula field) and the shared cell editor
+//! widget. In Python mode the field is the code editor.
 
 use egui::{FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
 use serde_json::json;
 
 use crate::SheetApp;
+use crate::code_editor::{self, FieldOptions, Lang};
 use crate::editor::formula_refs;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
@@ -100,6 +102,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     app.open_dialog("insertFunction", json!({}));
                 }
                 layout.buttons = cancel.rect.union(fx.rect);
+                if let Some(badge) = python_badge(app, ui, &t) {
+                    layout.buttons = layout.buttons.union(badge);
+                }
                 ui.add_space(4.0);
                 // The formula field fills the rest, as tall as the bar.
                 let avail = ui.available_width() - 24.0;
@@ -114,10 +119,16 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 let info = if app.editor.is_some() {
                     editor_widget(app, &mut child, id, font.clone(), true, inner.width(), inner.height())
                 } else {
-                    // Show the active cell's content; clicking starts editing in the bar.
+                    // Show the active cell's content (a Python cell's code in the code editor's
+                    // colours); clicking starts editing in the bar.
                     let text = active_input(app);
                     let color = if read_only { t.text_disabled } else { t.text };
-                    let galley = child.painter().layout(text, font.clone(), color, inner.width());
+                    let galley = if active_python(app).is_some() && !read_only {
+                        let job = code_editor::layout_job(&text, Lang::Python, &code_editor::font(), color, &t.syntax, inner.width());
+                        child.fonts_mut(|f| f.layout_job(job))
+                    } else {
+                        child.painter().layout(text, font.clone(), color, inner.width())
+                    };
                     let lines = galley.rows.len();
                     // Each cell's view starts at its top: the offset is kept per cell, not per bar.
                     let shown = app.session.active().map(|d| (d.uid, d.wb.active_sheet(), d.selection.active.row, d.selection.active.col));
@@ -156,12 +167,30 @@ pub(crate) fn active_spill_anchor(app: &SheetApp) -> Option<gridcraft_engine::co
     sh.spill_anchor(at)
 }
 
+/// The active cell's Python cell (itself, or the anchor whose result spills over it): its sheet,
+/// cell and code.
+pub(crate) fn active_python(app: &SheetApp) -> Option<(usize, gridcraft_engine::core::CellRef, std::sync::Arc<gridcraft_engine::model::PyCode>)> {
+    let d = app.session.active()?;
+    let sh = d.wb.active()?;
+    let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+    let at = sh.spill_anchor(a).unwrap_or(a);
+    sh.cell(at).and_then(|c| c.py.clone()).map(|py| (d.wb.active_sheet(), at, py))
+}
+
 fn active_input(app: &SheetApp) -> String {
     let Some(d) = app.session.active() else { return String::new() };
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
         return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+    }
+    // Python code is shown as it is: it isn't a formula to translate or a value to format. Like
+    // a formula, it stays out of view in a Hidden cell on a protected sheet.
+    if let Some((_, at, py)) = active_python(app) {
+        if gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+            return String::new();
+        }
+        return py.code.clone();
     }
     if let Some(anchor) = sh.spill_anchor(a) {
         if gridcraft_engine::display::formula_hidden(&d.wb, sh, anchor) {
@@ -185,6 +214,66 @@ fn active_input(app: &SheetApp) -> String {
         };
     }
     String::new()
+}
+
+/// Ctrl+Alt+Shift+P, and Cmd+Option+Shift+P on macOS: Python mode on or off.
+pub fn is_python_shortcut(ev: &egui::Event) -> bool {
+    matches!(ev, egui::Event::Key { key: Key::P, pressed: true, modifiers: m, .. } if m.shift && m.alt && (m.ctrl || m.command || m.mac_cmd))
+}
+
+/// Takes Ctrl+Alt+Shift+P out of this pass's input; whether it was there.
+fn take_python_shortcut(i: &mut egui::InputState) -> bool {
+    let found = i.events.iter().any(is_python_shortcut);
+    if found {
+        i.events.retain(|e| !is_python_shortcut(e));
+    }
+    found
+}
+
+/// What a key in Python mode does, besides editing the code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PythonKey {
+    /// Ctrl+Enter (Cmd+Enter on macOS): put the code in the cell.
+    Commit,
+    /// Esc: cancel the edit.
+    Cancel,
+    /// Ctrl+Alt+Shift+P: leave Python mode.
+    Leave,
+}
+
+fn python_key(ev: &egui::Event) -> Option<PythonKey> {
+    match ev {
+        egui::Event::Key { key: Key::Enter, pressed: true, modifiers: m, .. } if (m.ctrl || m.command || m.mac_cmd) && !m.alt => {
+            Some(PythonKey::Commit)
+        }
+        egui::Event::Key { key: Key::Escape, pressed: true, .. } => Some(PythonKey::Cancel),
+        _ if is_python_shortcut(ev) => Some(PythonKey::Leave),
+        _ => None,
+    }
+}
+
+/// The PY badge beside fx: shown in Python mode and on a selected Python cell. Clicking it
+/// switches Python mode, as Ctrl+Alt+Shift+P does. Returns its rect when shown.
+fn python_badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
+    let show = match &app.editor {
+        Some(ed) => ed.python,
+        None => active_python(app).is_some(),
+    };
+    if !show {
+        return None;
+    }
+    let text = ui.painter().layout_no_wrap("PY".into(), theme::ui_bold(11.0), t.on_badge);
+    let (rect, resp) = ui.allocate_exact_size(vec2(text.size().x + 12.0, 24.0), Sense::click());
+    let pill = Rect::from_center_size(rect.center(), vec2(rect.width(), 18.0));
+    ui.painter().rect_filled(pill, 4.0, t.badge_py);
+    ui.painter().galley(pill.center() - text.size() / 2.0, text, t.on_badge);
+    let label = app.ui.language.tr("Python Mode").to_string();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    let resp = resp.on_hover_text(format!("{label} (Ctrl+Alt+Shift+P)"));
+    if resp.clicked() {
+        app.toggle_python_mode();
+    }
+    Some(rect)
 }
 
 /// Draws the Name Box and its name dropdown; Enter jumps to a reference or known name (or defines a new name) and is consumed so the grid does not move down.
@@ -291,6 +380,13 @@ fn show_edit<'t>(
 /// The text editor used in the cell and in the formula bar (they share `app.editor`). It shows
 /// `max_height` of text and scrolls beyond that, keeping the caret in view.
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, max_height: f32) -> EditorInfo {
+    if app.editor.as_ref().is_some_and(|e| e.python) {
+        // Python mode edits in the formula bar only.
+        if id != egui::Id::unique("gridcraft.formula_bar") {
+            return EditorInfo::default();
+        }
+        return python_editor(app, ui, id, width, max_height);
+    }
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
     let mine = ed.from_formula_bar == (id == egui::Id::unique("gridcraft.formula_bar"));
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
@@ -299,10 +395,13 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let mut action: Option<(i64, i64, bool, bool)> = None;
     let mut arrow = false;
     let mut cancel = false;
+    let mut to_python = false;
     // A message box over the editor (a data validation alert, a formula error) gets Enter and Esc;
     // the editor used to take them, so the first Esc cancelled the edit behind the message.
     // So does a dialog opened from the editor (Paste Name): its OK takes Enter.
     if has_focus && mine && app.message.is_none() && app.dialog.is_none() {
+        // Ctrl+Alt+Shift+P turns the edit into Python code.
+        to_python = ui.input_mut(take_python_shortcut);
         let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
             let m = i.modifiers;
             let alt_enter =
@@ -322,7 +421,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             ed.caret_to_end = false;
             ed.sync_caret = true;
         }
-        if !ed.autocomplete.is_empty() && tab {
+        if tab && !shift && ed.is_py_trigger() {
+            // `=PY` then Tab starts Python mode, as in Excel.
+            to_python = true;
+        } else if !ed.autocomplete.is_empty() && tab {
             ed.accept_autocomplete();
         } else if enter {
             action = Some((if shift { -1 } else { 1 }, 0, false, false));
@@ -617,6 +719,12 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     let lines = output.galley.rows.len().max(1);
     let caret = Some(output.galley.pos_from_cursor(egui::text::CCursor::new(ed.caret)).translate(output.galley_pos.to_vec2()));
+    if to_python {
+        ed.enter_python();
+        app.editor = Some(ed);
+        app.session.mode = gridcraft_engine::Mode::Edit;
+        return EditorInfo { lines, caret };
+    }
     app.editor = Some(ed);
     if cancel {
         app.cancel_edit();
@@ -628,6 +736,57 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         }
     }
     EditorInfo { lines, caret }
+}
+
+/// The formula bar in Python mode: the code editor (monospace, Python colours). Its keys are
+/// applied in input order with the typing: Enter starts a new line with the indentation, Tab and
+/// Shift+Tab indent, Ctrl+Enter (Cmd+Enter on macOS) commits through `python.set`, Esc cancels and
+/// Ctrl+Alt+Shift+P leaves Python mode.
+fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32, max_height: f32) -> EditorInfo {
+    let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
+    // A message box (the code was refused) or a dialog over the edit has the keyboard; the
+    // editor takes it back when it closes.
+    let blocked = app.message.is_some() || app.dialog.is_some();
+    let mut caret = None;
+    if blocked {
+        ed.request_focus = true;
+    } else {
+        // Focus left on nothing (a click on the sheet's chrome, a closed message box whose modal
+        // layer held it one more pass) comes back to the code.
+        if std::mem::take(&mut ed.request_focus) || ui.memory(|m| m.focused()).is_none() {
+            ui.memory_mut(|m| m.request_focus(id));
+        }
+        if std::mem::take(&mut ed.sync_caret) {
+            caret = Some(ed.caret);
+        }
+    }
+    let name = app.ui.language.tr("Formula Bar").to_string();
+    let stop = |ev: &egui::Event| python_key(ev).is_some();
+    let options = FieldOptions {
+        width,
+        max_height,
+        interactive: !blocked,
+        stop: &stop,
+        keep_escape: true,
+        caret,
+        name: &name,
+        ..FieldOptions::new(Lang::Python)
+    };
+    let out = code_editor::code_field(ui, id, &mut ed.text, &options);
+    if !blocked && caret.is_none() {
+        (ed.caret, ed.anchor) = out.selection;
+    }
+    let info = EditorInfo { lines: out.lines, caret: out.caret };
+    app.editor = Some(ed);
+    match out.stop.as_ref().and_then(python_key) {
+        Some(PythonKey::Commit) => {
+            app.commit_python_edit();
+        }
+        Some(PythonKey::Cancel) => app.cancel_edit(),
+        Some(PythonKey::Leave) => app.toggle_python_mode(),
+        None => {}
+    }
+    info
 }
 
 fn cycle_anchor(ed: &mut crate::editor::EditState) {

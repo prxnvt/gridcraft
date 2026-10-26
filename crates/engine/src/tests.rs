@@ -1398,6 +1398,22 @@ fn hidden_formulas_stay_hidden_on_protected_sheets() {
 }
 
 #[test]
+fn hidden_python_code_stays_hidden_on_protected_sheets() {
+    let mut s = s();
+    s.execute("python.set", json!({"cell": "A1", "code": "41 + 1"})).unwrap();
+    s.execute("python.set", json!({"cell": "B1", "code": "1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": true, "hidden": true}}})).unwrap();
+    let hidden = |s: &Session, a: &str| {
+        let d = s.doc().unwrap();
+        crate::display::formula_hidden(&d.wb, d.wb.active().unwrap(), CellRef::parse(a).unwrap())
+    };
+    assert!(!hidden(&s, "A1"), "an unprotected sheet hides nothing");
+    s.execute("review.protectSheet", json!({})).unwrap();
+    assert!(hidden(&s, "A1"));
+    assert!(!hidden(&s, "B1"), "a Python cell not formatted Hidden");
+}
+
+#[test]
 fn case_sensitive_sort_puts_lowercase_first() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["b"], ["B"], ["Ab"], ["a"], ["aB"], ["A"]]})).unwrap();

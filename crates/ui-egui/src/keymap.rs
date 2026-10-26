@@ -39,6 +39,8 @@ pub enum Shortcut {
     DropDown,
     /// Ctrl+Alt+= / Ctrl+Alt+-: zoom in / out.
     Zoom(i32),
+    /// Ctrl+Alt+Shift+P: edit the active cell as Python code (Python mode).
+    PythonMode,
 }
 
 fn run(id: &'static str) -> Shortcut {
@@ -132,6 +134,8 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Equals | Plus if ctrl_alt => Shortcut::Zoom(10),
         Minus if ctrl_alt && !mac => Shortcut::Zoom(-10),
         F9 if ctrl_alt => run("formulas.calculateNow"),
+        // Python in cells (Cmd+Option on macOS too).
+        P if ctrl_alt && s => Shortcut::PythonMode,
         R if ctrl_alt && mac => run("view.collapseRibbon"),
         Num0 if ctrl_alt && mac => borders("outside"),
         Minus if ctrl_alt && mac => borders("none"),
@@ -233,6 +237,7 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
             app.grid.reveal_from = from;
         }
         Shortcut::Edit => app.begin_edit(None, false),
+        Shortcut::PythonMode => app.toggle_python_mode(),
         Shortcut::ContextMenu => app.grid.context_menu = Some(geo.cell_rect(sh, active).center()),
         Shortcut::DropDown => {
             if sh.validations.iter().any(|d| d.in_cell_dropdown && d.ranges.iter().any(|r| r.contains(active))) {
