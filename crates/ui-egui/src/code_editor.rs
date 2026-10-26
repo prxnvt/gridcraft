@@ -394,6 +394,9 @@ fn is_keyboard(ev: &egui::Event) -> bool {
 
 fn apply(key: EditKey<'_>, text: &mut String, sel: (usize, usize), lang: Lang) -> Edit {
     match key {
+        // Pasted text keeps its platform's line breaks (`\r\n` on Windows); code has `\n` only, as
+        // a cell's code is stored, and a lone `\r` has no glyph.
+        EditKey::Insert(s) if s.contains('\r') => insert(text, sel, &s.replace("\r\n", "\n").replace('\r', "\n")),
         EditKey::Insert(s) => insert(text, sel, s),
         EditKey::Enter => newline(text, sel, lang),
         EditKey::Tab { dedent } => indent(text, sel, dedent),
@@ -412,7 +415,13 @@ pub struct Applied {
     pub held: Vec<egui::Event>,
     /// The caller's key the pass stopped at (see [`apply_in_order_until`]).
     pub stop: Option<egui::Event>,
+    /// An edit was refused: it would have made text the caller does not accept (see
+    /// [`apply_in_order_within`]).
+    pub refused: bool,
 }
+
+/// Whether the caller accepts an edit: the text after it, then the text before it.
+pub type Accept<'a> = &'a dyn Fn(&str, &str) -> bool;
 
 /// Applies the pass's input to `text` in the order it came. A pass can carry several events
 /// (typing between repaints, key repeat), and two readers take them: this editor, for typed
@@ -443,6 +452,21 @@ pub fn apply_in_order_until(
     sel: &mut (usize, usize),
     lang: Lang,
     stop: &dyn Fn(&egui::Event) -> bool,
+) -> Applied {
+    apply_in_order_within(events, text, sel, lang, stop, None)
+}
+
+/// [`apply_in_order_until`], where each of the editor's edits is checked with `accept` (the text
+/// after it, the text before it): an edit it refuses is undone at once, so the text and the
+/// selection stay as they were, and the pass goes on with the next event (`Applied::refused`).
+/// Typing and pasting past a limit are refused this way, one edit at a time.
+pub fn apply_in_order_within(
+    events: &mut Vec<egui::Event>,
+    text: &mut String,
+    sel: &mut (usize, usize),
+    lang: Lang,
+    stop: &dyn Fn(&egui::Event) -> bool,
+    accept: Option<Accept<'_>>,
 ) -> Applied {
     let mut out = Applied::default();
     // An event the field acts on has gone by: the editor's keys after it wait for the next pass.
@@ -476,9 +500,18 @@ pub fn apply_in_order_until(
                 out.held.push(ev);
             }
             Class::Edit(key) => {
+                let before = accept.map(|_| text.clone());
                 let e = apply(key, text, *sel, lang);
-                *sel = (e.anchor, e.caret);
-                out.edited = true;
+                match (accept, before) {
+                    (Some(ok), Some(before)) if !ok(text, &before) => {
+                        *text = before;
+                        out.refused = true;
+                    }
+                    _ => {
+                        *sel = (e.anchor, e.caret);
+                        out.edited = true;
+                    }
+                }
             }
             Class::Dropped => {}
             Class::Field => {
@@ -592,17 +625,22 @@ pub fn code_editor_marked(ui: &mut Ui, id: egui::Id, text: &mut String, lang: La
 /// How a [`code_field`] is laid out, and the keys its caller takes.
 pub struct FieldOptions<'a> {
     pub lang: Lang,
-    /// The field's width (`f32::INFINITY`: all there is).
+    /// The field's width (`f32::INFINITY`: all there is), its line-number gutter included.
     pub width: f32,
     /// The height shown before it scrolls; the scroll area follows the caret.
     pub max_height: f32,
     /// The field is `max_height` tall even when its text is shorter (a click below the text still
     /// lands in it).
     pub fill: bool,
+    /// A line-number gutter at the left, scrolled with the text (see [`gutter_width`]).
+    pub gutter: bool,
     /// Whether it takes input. A dialog or message box over the field has the keyboard.
     pub interactive: bool,
     /// Keys the caller acts on itself, in input order (see [`apply_in_order_until`]).
     pub stop: &'a dyn Fn(&egui::Event) -> bool,
+    /// Edits the caller accepts (the text after, the text before); the others are refused and
+    /// undone, typing and pasting alike (see [`apply_in_order_within`]). `None`: every edit.
+    pub accept: Option<Accept<'a>>,
     /// Esc stays with the field (for a caller that stops at it) instead of releasing the focus.
     pub keep_escape: bool,
     /// Puts the caret here (a char index) before the pass's input: the caller changed the text.
@@ -620,8 +658,10 @@ impl FieldOptions<'_> {
             width: f32::INFINITY,
             max_height: 100.0,
             fill: false,
+            gutter: false,
             interactive: true,
             stop: &|_| false,
+            accept: None,
             keep_escape: false,
             caret: None,
             // The editor is a generic code field, so the name is not part of the UI's translated
@@ -643,6 +683,10 @@ pub struct FieldOutput {
     pub caret: Option<egui::Rect>,
     /// The caret and the other end of the selection (char indices).
     pub selection: (usize, usize),
+    /// The line-number gutter's width (0 without one).
+    pub gutter: f32,
+    /// An edit of this pass was refused by [`FieldOptions::accept`] and undone.
+    pub refused: bool,
 }
 
 /// The code editor's text field without a frame: monospace text with syntax colours, Enter that
@@ -658,6 +702,7 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
     let held = take_held(ui, id, focused);
     let mut edited = None;
     let mut stop = None;
+    let mut refused = false;
     let count = text.chars().count();
     if let Some(caret) = options.caret {
         let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
@@ -666,6 +711,9 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
         state.store(ui.ctx(), id);
         edited = Some(Edit { anchor: caret, caret });
     }
+    // The text and selection the text field starts from, for undoing an edit of its own (an IME
+    // commit, undo, redo) that the caller refuses.
+    let mut field_start = None;
     if focused {
         let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
         let mut sel = state.cursor.char_range().map(|r| (r.secondary.index.into(), r.primary.index.into())).unwrap_or((count, count));
@@ -675,7 +723,7 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
                 events.append(&mut i.events);
                 i.events = events;
             }
-            apply_in_order_until(&mut i.events, text, &mut sel, lang, options.stop)
+            apply_in_order_within(&mut i.events, text, &mut sel, lang, options.stop, options.accept)
         });
         if applied.edited {
             state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(sel.0), CCursor::new(sel.1))));
@@ -686,6 +734,10 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
             hold(ui, id, applied.held);
         }
         stop = applied.stop;
+        refused = applied.refused;
+        if options.accept.is_some() {
+            field_start = Some((text.clone(), sel));
+        }
     }
     let syntax = t.syntax;
     let plain = t.text;
@@ -698,30 +750,58 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: options.keep_escape };
+    let gutter = if options.gutter { gutter_width(ui, line_count(text)) } else { 0.0 };
     let max_height = options.max_height.max(1.0);
     let scrolled =
         egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(max_height).auto_shrink([false, !options.fill]).show(ui, |ui| {
-            let mut edit = TextEdit::multiline(text)
-                .id(id)
-                .font(font.clone())
-                .code_editor()
-                .frame(egui::Frame::NONE)
-                .desired_width(options.width)
-                .desired_rows(1)
-                .interactive(options.interactive)
-                .event_filter(filter)
-                .layouter(&mut layouter);
-            if options.fill {
-                edit = edit.min_size(egui::vec2(0.0, max_height));
-            }
-            let out = edit.show(ui);
-            if let Some(e) = edited {
-                let caret = out.galley.pos_from_cursor(CCursor::new(e.caret)).translate(out.galley_pos.to_vec2());
-                ui.scroll_to_rect(caret, None);
-            }
-            out
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let gutter_left = ui.cursor().left();
+                if gutter > 0.0 {
+                    ui.add_space(gutter);
+                }
+                let mut edit = TextEdit::multiline(text)
+                    .id(id)
+                    .font(font.clone())
+                    .code_editor()
+                    .frame(egui::Frame::NONE)
+                    .desired_width((options.width - gutter).max(1.0))
+                    .desired_rows(1)
+                    .interactive(options.interactive)
+                    .event_filter(filter)
+                    .layouter(&mut layouter);
+                if options.fill {
+                    edit = edit.min_size(egui::vec2(0.0, max_height));
+                }
+                let out = edit.show(ui);
+                if let Some(e) = edited {
+                    let caret = out.galley.pos_from_cursor(CCursor::new(e.caret)).translate(out.galley_pos.to_vec2());
+                    ui.scroll_to_rect(caret, None);
+                }
+                if gutter > 0.0 {
+                    let right = gutter_left + gutter - GUTTER_GAP;
+                    let rule = egui::Stroke::new(1.0, t.separator);
+                    let clip = ui.clip_rect();
+                    ui.painter().vline(right + GUTTER_GAP / 2.0, clip.y_range(), rule);
+                    paint_line_numbers(ui.painter(), &out.galley, out.galley_pos, clip, right, &font, t.text_dim);
+                }
+                out
+            })
+            .inner
         });
     let out = scrolled.inner;
+    // The text field's own edits go through the same check as the editor's.
+    if let (Some(accept), Some((before, sel))) = (options.accept, field_start)
+        && *text != before
+        && !accept(text, &before)
+    {
+        *text = before;
+        let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(sel.0), CCursor::new(sel.1))));
+        state.store(ui.ctx(), id);
+        refused = true;
+        ui.ctx().request_repaint();
+    }
     // The field has no visible label; name it for screen readers and the strict kittest
     // accessibility check.
     let mut response = out.response.response.accessible_name(options.name);
@@ -734,7 +814,57 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
         .map(|r| out.galley.pos_from_cursor(r.primary).translate(out.galley_pos.to_vec2()))
         .filter(|_| response.has_focus())
         .map(|r| r.intersect(scrolled.inner_rect.expand(1.0)));
-    FieldOutput { response, stop, lines: out.galley.rows.len().max(1), caret, selection }
+    FieldOutput { response, stop, lines: out.galley.rows.len().max(1), caret, selection, gutter, refused }
+}
+
+/// Space between the line numbers and the code, with the gutter's rule in the middle.
+const GUTTER_GAP: f32 = 10.0;
+
+/// Lines of `text`: one more than its line breaks.
+pub fn line_count(text: &str) -> usize {
+    text.bytes().filter(|b| *b == b'\n').count().saturating_add(1)
+}
+
+/// Digits in the number of the last of `lines` lines (at least one).
+pub fn gutter_digits(lines: usize) -> usize {
+    lines.max(1).checked_ilog10().map_or(1, |d| d as usize + 1)
+}
+
+/// The width of a line-number gutter for `lines` lines: as many digits of the code font as the
+/// last line's number has, a margin, and the gap before the code. It grows when the number of
+/// lines gains a digit (10, 100, 1000).
+pub fn gutter_width(ui: &Ui, lines: usize) -> f32 {
+    let digit = ui.fonts_mut(|f| f.glyph_width(&font(), '0'));
+    digit * gutter_digits(lines) as f32 + 6.0 + GUTTER_GAP
+}
+
+/// Paints line numbers right-aligned at `right`, beside `galley` laid out at `galley_pos`: one per
+/// line of the text, on the first row of a wrapped line. Only rows inside `clip` are painted, so
+/// the work for long code is the rows in view (and a count of the line breaks above them).
+pub fn paint_line_numbers(
+    painter: &egui::Painter,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip: egui::Rect,
+    right: f32,
+    font: &FontId,
+    color: egui::Color32,
+) {
+    // Rows are in order from the top: skip the ones above the view without laying anything out.
+    let first = galley.rows.partition_point(|row| galley_pos.y + row.rect().max.y < clip.top());
+    let mut line = galley.rows.iter().take(first).filter(|row| row.ends_with_newline).count().saturating_add(1);
+    let mut starts_line = first.checked_sub(1).and_then(|i| galley.rows.get(i)).is_none_or(|row| row.ends_with_newline);
+    for row in galley.rows.iter().skip(first) {
+        let rect = row.rect().translate(galley_pos.to_vec2());
+        if rect.top() > clip.bottom() {
+            break;
+        }
+        if starts_line {
+            painter.text(egui::pos2(right, rect.top()), egui::Align2::RIGHT_TOP, line.to_string(), font.clone(), color);
+            line = line.saturating_add(1);
+        }
+        starts_line = row.ends_with_newline;
+    }
 }
 
 #[cfg(test)]
