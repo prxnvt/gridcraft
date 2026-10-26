@@ -1,0 +1,14 @@
+[package]
+name = "gridcraft-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft Python cells: the JSON-lines protocol between GridCraft and the worker that runs Python"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
