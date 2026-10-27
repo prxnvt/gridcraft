@@ -21,6 +21,7 @@ including tests, 2026-10-10.
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
 | L0 | `sandbox` | ~0.6k | Confined launcher for helper processes: Landlock and seccomp on Linux, `sandbox-exec` on macOS, refused elsewhere; checks the confinement before the program runs ([sandbox.md](sandbox.md)); used only by the apps |
+| L2 | `python` | ~1k | Python in cells: the JSON-lines protocol between GridCraft and the worker that runs the user's Python, with a cap on every field, and the limits, outcomes and transport trait a client uses; starts no process; depends only on `core` |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
@@ -253,6 +254,14 @@ so a file with thousands of equations opens in bounded time. The equation editor
 only other callers, through the same guarded entry points. The gate that admitted RaTeX is
 recorded in [`decisions.md`](decisions.md) and re-run by `crates/math/tests/gate.rs`.
 
+`gridcraft-python` (L2, used by no other crate) holds the worker protocol and starts no process.
+`protocol` is the JSON-lines protocol (`run {id, code, inputs}`, `reset {id}`; `ready {selfTest}`
+once, then one `done {id, ok, value or error, stdout}` per request) with a byte or character cap
+on every field and array shapes checked on read: every line from the worker is untrusted.
+`run` holds the limits of a worker (time per request, extra time to start, memory, line cap),
+the typed outcome of a request with the cell error each one shows (`#CONNECT!` when the worker
+could not start), and the `Transport` trait through which workers start.
+
 ## Agent control
 
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
@@ -294,6 +303,8 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
+| 2026-10-26 | minor | The `python` crate (L2): the worker protocol and its caps, limits and outcomes |
+| 2026-10-25 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, and the limits on open |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
