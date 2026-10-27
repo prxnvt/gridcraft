@@ -158,6 +158,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit in Python Editor" => "Python Düzenleyicisinde Düzenle",
         "Unsaved changes" => "Kaydedilmemiş değişiklikler",
         "The code for {cell} has unsaved changes." => "{cell} kodunda kaydedilmemiş değişiklikler var.",
+        "The code for {cell} in {workbook} has unsaved changes." => "{cell} ({workbook}) kodunda kaydedilmemiş değişiklikler var.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Kod daha uzun olamaz: bir Python hücresi, PY formülü olarak sayılan {max} karakter tutar."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}, Python Düzenleyicisi'nde açıkken değişti. Kodu kopyalayın veya düzenleyiciyi kapatıp hücrede yeniden açın."
+        }
         "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
             "{cell}, Python Düzenleyicisi'nde açıkken değişti. Bu nedenle kod uygulanmadı. Kodu kopyalayın veya düzenleyiciyi kapatıp hücrede yeniden açın."
         }
