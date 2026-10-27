@@ -23,6 +23,7 @@ including tests, 2026-10-10.
 | L0 | `sandbox` | ~0.6k | Confined launcher for helper processes: Landlock and seccomp on Linux, `sandbox-exec` on macOS, refused elsewhere; checks the confinement before the program runs ([sandbox.md](sandbox.md)); used only by the apps |
 | L2 | `python` | ~1k | Python in cells: the JSON-lines protocol between GridCraft and the worker that runs the user's Python, with a cap on every field, and the limits, outcomes and transport trait a client uses; starts no process; depends only on `core` |
 | L2 | `python` | ~2.1k | Python in cells: interpreter detection, the worker shim (`shim.py`, the one non-Rust source file, run by the user's Python), the JSON-lines protocol with its caps, the limits and outcomes of a request, and the process launch (not in the web build); depends only on `core` |
+| L2 | `python` | ~3.1k | Python in cells, off wasm (the web build has a stand-in that reports Python as unavailable): interpreter detection, the worker shim (`shim.py`, the one non-Rust source file, run by the user's Python), the JSON-lines protocol with its caps, the client with deadlines and kills, the process launch and a fake worker for tests; depends only on `core` |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
@@ -263,13 +264,19 @@ existing files only, Python 3.11 or newer, each asked its version with `<python>
 a read-only copy of `shim.py` and an empty working directory; `process::Launch` is the seam where a
 wrapper can change the command. The shim adds site-packages from `sysconfig` without `site`, keeps
 one `__main__` for all cells until `reset`, answers `xl(ref)` from the inputs the parent sent, and
-converts the last expression's value. Only the crate's tests start a process. `protocol` is the
-JSON-lines protocol (`run {id, code, inputs}`, `reset {id}`; `ready {selfTest}` once, then one `done
-{id, ok, value or error, stdout}` per request) with a byte or character cap on every field and array
-shapes checked on read: every line from the worker is untrusted. `run` holds the limits of a worker
-(time per request, extra time to start, memory, line cap), the typed outcome of a request with the
-cell error each one shows (`#CONNECT!` when the worker could not start), and the `Transport` trait
-through which workers start.
+converts the last expression's value. Only the crate's tests start a process or a client. `protocol`
+is the JSON-lines protocol (`run {id, code, inputs}`, `reset {id}`; `ready {selfTest}` once, then
+one `done {id, ok, value or error, stdout}` per request) with a byte or character cap on every field
+and array shapes checked on read: every line from the worker is untrusted. `run` holds the limits of
+a worker (time per request, extra time to start, memory, line cap), the typed outcome of a request
+with the cell error each one shows (`#CONNECT!` when the worker could not start), and the
+`Transport` trait through which workers start. `client::Client` runs one request at a time with an
+absolute deadline set by the parent, through a reader thread (lines capped in bytes, a bounded
+channel), a writer thread and a memory watcher (`/proc` on Linux, `ps` every 500 ms on macOS), and
+kills the worker at the deadline, over the memory limit, on a crash, and at a line over the cap,
+malformed JSON, a wrong id, an unsolicited line or a second reply; the next request starts a fresh
+worker. `fake::FakeTransport` stands in for the interpreter in tests on every system; the web
+build's client reports every request as failed to start.
 
 ## Agent control
 
@@ -312,6 +319,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
+| 2026-10-26 | minor | The `python` crate: the client, its threads, deadlines and kills, and the fake worker |
 | 2026-10-26 | minor | The `python` crate: interpreter detection, the worker shim and the process launch |
 | 2026-10-26 | minor | The `python` crate (L2): the worker protocol and its caps, limits and outcomes |
 | 2026-10-25 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, and the limits on open |
