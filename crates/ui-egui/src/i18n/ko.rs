@@ -174,6 +174,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This version of GridCraft stores Python code but does not run it." => "이 버전의 GridCraft는 Python 코드를 저장하지만 실행하지는 않습니다.",
         "Insert\nPython" => "Python\n삽입",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Python 삽입 (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python 편집기",
+        "Edit in Python Editor" => "Python 편집기에서 편집",
+        "Unsaved changes" => "저장하지 않은 변경 내용",
+        "The code for {cell} has unsaved changes." => "{cell}의 코드에 저장하지 않은 변경 내용이 있습니다.",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}이(가) Python 편집기에서 열려 있는 동안 변경되었습니다. 따라서 코드가 적용되지 않았습니다. 코드를 복사하거나, 편집기를 닫고 셀에서 다시 여세요."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply}로 코드를 적용합니다. Esc로 편집기를 닫습니다.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Python 편집기의 저장하지 않은 코드를 클립보드에 복사했습니다.",
+        "Apply" => "적용",
+        "Discard" => "버리기",
+        "Cancel" => "취소",
         "Evaluate Formula" => "수식 계산",
         "Watch Window" => "감시 창",
         "Calculation\nOptions" => "계산\n옵션",

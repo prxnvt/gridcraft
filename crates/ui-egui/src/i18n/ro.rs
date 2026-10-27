@@ -179,6 +179,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Insert\nPython" => "Inserare\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Inserare Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Editor Python",
+        "Edit in Python Editor" => "Editare în editorul Python",
+        "Unsaved changes" => "Modificări nesalvate",
+        "The code for {cell} has unsaved changes." => "Codul pentru {cell} are modificări nesalvate.",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "Celula {cell} s-a modificat cât timp era deschisă în editorul Python, așa că codul nu a fost aplicat. Copiați codul sau închideți editorul și deschideți-l din nou pe celulă."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} aplică codul. Esc închide editorul.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Codul nesalvat din editorul Python a fost copiat în clipboard.",
+        "Apply" => "Aplicare",
+        "Discard" => "Renunțare",
         "Evaluate Formula" => "Evaluare formulă",
         "Watch Window" => "Fereastră de urmărire",
         "Calculation\nOptions" => "Opțiuni de\ncalcul",

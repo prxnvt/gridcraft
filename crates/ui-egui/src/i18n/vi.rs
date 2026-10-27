@@ -176,6 +176,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This version of GridCraft stores Python code but does not run it." => "Phiên bản GridCraft này lưu mã Python nhưng không chạy mã.",
         "Insert\nPython" => "Chèn\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Chèn Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Trình soạn thảo Python",
+        "Edit in Python Editor" => "Sửa trong Trình soạn thảo Python",
+        "Unsaved changes" => "Thay đổi chưa lưu",
+        "The code for {cell} has unsaved changes." => "Mã cho {cell} có thay đổi chưa lưu.",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} đã thay đổi trong khi đang mở trong Trình soạn thảo Python, vì vậy mã chưa được áp dụng. Hãy sao chép mã, hoặc đóng trình soạn thảo rồi mở lại trên ô."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} áp dụng mã. Esc đóng trình soạn thảo.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Mã chưa lưu của Trình soạn thảo Python đã được sao chép vào bảng tạm.",
+        "Apply" => "Áp dụng",
+        "Discard" => "Bỏ",
+        "Cancel" => "Hủy",
         "Evaluate Formula" => "Đánh giá công thức",
         "Watch Window" => "Cửa sổ theo dõi",
         "Calculation\nOptions" => "Tùy chọn\ntính toán",

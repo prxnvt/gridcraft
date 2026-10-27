@@ -183,6 +183,20 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Insert\nPython" => "Insérer\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Insérer Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Éditeur Python",
+        "Edit in Python Editor" => "Modifier dans l'éditeur Python",
+        "Unsaved changes" => "Modifications non enregistrées",
+        "The code for {cell} has unsaved changes." => "Le code de {cell} contient des modifications non enregistrées.",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} a changé pendant son ouverture dans l'éditeur Python, le code n'a donc pas été appliqué. Copiez le code, ou fermez l'éditeur et rouvrez-le sur la cellule."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} applique le code. Échap ferme l'éditeur.",
+        "The Python editor's unsaved code was copied to the clipboard." => {
+            "Le code non enregistré de l'éditeur Python a été copié dans le Presse-papiers."
+        }
+        "Apply" => "Appliquer",
+        "Discard" => "Ignorer",
+        "Cancel" => "Annuler",
         "Evaluate Formula" => "Évaluation de formule",
         "Watch Window" => "Fenêtre Espion",
         "Calculation\nOptions" => "Options de\ncalcul",

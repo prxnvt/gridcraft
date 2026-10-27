@@ -158,6 +158,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This version of GridCraft stores Python code but does not run it." => "GridCraft'ın bu sürümü Python kodunu saklar ancak çalıştırmaz.",
         "Insert\nPython" => "Python\nEkle",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Python Ekle (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python Düzenleyicisi",
+        "Edit in Python Editor" => "Python Düzenleyicisinde Düzenle",
+        "Unsaved changes" => "Kaydedilmemiş değişiklikler",
+        "The code for {cell} has unsaved changes." => "{cell} kodunda kaydedilmemiş değişiklikler var.",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}, Python Düzenleyicisi'nde açıkken değişti. Bu nedenle kod uygulanmadı. Kodu kopyalayın veya düzenleyiciyi kapatıp hücrede yeniden açın."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} kodu uygular. Esc düzenleyiciyi kapatır.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Python düzenleyicisinin kaydedilmemiş kodu panoya kopyalandı.",
+        "Apply" => "Uygula",
+        "Discard" => "At",
+        "Cancel" => "İptal",
         "Evaluate Formula" => "Formülü Değerlendir",
         "Watch Window" => "Gözcü Penceresi",
         "Calculation\nOptions" => "Hesaplama\nSeçenekleri",

@@ -174,6 +174,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This version of GridCraft stores Python code but does not run it." => "此版本的 GridCraft 会保存 Python 代码，但不会运行它。",
         "Insert\nPython" => "插入\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "插入 Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python 编辑器",
+        "Edit in Python Editor" => "在 Python 编辑器中编辑",
+        "Unsaved changes" => "未保存的更改",
+        "The code for {cell} has unsaved changes." => "{cell} 的代码有未保存的更改。",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} 在 Python 编辑器中打开期间已更改。因此未应用代码。请复制代码，或关闭编辑器并在该单元格上重新打开。"
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} 应用代码。Esc 关闭编辑器。",
+        "The Python editor's unsaved code was copied to the clipboard." => "Python 编辑器中未保存的代码已复制到剪贴板。",
+        "Apply" => "应用",
+        "Discard" => "放弃",
+        "Cancel" => "取消",
         "Evaluate Formula" => "公式求值",
         "Watch Window" => "监视窗口",
         "Calculation\nOptions" => "计算\n选项",
