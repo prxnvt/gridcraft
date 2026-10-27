@@ -188,6 +188,8 @@ pub enum Icon {
     StopSquare,
     /// Python in cells: a cell with a green PY tag over its corner (original; no language logo).
     Python,
+    /// The Python editor: a window with a column of line numbers beside lines of code (original).
+    PythonEditor,
 }
 
 struct G<'a> {
@@ -922,7 +924,22 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.p.rect_filled(Rect::from_min_max(g.pt(4.5, 8.5), g.pt(15.0, 15.0)), 1.6 * g.s, green);
             g.text(9.75, 11.85, "PY", 6.2, paper, (true, false));
         }
+        Icon::PythonEditor => paint_python_editor(&g, c, light, paper, green),
     }
+}
+
+/// The Python editor button: a window with its title bar, a gutter of line numbers (dots) and
+/// lines of code, the second one indented.
+fn paint_python_editor(g: &G<'_>, c: Color32, light: Color32, paper: Color32, green: Color32) {
+    g.rect(1.5, 2.0, 13.0, 12.0, Some(paper), Some(c));
+    g.line(&[(1.5, 4.8), (14.5, 4.8)], c, 1.1);
+    g.line(&[(5.0, 4.8), (5.0, 14.0)], light, 1.0);
+    for y in [7.0, 9.4, 11.8] {
+        g.circle(3.3, y, 0.55, Some(c), None);
+    }
+    g.line(&[(6.6, 7.0), (11.0, 7.0)], green, 1.2);
+    g.line(&[(8.2, 9.4), (13.0, 9.4)], c, 1.1);
+    g.line(&[(6.6, 11.8), (10.0, 11.8)], c, 1.1);
 }
 
 /// Icons offered by Insert › Icons, by name.

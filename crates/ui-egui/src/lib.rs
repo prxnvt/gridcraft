@@ -50,6 +50,7 @@ pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
 pub mod python_card;
+pub mod python_window;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -227,6 +228,8 @@ pub struct SheetApp {
     pub views: HashMap<(u64, usize), SheetView>,
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
+    /// The Python editor window, when open (one at a time, for one cell of one workbook).
+    pub py_window: Option<python_window::PyWindow>,
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,

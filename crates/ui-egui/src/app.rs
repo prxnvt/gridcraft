@@ -35,6 +35,7 @@ impl SheetApp {
             views: HashMap::new(),
             editor: None,
             text_box_editor: None,
+            py_window: None,
             dialog: None,
             backstage: None,
             message: None,
@@ -206,6 +207,7 @@ impl SheetApp {
         if self.draft_elsewhere() {
             self.commit_edit(0, 0, false, false);
         }
+        crate::python_window::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
         #[cfg(not(target_arch = "wasm32"))]
@@ -245,6 +247,7 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        crate::python_window::show(self, &ctx);
         dialogs::show(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);

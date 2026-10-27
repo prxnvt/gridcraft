@@ -228,12 +228,16 @@ fn convert_button(ui: &mut egui::Ui, lang: crate::i18n::Language, refusal: Optio
     }
 }
 
-/// The cell menu's items on a Python cell: its return type ("Python Object" and "Excel Value",
-/// the current one marked) and Convert to Normal Cell. Returns whether one was picked (the menu
-/// then closes).
+/// The cell menu's items on a Python cell: "Edit in Python Editor", its return type ("Python
+/// Object" and "Excel Value", the current one marked) and Convert to Normal Cell. Returns whether
+/// one was picked (the menu then closes).
 pub fn menu_items(app: &mut SheetApp, ui: &mut egui::Ui) -> bool {
     let Some((_, sheet, cell, py)) = active_python_cell(app) else { return false };
     let lang = app.ui.language;
+    if crate::python_window::menu_offers(app) && ui.button(lang.tr(crate::python_window::EDIT_IN_EDITOR)).clicked() {
+        crate::python_window::open_from_menu(app);
+        return true;
+    }
     let mut picked = None;
     for (label, object) in [(PYTHON_OBJECT, true), (EXCEL_VALUE, false)] {
         if ui.radio(py.object == object, lang.tr(label)).clicked() {
