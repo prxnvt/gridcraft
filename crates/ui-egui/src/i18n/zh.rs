@@ -178,6 +178,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit in Python Editor" => "在 Python 编辑器中编辑",
         "Unsaved changes" => "未保存的更改",
         "The code for {cell} has unsaved changes." => "{cell} 的代码有未保存的更改。",
+        "The code for {cell} in {workbook} has unsaved changes." => "{cell}（位于 {workbook}）的代码有未保存的更改。",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "代码不能再长了：Python 单元格最多容纳 {max} 个字符（按 PY 公式计算）。"
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} 在 Python 编辑器中打开期间已更改。请复制代码，或关闭编辑器并在该单元格上重新打开。"
+        }
         "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
             "{cell} 在 Python 编辑器中打开期间已更改。因此未应用代码。请复制代码，或关闭编辑器并在该单元格上重新打开。"
         }

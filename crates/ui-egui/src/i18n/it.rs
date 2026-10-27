@@ -182,6 +182,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit in Python Editor" => "Modifica nell'editor Python",
         "Unsaved changes" => "Modifiche non salvate",
         "The code for {cell} has unsaved changes." => "Il codice di {cell} ha modifiche non salvate.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Il codice di {cell} in {workbook} ha modifiche non salvate.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Il codice non può essere più lungo: una cella Python contiene {max} caratteri, contati come formula PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} è cambiata mentre era aperta nell'editor Python. Copia il codice, oppure chiudi l'editor e riaprilo sulla cella."
+        }
         "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
             "{cell} è cambiata mentre era aperta nell'editor Python, quindi il codice non è stato applicato. Copia il codice, oppure chiudi l'editor e riaprilo sulla cella."
         }

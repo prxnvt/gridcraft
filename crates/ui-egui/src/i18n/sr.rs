@@ -175,6 +175,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit in Python Editor" => "Uredi u Python uređivaču",
         "Unsaved changes" => "Nesačuvane promene",
         "The code for {cell} has unsaved changes." => "Kod za {cell} ima nesačuvane promene.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Kod za {cell} u {workbook} ima nesačuvane promene.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Kod ne može biti duži: Python ćelija prima {max} znakova, računato kao PY formula."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "Ćelija {cell} se promenila dok je bila otvorena u Python uređivaču. Kopirajte kod ili zatvorite uređivač i ponovo ga otvorite na ćeliji."
+        }
         "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
             "Ćelija {cell} se promenila dok je bila otvorena u Python uređivaču, pa kod nije primenjen. Kopirajte kod ili zatvorite uređivač i ponovo ga otvorite na ćeliji."
         }

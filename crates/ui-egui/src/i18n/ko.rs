@@ -178,6 +178,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit in Python Editor" => "Python 편집기에서 편집",
         "Unsaved changes" => "저장하지 않은 변경 내용",
         "The code for {cell} has unsaved changes." => "{cell}의 코드에 저장하지 않은 변경 내용이 있습니다.",
+        "The code for {cell} in {workbook} has unsaved changes." => "{cell}({workbook})의 코드에 저장하지 않은 변경 내용이 있습니다.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "코드를 더 길게 할 수 없습니다. Python 셀에는 PY 수식으로 계산하여 {max}자까지 들어갑니다."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}이(가) Python 편집기에서 열려 있는 동안 변경되었습니다. 코드를 복사하거나, 편집기를 닫고 셀에서 다시 여세요."
+        }
         "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
             "{cell}이(가) Python 편집기에서 열려 있는 동안 변경되었습니다. 따라서 코드가 적용되지 않았습니다. 코드를 복사하거나, 편집기를 닫고 셀에서 다시 여세요."
         }
