@@ -22,6 +22,7 @@ including tests, 2026-10-10.
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
 | L0 | `sandbox` | ~0.6k | Confined launcher for helper processes: Landlock and seccomp on Linux, `sandbox-exec` on macOS, refused elsewhere; checks the confinement before the program runs ([sandbox.md](sandbox.md)); used only by the apps |
 | L2 | `python` | ~1k | Python in cells: the JSON-lines protocol between GridCraft and the worker that runs the user's Python, with a cap on every field, and the limits, outcomes and transport trait a client uses; starts no process; depends only on `core` |
+| L2 | `python` | ~2.1k | Python in cells: interpreter detection, the worker shim (`shim.py`, the one non-Rust source file, run by the user's Python), the JSON-lines protocol with its caps, the limits and outcomes of a request, and the process launch (not in the web build); depends only on `core` |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
@@ -254,13 +255,21 @@ so a file with thousands of equations opens in bounded time. The equation editor
 only other callers, through the same guarded entry points. The gate that admitted RaTeX is
 recorded in [`decisions.md`](decisions.md) and re-run by `crates/math/tests/gate.rs`.
 
-`gridcraft-python` (L2, used by no other crate) holds the worker protocol and starts no process.
-`protocol` is the JSON-lines protocol (`run {id, code, inputs}`, `reset {id}`; `ready {selfTest}`
-once, then one `done {id, ok, value or error, stdout}` per request) with a byte or character cap
-on every field and array shapes checked on read: every line from the worker is untrusted.
-`run` holds the limits of a worker (time per request, extra time to start, memory, line cap),
-the typed outcome of a request with the cell error each one shows (`#CONNECT!` when the worker
-could not start), and the `Transport` trait through which workers start.
+`gridcraft-python` (L2, used by no other crate) holds the worker. `interp` finds an interpreter:
+`$VIRTUAL_ENV/bin`, `$CONDA_PREFIX/bin`, then `python3` and `python` on `PATH`, absolute paths to
+existing files only, Python 3.11 or newer, each asked its version with `<python> -I -S -E -c
+<script>` under a deadline and a bounded read. `process::ProcessTransport` starts `<python> -I -S -E
+<shim>` with an empty environment (`OPENBLAS_NUM_THREADS=1` only) in a fresh private folder holding
+a read-only copy of `shim.py` and an empty working directory; `process::Launch` is the seam where a
+wrapper can change the command. The shim adds site-packages from `sysconfig` without `site`, keeps
+one `__main__` for all cells until `reset`, answers `xl(ref)` from the inputs the parent sent, and
+converts the last expression's value. Only the crate's tests start a process. `protocol` is the
+JSON-lines protocol (`run {id, code, inputs}`, `reset {id}`; `ready {selfTest}` once, then one `done
+{id, ok, value or error, stdout}` per request) with a byte or character cap on every field and array
+shapes checked on read: every line from the worker is untrusted. `run` holds the limits of a worker
+(time per request, extra time to start, memory, line cap), the typed outcome of a request with the
+cell error each one shows (`#CONNECT!` when the worker could not start), and the `Transport` trait
+through which workers start.
 
 ## Agent control
 
@@ -303,6 +312,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
+| 2026-10-26 | minor | The `python` crate: interpreter detection, the worker shim and the process launch |
 | 2026-10-26 | minor | The `python` crate (L2): the worker protocol and its caps, limits and outcomes |
 | 2026-10-25 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, and the limits on open |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
