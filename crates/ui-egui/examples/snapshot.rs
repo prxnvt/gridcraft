@@ -5,7 +5,8 @@
 //!  [--pane name] [--object id] [--dialog 'name={json}'] [--hf-edit header|footer] [--ui 'id={json}']... out.png`
 //!
 //! `--cmd` runs an engine command on the session before the app starts; `--ui` runs a command
-//! through the app (UI commands too, such as `ui.pythonMode` or `ui.pythonCard`) after it starts.
+//! through the app (UI commands too, such as `ui.pythonMode`, `ui.pythonCard` or `ui.pythonEditor`)
+//! after it starts.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;

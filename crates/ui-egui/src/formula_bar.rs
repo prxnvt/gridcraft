@@ -105,6 +105,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 if let Some(badge) = python_badge(app, ui, &t) {
                     layout.buttons = layout.buttons.union(badge);
                 }
+                if let Some(button) = python_editor_button(app, ui, &t) {
+                    layout.buttons = layout.buttons.union(button);
+                }
                 ui.add_space(4.0);
                 // The formula field fills the rest, as tall as the bar.
                 let avail = ui.available_width() - 24.0;
@@ -275,6 +278,25 @@ fn python_badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rec
         app.toggle_python_mode();
     }
     Some(rect)
+}
+
+/// The Python editor button beside the PY badge, shown with it: opens the editor window on the
+/// cell, with the code as typed so far in Python mode. Returns its rect when shown.
+fn python_editor_button(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
+    let show = match &app.editor {
+        Some(ed) => ed.python,
+        None => active_python(app).is_some(),
+    };
+    // Not on code hidden on a protected sheet: the window would show it.
+    if !show || !crate::python_window::bar_offers(app) {
+        return None;
+    }
+    let label = app.ui.language.tr(crate::python_window::EDIT_IN_EDITOR).to_string();
+    let resp = crate::widgets::icon_button(ui, Icon::PythonEditor, t.text, &label, vec2(24.0, 24.0));
+    if resp.clicked() {
+        crate::python_window::open_from_bar(app);
+    }
+    Some(resp.rect)
 }
 
 /// Draws the Name Box and its name dropdown; Enter jumps to a reference or known name (or defines a new name) and is consumed so the grid does not move down.

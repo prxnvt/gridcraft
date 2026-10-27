@@ -552,6 +552,9 @@ pub struct FieldOptions<'a> {
     pub width: f32,
     /// The height shown before it scrolls; the scroll area follows the caret.
     pub max_height: f32,
+    /// The field is `max_height` tall even when its text is shorter (a click below the text still
+    /// lands in it).
+    pub fill: bool,
     /// Whether it takes input. A dialog or message box over the field has the keyboard.
     pub interactive: bool,
     /// Keys the caller acts on itself, in input order (see [`apply_in_order_until`]).
@@ -570,6 +573,7 @@ impl FieldOptions<'_> {
             lang,
             width: f32::INFINITY,
             max_height: 100.0,
+            fill: false,
             interactive: true,
             stop: &|_| false,
             keep_escape: false,
@@ -643,9 +647,10 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: options.keep_escape };
+    let max_height = options.max_height.max(1.0);
     let scrolled =
-        egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(options.max_height.max(1.0)).auto_shrink([false, true]).show(ui, |ui| {
-            let out = TextEdit::multiline(text)
+        egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(max_height).auto_shrink([false, !options.fill]).show(ui, |ui| {
+            let mut edit = TextEdit::multiline(text)
                 .id(id)
                 .font(font.clone())
                 .code_editor()
@@ -654,8 +659,11 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
                 .desired_rows(1)
                 .interactive(options.interactive)
                 .event_filter(filter)
-                .layouter(&mut layouter)
-                .show(ui);
+                .layouter(&mut layouter);
+            if options.fill {
+                edit = edit.min_size(egui::vec2(0.0, max_height));
+            }
+            let out = edit.show(ui);
             if let Some(e) = edited {
                 let caret = out.galley.pos_from_cursor(CCursor::new(e.caret)).translate(out.galley_pos.to_vec2());
                 ui.scroll_to_rect(caret, None);

@@ -17,6 +17,13 @@ impl SheetApp {
     }
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        // Closing the workbook would lose the Python editor's unsaved code: refused, from the
+        // interface (which shows the reason) and from a programmatic call.
+        if (id == "file.close" && crate::python_window::blocks_close(self))
+            || (id == "window.close" && crate::python_window::blocks_window_close(self, &params))
+        {
+            return Err("The Python editor has unsaved changes for this workbook. Apply or discard them first (ui.pythonEditor with on: false and force: true discards them).".into());
+        }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
@@ -262,6 +269,7 @@ impl SheetApp {
                 Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
             }
             "ui.pythonCard" => crate::python_card::command(self, p),
+            "ui.pythonEditor" => crate::python_window::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)

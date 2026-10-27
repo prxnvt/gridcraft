@@ -148,6 +148,7 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "scroll": [v.scroll.x, v.scroll.y],
         "editor": app.editor.as_ref().map(|e| editor_json(app, e)),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
+        "pythonEditor": crate::python_window::state(app),
         "backstage": app.backstage.as_ref().map(|b| b.page.id()),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
         "selectedObject": app.selected_object,
@@ -238,6 +239,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.expandFormulaBar", "Expand Formula Bar", "{on?: bool} (toggles without it) → {on}"),
                 ("ui.pythonMode", "Python Mode", "{on?: bool} (toggles without it) → {on}; a refused start is an error"),
                 ("ui.pythonCard", "Python Card", "{on?: bool} (false closes it; otherwise opens the active Python cell's card) → {open, cell?}"),
+                (
+                    "ui.pythonEditor",
+                    "Python Editor",
+                    "{on?: bool (toggles without it), cell?: \"A1\" | \"Sheet2!B3\" (default: the active cell), force?: bool (discards unsaved code instead of refusing)} → {open, sheet?, cell?, text? (null while the code is hidden), hidden?, dirty?, pending?, notice?, rect?}",
+                ),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
@@ -456,12 +462,17 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             }
         }
         "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
-        "app.quit" => {
-            // Programmatic calls never open dialogs: quitting from here doesn't ask about unsaved work.
-            app.allow_close = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            ok(Json::Null)
-        }
+        // Programmatic calls never open dialogs: quitting from here doesn't ask about unsaved
+        // workbooks. Unsaved code in the Python editor refuses the quit instead, as it refuses
+        // `file.close` (the code is in no workbook, so nothing could save it).
+        "app.quit" => match crate::python_window::quit_refused(app) {
+            Some(e) => err(e),
+            None => {
+                app.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                ok(Json::Null)
+            }
+        },
         // Anything else that names a command runs it.
         other if gridcraft_engine::find_command(other).is_some() => wrap(direct(app, other, p, true)),
         other => err(format!("unknown method `{other}`")),

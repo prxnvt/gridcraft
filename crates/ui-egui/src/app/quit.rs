@@ -7,6 +7,11 @@ impl SheetApp {
         if self.native_windows || self.allow_close || !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
+        // Unsaved code in the Python editor: the quit stops until it is applied or discarded.
+        if crate::python_window::stop_quit(self) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
         // A cell still being edited is part of the workbook, as for File › Close.
         if !self.commit_edit(0, 0, false, false) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -81,11 +86,15 @@ impl SheetApp {
         true
     }
 
-    /// Quit (the macOS app menu, ⌘Q): commits every window's cell draft as Enter would, lets the
-    /// macro step editor ask about its unsaved steps, then asks about each unsaved workbook in its
-    /// window; Cancel on any of them stops the quit. A draft its
-    /// workbook refuses stops the quit too, with its window in front and the reason shown.
+    /// Quit (the macOS app menu, ⌘Q): stops while the Python editor has unsaved code, then commits
+    /// every window's cell draft as Enter would, lets the macro step editor ask about its unsaved
+    /// steps, then asks about each unsaved workbook in its window; Cancel on any of them stops the
+    /// quit. A draft its workbook refuses stops the quit too, with its window in front and the
+    /// reason shown.
     pub fn request_quit(&mut self, ctx: &egui::Context) {
+        if crate::python_window::stop_quit(self) {
+            return;
+        }
         while let Some(window) = self.parked_window_with_draft() {
             self.enter_window(window);
             if self.settle_drafts().is_err() {
