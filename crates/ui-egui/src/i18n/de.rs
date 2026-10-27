@@ -168,6 +168,20 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Insert\nPython" => "Python\neinfügen",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Python einfügen (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python-Editor",
+        "Edit in Python Editor" => "Im Python-Editor bearbeiten",
+        "Unsaved changes" => "Nicht gespeicherte Änderungen",
+        "The code for {cell} has unsaved changes." => "Der Code für {cell} hat nicht gespeicherte Änderungen.",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} hat sich geändert, während die Zelle im Python-Editor geöffnet war, daher wurde der Code nicht übernommen. Kopieren Sie den Code, oder schließen Sie den Editor und öffnen Sie ihn erneut für die Zelle."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} übernimmt den Code. Esc schließt den Editor.",
+        "The Python editor's unsaved code was copied to the clipboard." => {
+            "Der nicht gespeicherte Code des Python-Editors wurde in die Zwischenablage kopiert."
+        }
+        "Apply" => "Übernehmen",
+        "Discard" => "Verwerfen",
+        "Cancel" => "Abbrechen",
         "Evaluate Formula" => "Formel auswerten",
         "Watch Window" => "Überwachungsfenster",
         "Calculation\nOptions" => "Berechnungs-\noptionen",

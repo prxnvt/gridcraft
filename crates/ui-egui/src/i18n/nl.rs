@@ -162,6 +162,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Insert\nPython" => "Python\ninvoegen",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Python invoegen (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python-editor",
+        "Edit in Python Editor" => "Bewerken in Python-editor",
+        "Unsaved changes" => "Niet-opgeslagen wijzigingen",
+        "The code for {cell} has unsaved changes." => "De code voor {cell} heeft niet-opgeslagen wijzigingen.",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} is gewijzigd terwijl de cel in de Python-editor geopend was, dus de code is niet toegepast. Kopieer de code, of sluit de editor en open deze opnieuw op de cel."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} past de code toe. Esc sluit de editor.",
+        "The Python editor's unsaved code was copied to the clipboard." => {
+            "De niet-opgeslagen code van de Python-editor is naar het klembord gekopieerd."
+        }
+        "Apply" => "Toepassen",
+        "Discard" => "Negeren",
         "Evaluate Formula" => "Formule evalueren",
         "Watch Window" => "Bewakingsvenster",
         "Calculation\nOptions" => "Berekenings-\nopties",

@@ -157,6 +157,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Insert\nPython" => "Wstaw\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Wstaw Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Edytor języka Python",
+        "Edit in Python Editor" => "Edytuj w edytorze języka Python",
+        "Unsaved changes" => "Niezapisane zmiany",
+        "The code for {cell} has unsaved changes." => "Kod komórki {cell} ma niezapisane zmiany.",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "Komórka {cell} zmieniła się, gdy była otwarta w edytorze języka Python, więc kod nie został zastosowany. Skopiuj kod albo zamknij edytor i otwórz go ponownie na komórce."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} stosuje kod. Esc zamyka edytor.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Niezapisany kod edytora języka Python skopiowano do schowka.",
+        "Apply" => "Zastosuj",
+        "Discard" => "Odrzuć",
         "Evaluate Formula" => "Szacuj formułę",
         "Watch Window" => "Okno czujki",
         "Calculation\nOptions" => "Opcje\nobliczania",
