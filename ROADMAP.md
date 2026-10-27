@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (Python cells in the interface; earlier: Python cells stored and kept in files; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (the Python editor window; earlier: Python cells stored and kept in files; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -135,6 +135,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-11-01 | The Python editor: a resizable window for a Python cell's code, with Python colours, opened from a button beside the formula bar's PY badge, from Edit in Python Editor in a Python cell's menu, or with `ui.pythonEditor`; Ctrl+Enter or Apply puts the code in the cell through `python.set`, closing it or opening it on another cell first asks about unsaved code, and closing its workbook or quitting is refused until that code is applied or discarded. The code still doesn't run |
 | 2026-11-02 | Python cells in the interface: Python mode in the formula bar (Ctrl+Alt+Shift+P, `=PY` then Tab, editing a Python cell, Formulas › Insert Python) with Enter for a new line, Tab to indent and Ctrl+Enter to commit through `python.set`; PY tags on Python cells and a card with the cached result or why the cell shows `#BLOCKED!`; Ctrl+Alt+Shift+M and the cell menu switch between Python Object and Excel Value (`python.output`). The code still doesn't run |
 | 2026-11-02 | Python cells as data: `python.set` stores code in a cell, Python cells copy, move, fill and undo like formulas, and `.xlsx` reads and writes Python cells as [MS-XLSX] specifies (`_xlfn._xlws.PY(index,0 or 1)`, the code in the workbook's Python part) with cached values and spills, so such workbooks open with their results; nothing runs Python (new code shows `#BLOCKED!`), and opening a file limits code size, result size and spill ranges |
 | 2026-11-02 | Solver writes a Sensitivity report: Simplex LP shadow prices, reduced costs and allowable ranges from the final tableau; GRG Nonlinear reduced gradients and Lagrange multipliers from difference gradients, at a Karush-Kuhn-Tucker point only; Solver Results offers it where it applies (no score change) |
@@ -255,6 +256,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Progress log: the Python editor window |
 | 2026-11-02 | minor | Progress log: Python cells in the interface |
 | 2026-11-02 | minor | Progress log: Python cells as data |
 | 2026-11-02 | minor | What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear (no score change) |
