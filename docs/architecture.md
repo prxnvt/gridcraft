@@ -213,11 +213,17 @@ cell) that sheet protection now hides, as the Python editor window closes then.
 `python_card.rs` holds the PY tag (painted in the grid's
 logical coordinates, so the grid's mirroring places it on right-to-left sheets), the card
 (`ui.pythonCard`) and the cell menu's return-type items. `python_window.rs` is the Python editor
-window: its own copy of one cell's code (by workbook uid, sheet and address) in `code_field`.
-Apply runs `python.set` in the window's workbook. The questions about unsaved code are a state of
-the window (`Pending`), so a programmatic `ui.pythonEditor` never opens one; it refuses, or
-discards with `force`. With native windows, where each window draws the app with its own workbook
-active, the editor is drawn only in its workbook's windows.
+window: its own copy of one cell's code (by workbook uid, sheet and address) in `code_field`. It
+follows its sheet by `Sheet::uid` (`model::SheetUid`), an identity that lives only while the app
+runs: a new, inserted, copied or opened sheet gets a fresh one, and a rename, a move and the
+copies undo keeps don't change it, so a sheet deleted and another of its name put in its place is
+never taken for it. The code field has the line-number gutter (painted for the rows in view)
+and an `accept` check that refuses an edit past `PyCode::fits` as it is typed or pasted. Apply
+runs `python.set` in the window's workbook. The questions about unsaved code are a state of the window (`Pending`), so a
+programmatic `ui.pythonEditor` never opens one; it refuses, or discards with `force`. With native
+windows, where each window draws the app with its own workbook active, the editor is drawn only in
+its workbook's window (`PyWindow::window`), and a question or an opening brings that window
+forward.
 
 ## Equations
 
@@ -266,6 +272,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
 | 2026-11-01 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
 | 2026-11-01 | minor | The Python editor window (`python_window.rs`) and its questions as state |
+| 2026-11-01 | minor | The Python editor window (`python_window.rs`): the code field's gutter and `accept` check, the window's questions as state, and the window following its sheet by `model::SheetUid` |
 | 2026-11-01 | minor | Python cells in the interface: Python mode on the shared editor, `code_field` and its stop keys, `python_card.rs`, `python.output`; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-01 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
