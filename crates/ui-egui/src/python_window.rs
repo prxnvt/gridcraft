@@ -301,12 +301,24 @@ fn followed(app: &SheetApp, w: &PyWindow) -> Option<(usize, String)> {
     d.wb.sheets.iter().position(|sh| sh.uid.get() == w.sheet_uid).and_then(|i| d.wb.sheet(i).map(|sh| (i, sh.name.clone())))
 }
 
+/// Whether the code the window took from its cell is hidden on any protected sheet of its workbook:
+/// a sheet whose cell at the window's address is out of view ([`target_hidden`]) and holds that
+/// code. This doesn't depend on which sheet the window follows: once its sheet is deleted it
+/// follows none, and a copy of that sheet protected with the cell Hidden never keeps the code in
+/// view.
+fn saved_code_hidden(app: &SheetApp, w: &PyWindow) -> bool {
+    let Some(d) = app.session.documents().iter().find(|d| d.uid == w.doc) else { return false };
+    let holds = |sh: &Sheet| sh.cell(w.cell).and_then(|c| c.py.as_ref()).is_some_and(|p| p.code == w.saved);
+    d.wb.sheets.iter().any(|sh| holds(sh) && gridcraft_engine::display::formula_hidden(&d.wb, sh, w.cell))
+}
+
 /// Whether the window's code is out of view now: its cell, on the sheet it follows, is Hidden or
-/// inside the spill of a Hidden cell on a protected sheet. `sync` closes the window by this rule
-/// on the next frame; `state` checks it when called, since a control batch can protect the sheet
-/// before that frame.
+/// inside the spill of a Hidden cell on a protected sheet, or the code it took from its cell is
+/// hidden on another sheet ([`saved_code_hidden`]). `sync` closes the window by this rule on the
+/// next frame; `state` checks it when called, since a control batch can protect the sheet before
+/// that frame.
 fn code_hidden(app: &SheetApp, w: &PyWindow) -> bool {
-    followed(app, w).is_some_and(|(sheet, _)| target_hidden(app, Target { sheet, ..w.target() }))
+    followed(app, w).is_some_and(|(sheet, _)| target_hidden(app, Target { sheet, ..w.target() })) || saved_code_hidden(app, w)
 }
 
 /// The message for a cell whose code is hidden.
