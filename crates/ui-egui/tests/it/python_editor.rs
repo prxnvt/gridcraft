@@ -931,6 +931,56 @@ fn protecting_the_sheet_closes_the_window_on_hidden_code_and_keeps_typed_code_on
 }
 
 #[test]
+fn a_window_that_lost_its_sheet_still_closes_when_its_code_becomes_hidden() {
+    let mut s = blank();
+    s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+    s.execute("python.set", json!({"cell": "Data!B2", "code": "d = 1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "Data!B2", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    let mut h = harness(s);
+    ui(&mut h, json!({"on": true, "cell": "Data!B2"})).unwrap();
+    to_end(&mut h);
+    type_text(&mut h, " + 1");
+    // Copied, and then deleted: the window follows no sheet, and keeps its code.
+    h.state_mut().run("sheet.move", json!({"sheet": "Data", "to": 0, "copy": true})).unwrap();
+    h.state_mut().run("home.deleteSheet", json!({"sheet": "Data"})).unwrap();
+    h.run_steps(3);
+    assert!(win(&h).is_some_and(|w| w.text == "d = 1 + 1"), "the typed code stays");
+    // Protecting the copy hides the code there: the window closes all the same.
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": "Data (2)"})).unwrap();
+    h.state_mut().session.execute("review.protectSheet", json!({})).unwrap();
+    h.step();
+    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "d = 1 + 1"));
+    h.run_steps(2);
+    assert!(win(&h).is_none(), "the code is out of view");
+    assert!(copied, "the typed code is on the clipboard");
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some(python_window::COPIED));
+}
+
+#[test]
+fn a_question_answered_after_the_cell_became_hidden_opens_nothing() {
+    let mut s = with_code();
+    s.execute("python.set", json!({"cell": "D4", "code": "y = 2"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "B2", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    let mut h = harness(s);
+    ui(&mut h, json!({"on": true, "cell": "D4"})).unwrap();
+    to_end(&mut h);
+    type_text(&mut h, " + 1");
+    // Opening B2 from its menu asks first about D4's typed code.
+    select(&mut h, "B2");
+    python_window::open_from_menu(h.state_mut());
+    h.run_steps(2);
+    assert!(win(&h).is_some_and(|w| matches!(w.pending, Some(Pending::Open { .. }))), "it asks");
+    // The sheet is protected while the question is open; then Discard.
+    h.state_mut().session.execute("review.protectSheet", json!({})).unwrap();
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    python_window::answer(h.state_mut(), &ctx, python_window::Answer::Discard);
+    assert!(win(&h).is_none(), "B2's code is not shown, not even for a frame");
+    let m = h.state().message.as_ref().map(|(_, m)| m.clone()).unwrap_or_default();
+    assert!(m.contains("B2 are hidden because the sheet is protected"), "{m}");
+}
+
+#[test]
 fn apply_then_undo_then_typing_applies_to_the_same_cell() {
     let mut h = harness(with_code());
     ui(&mut h, json!({"on": true, "cell": "B2"})).unwrap();
