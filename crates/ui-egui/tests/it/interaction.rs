@@ -841,6 +841,21 @@ fn random_seed_caption_says_blank_draws_a_new_sequence() {
 }
 
 #[test]
+fn data_analysis_form_keeps_ok_on_screen_in_a_short_window() {
+    // The patterned Random Number Generation form is the tallest; in a 600-point-high window the
+    // tool's options scroll and the output options and OK stay reachable.
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(egui::vec2(1280.0, 600.0)), crate::common::app(blank()), 4);
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "randomNumberGeneration"}));
+    h.state_mut().dialog.as_mut().unwrap().values.insert("distribution".into(), json!("patterned"));
+    h.run_steps(4);
+    // OK's label is padded; a button clipped off the window has no node at all.
+    let ok = h.query_by_label("   OK   ").map(|n| n.rect());
+    assert!(ok.is_some_and(|r| r.bottom() <= 600.0), "OK at {ok:?} in a 600-point window");
+    let output = h.query_by_label("New Worksheet Ply:").map(|n| n.rect());
+    assert!(output.is_some_and(|r| r.bottom() <= 600.0), "the output options at {output:?}");
+}
+
+#[test]
 fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {

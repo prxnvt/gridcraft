@@ -202,6 +202,10 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
     v.as_object().cloned().unwrap_or_default()
 }
 
+/// Height a ToolPak form needs besides the tool's own options: title bar, output options, OK
+/// and the window's margins.
+const TOOLPAK_CHROME: f32 = 240.0;
+
 /// Data › Data Analysis: pick a tool, then fill in its form. OK runs `data.analysisToolPak`
 /// (through the dialog's command); a report that would replace data asks first.
 pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
@@ -247,7 +251,10 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
     };
     d.title = label.to_string();
     d.fields = toolpak_fields(&tool, &d.values);
-    form_fields(ui, d);
+    // The tool's options scroll in a short window (the patterned Random Number Generation form
+    // is taller than 600 points); the output options and OK below always stay in view.
+    let room = (ui.ctx().content_rect().height() - TOOLPAK_CHROME).max(120.0);
+    egui::ScrollArea::vertical().id_salt("toolpakForm").max_height(room).show(ui, |ui| form_fields(ui, d));
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
