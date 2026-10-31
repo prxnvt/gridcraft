@@ -36,6 +36,7 @@ use gridcraft_core::split_sheet;
 mod evolutionary;
 mod lp;
 mod model;
+mod model_range;
 mod nlp;
 mod problem;
 mod reports;
@@ -44,12 +45,15 @@ use evolutionary::{EvoEnd, evolutionary};
 use lp::{Outcome, Sense, branch_and_bound, linearize, solve_lp};
 pub use model::saved_model;
 use model::{Goal, Method, Model, model_params, parse_model, save_model};
+use model_range::{load_model_cells, reset_model, save_model_cells};
 use nlp::{nlp, project};
 use problem::{Evaluator, as_num, build_problem};
 use reports::{ReportInput, insert_report_selections, prepare_reports, report, report_kinds, write_reports};
 
 const CMD: &str = "data.solver";
 const REPORT_CMD: &str = "data.solverReport";
+const SAVE_CMD: &str = "data.solverSaveModel";
+const LOAD_CMD: &str = "data.solverLoadModel";
 /// Excel's limit on decision variables.
 const MAX_VARS: usize = 200;
 /// Most scalar constraints (after expanding ranges).
@@ -86,6 +90,33 @@ pub fn specs() -> Vec<CommandSpec> {
             "{reports: [answer|limits], values?: {cell: number} (the solution; default the variable cells' current values), original?: {cell: number} (the values before solving; default `values`), message?: text (the result line), model?: data.solver params (default the sheet's saved model, with any data.solver params given here over it)} → {sheets: [names]}. Writes Answer and Limits reports on new sheets before the model's sheet; Limits needs Simplex LP or GRG Nonlinear and no integer constraints. data.solver's result can be passed as is.",
             has_doc,
             report
+        ),
+        cmd!(
+            "data.solverSaveModel",
+            "Save Model",
+            [],
+            None,
+            "{to: \"H1\" (the first cell, on the model's sheet), model?: data.solver params (default the sheet's saved model)} → {range}. Writes the model down a column as formulas: =MAX(objective), =MIN(objective) or =objective=value; =COUNT(variables); one =AND(relation) per constraint (=AND(x=INT(x)) for integer, =AND((x=0)+(x=1)) for binary), which shows TRUE while it holds; and the options as an array constant {method (1 GRG Nonlinear, 2 Simplex LP, 3 Evolutionary), non-negative (1 yes, 2 no), population size, mutation rate, random seed, require bounds (1 yes, 2 no), convergence, generations without improvement}.",
+            has_doc,
+            save_model_cells
+        ),
+        cmd!(
+            "data.solverLoadModel",
+            "Load Model",
+            [],
+            None,
+            "{from: \"H1:H6\" (a range on the active sheet; one cell reads down to the first cell without a formula)} → {model}. Reads a model written by Save Model and makes it the sheet's Solver model.",
+            has_doc,
+            load_model_cells
+        ),
+        cmd!(
+            "data.solverReset",
+            "Reset All",
+            [],
+            None,
+            "{} → {removed, masked}. Removes the active sheet's Solver model. A model read from workbook-level names stays for the other sheets and is masked on this one by an empty sheet-level solver_opt (masked: true).",
+            has_doc,
+            reset_model
         ),
     ]
 }

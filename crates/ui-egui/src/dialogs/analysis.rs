@@ -1,4 +1,4 @@
-use super::show::{form_fields, ok_cancel};
+use super::show::{build_params, form_fields, ok_cancel};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
 pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
@@ -170,8 +170,9 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
 }
 
 /// Data › Solver: the Solver Parameters form. Solve runs `data.solver` through the dialog's
-/// command; the result opens Solver Results.
-pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+/// command; the result opens Solver Results. Reset All clears the form and the sheet's model;
+/// Load/Save reads or writes the model on cells of the sheet.
+pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let lang = crate::i18n::current(ui.ctx());
     let text = |d: &Dialog, k: &str| d.values.get(k).map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default();
     let edit = |ui: &mut egui::Ui, d: &mut Dialog, k: &str, width: f32, label: &str| {
@@ -282,6 +283,68 @@ pub(super) fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open
         })
         .small(),
     );
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui.button("Reset All").clicked() {
+            match app.run("data.solverReset", json!({})) {
+                Ok(_) => {
+                    for (k, v) in [
+                        ("objective", json!("")),
+                        ("goal", json!("max")),
+                        ("value", json!("0")),
+                        ("variables", json!("")),
+                        ("constraints", json!([])),
+                        ("nonNegative", json!(true)),
+                        ("method", json!("grg")),
+                    ] {
+                        d.values.insert(k.into(), v);
+                    }
+                    d.values.remove("modelNote");
+                }
+                Err(e) => {
+                    d.values.insert("modelNote".into(), json!(crate::clean_error(&e)));
+                }
+            }
+        }
+        let shown = d.values.get("modelArea").and_then(Json::as_bool).unwrap_or(false);
+        if ui.selectable_label(shown, "Load/Save").clicked() {
+            d.values.insert("modelArea".into(), json!(!shown));
+        }
+    });
+    if d.values.get("modelArea").and_then(Json::as_bool) == Some(true) {
+        ui.horizontal(|ui| {
+            ui.label("Model Range:");
+            edit(ui, d, "modelRange", 140.0, "Model Range:");
+            let range = text(d, "modelRange");
+            let ready = !range.trim().is_empty();
+            if ui.add_enabled(ready, egui::Button::new("Load")).clicked() {
+                match app.run("data.solverLoadModel", json!({"from": range.trim()})) {
+                    Ok(r) => {
+                        if let Some(m) = r.get("model").and_then(Json::as_object) {
+                            for (k, x) in m {
+                                d.values.insert(k.clone(), if k == "value" { json!(x.to_string()) } else { x.clone() });
+                            }
+                        }
+                        d.values.insert("modelNote".into(), json!("The model was loaded."));
+                    }
+                    Err(e) => {
+                        d.values.insert("modelNote".into(), json!(crate::clean_error(&e)));
+                    }
+                }
+            }
+            if ui.add_enabled(ready, egui::Button::new("Save")).clicked() {
+                let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d)})) {
+                    Ok(r) => format!("The model was saved to {}.", r.get("range").and_then(Json::as_str).unwrap_or("")),
+                    Err(e) => crate::clean_error(&e),
+                };
+                d.values.insert("modelNote".into(), json!(note));
+            }
+        });
+    }
+    let note = text(d, "modelNote");
+    if !note.is_empty() {
+        ui.label(egui::RichText::new(note).small());
+    }
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let t = crate::theme::Tokens::get(ui.ctx());
