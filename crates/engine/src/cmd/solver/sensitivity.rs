@@ -4,7 +4,7 @@
 //! the LP linearised at the solution. GRG Nonlinear: the reduced gradients and the Lagrange
 //! multipliers of the binding constraints at the solution, from difference gradients.
 
-use super::lp::{FinalTableau, Row, Sense, linear_program, linearize, solve_lp_tableau};
+use super::lp::{FinalTableau, LpRow, Outcome, Row, Sense, linear_program, linearize, solve_lp_tableau};
 use super::model::{Goal, Method, Model};
 use super::problem::{Evaluator, Point, Problem, as_num};
 use super::reports::{Lines, ReportInput, ReportKind, abs_ref, cell_name, table, title};
@@ -192,8 +192,16 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
     })?;
     let (c, rows) = linear_program(m.goal, &cf, f_const, &lin, &ev.rows);
     let mut work = LP_WORK;
-    let (_, tab) = solve_lp_tableau(&c, &rows, &inp.prob.lo, &inp.prob.hi, &mut work);
-    let tab = tab.ok_or_else(|| EngineError::Other("Solver could not find an optimal basis for the Sensitivity report.".into()))?;
+    let (outcome, tab) = solve_lp_tableau(&c, &rows, &inp.prob.lo, &inp.prob.hi, &mut work);
+    let (Outcome::Solved(_, best, _), Some(tab)) = (outcome, tab) else {
+        return Err(EngineError::Other("Solver could not find an optimal basis for the Sensitivity report.".into()));
+    };
+    // The report describes the optimum, so the values it shows must be one.
+    if !optimal_point(&c, &rows, (&inp.prob.lo, &inp.prob.hi), &inp.solution, best) {
+        return Err(EngineError::Other(
+            "The Sensitivity report needs an optimal solution: these values are not optimal for the model. Solve it first.".into(),
+        ));
+    }
     // Minimising `sign · objective`.
     let sign = if m.goal == Goal::Max { -1.0 } else { 1.0 };
     let shadow: Vec<f64> = (0..rows.len())
@@ -249,6 +257,28 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
         vec!["Cell", "Name", "Final Value", "Reduced Cost", "Objective Coefficient", "Allowable Increase", "Allowable Decrease"],
         vec!["Cell", "Name", "Final Value", "Shadow Price", "Constraint R.H. Side", "Allowable Increase", "Allowable Decrease"],
     ))
+}
+
+/// Whether `x` satisfies the LP (rows and bounds) and reaches its optimum `best` (minimising
+/// `c·x`), within the constraint precision.
+fn optimal_point(c: &[f64], rows: &[LpRow], (lo, hi): (&[f64], &[f64]), x: &[f64], best: f64) -> bool {
+    let near = |v: f64, size: f64| v <= super::PRECISION * (1.0 + size);
+    let dot = |a: &[f64]| a.iter().zip(x).fold((0.0, 0.0), |(s, m), (p, q)| (s + p * q, m + (p * q).abs()));
+    let rows_hold = rows.iter().all(|(a, sense, b)| {
+        let (lhs, size) = dot(a);
+        let size = size + b.abs();
+        match sense {
+            Sense::Le => near(lhs - b, size),
+            Sense::Ge => near(b - lhs, size),
+            Sense::Eq => near((lhs - b).abs(), size),
+        }
+    });
+    let bounds_hold = x.iter().enumerate().all(|(j, v)| {
+        let (l, h) = (lo.get(j).copied().unwrap_or(f64::NEG_INFINITY), hi.get(j).copied().unwrap_or(f64::INFINITY));
+        v.is_finite() && near(l - v, v.abs()) && near(v - h, v.abs())
+    });
+    let (value, size) = dot(c);
+    rows_hold && bounds_hold && near(value - best, size + best.abs())
 }
 
 fn entry(tab: &FinalTableau, r: usize, col: usize) -> f64 {

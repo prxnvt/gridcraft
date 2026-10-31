@@ -491,6 +491,31 @@ fn sensitivity_report_gives_the_wyndor_glass_shadow_prices_and_ranges() {
 }
 
 #[test]
+fn simplex_sensitivity_report_needs_an_optimal_point() {
+    // Wyndor Glass: (2, 6) is the optimum (36). (0, 0) is feasible but not optimal; (4, 4.8)
+    // reaches 36 but breaks plant 3's hours (21.6 > 18).
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [[null, "Doors", "Windows", "Used", "Available"], ["Batches", 0, 0, null, null], ["Plant 1", 1, 0, null, 4], ["Plant 2", 0, 2, null, 12], ["Plant 3", 3, 2, null, 18], ["Profit", 3, 5, null, null]]}),
+    )
+    .unwrap();
+    for r in 3..=6 {
+        set(&mut s, &[(&format!("D{r}"), &format!("=SUMPRODUCT(B{r}:C{r},$B$2:$C$2)"))]);
+    }
+    let model = json!({"objective": "D6", "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex"});
+    let report = |b: f64, c: f64| json!({"reports": ["sensitivity"], "model": model, "values": {"B2": b, "C2": c}});
+    for (b, c) in [(0.0, 0.0), (4.0, 4.8)] {
+        let before = s.doc().unwrap().clone();
+        let err = s.execute("data.solverReport", report(b, c)).unwrap_err();
+        assert!(err.to_string().contains("not optimal"), "({b}, {c}): {err}");
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before.wb));
+    }
+    let r = s.execute("data.solverReport", report(2.0, 6.0)).unwrap();
+    assert_eq!(r["sheets"], json!(["Sensitivity Report 1"]), "{r}");
+}
+
+#[test]
 fn sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers() {
     // The largest rectangle with perimeter at most 20: the area (P/4)² grows by P/8 = 2.5 per
     // unit of perimeter, and both reduced gradients are 0.
