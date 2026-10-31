@@ -320,14 +320,17 @@ fn ref_text(sheet_name: &str, cells: &str) -> String {
     abs_text(Some(sheet_name), cells)
 }
 
-/// The generations without improvement have no Excel equivalent: Excel's `solver_mni` is a time
-/// in seconds. They are saved under a GridCraft name, which Excel ignores.
+/// The evaluation limit and the generations without improvement have no Excel equivalent:
+/// Excel's `solver_itr` counts iterations (100 by default) and `solver_mni` seconds, so a
+/// workbook from Excel would cut GridCraft's search short. They are saved under GridCraft's own
+/// names, which Excel ignores.
+const EVALS_NAME: &str = "gridcraft_solver_evals";
 const STALL_NAME: &str = "gridcraft_solver_stall";
 
 /// Whether `name` is one of the hidden names of a saved model.
 pub(super) fn is_model_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    name.starts_with("solver_") || name == STALL_NAME
+    name.starts_with("solver_") || name == EVALS_NAME || name == STALL_NAME
 }
 
 /// The model as hidden names scoped to its sheet (replacing any saved before).
@@ -371,9 +374,7 @@ pub(super) fn save_model(wb: &mut Workbook, m: &Model) {
         Method::Evolutionary => "3",
     };
     put("solver_eng".into(), eng.into());
-    // The evaluation limit stands in for the iteration limit, and generations for the time
-    // without improvement.
-    put("solver_itr".into(), m.max_evals.to_string());
+    put(EVALS_NAME.into(), m.max_evals.to_string());
     put("solver_tol".into(), m.gap.to_string());
     if m.method == Method::Evolutionary {
         put("solver_ssz".into(), m.evo.population.to_string());
@@ -442,7 +443,7 @@ pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
         ("solver_rsd", "randomSeed"),
         ("solver_cvg", "convergence"),
         (STALL_NAME, "generationsWithoutImprovement"),
-        ("solver_itr", "maxEvaluations"),
+        (EVALS_NAME, "maxEvaluations"),
     ] {
         if let Some(v) = get(name).and_then(|v| num_text(&v)) {
             model[key] = json!(v);
