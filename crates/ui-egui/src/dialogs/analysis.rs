@@ -117,7 +117,7 @@ fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
                 "discrete" => vec![Text { key: "valueRange", label: "Value and Probability Input Range:" }],
                 _ => vec![Text { key: "from", label: "Between:" }, Text { key: "to", label: "And:" }],
             });
-            v.push(Text { key: "seed", label: "Random Seed (blank for none):" });
+            v.push(Text { key: "seed", label: "Random Seed (blank for a new sequence):" });
             v
         }
         "sampling" => vec![
@@ -129,7 +129,7 @@ fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
             } else {
                 Text { key: "period", label: "Period:" }
             },
-            Text { key: "seed", label: "Random Seed (blank for none):" },
+            Text { key: "seed", label: "Random Seed (blank for a new sequence):" },
         ],
         "fourierAnalysis" => vec![range(), labels(), Check { key: "inverse", label: "Inverse" }],
         "exponentialSmoothing" => {

@@ -826,6 +826,21 @@ fn random_number_generation_form_hides_the_count_for_a_patterned_sequence() {
 }
 
 #[test]
+fn random_seed_caption_says_blank_draws_a_new_sequence() {
+    // A blank seed doesn't mean "no seed": the engine picks a new one, so the numbers differ on
+    // each run. The caption says so for both tools that draw random numbers.
+    let mut h = harness(blank());
+    for tool in ["randomNumberGeneration", "sampling"] {
+        h.state_mut().open_dialog("analysisToolPak", json!({"tool": tool}));
+        h.state_mut().dialog.as_mut().unwrap().values.insert("method".into(), json!("random"));
+        h.run_steps(2);
+        assert!(h.query_by_label("Random Seed (blank for a new sequence):").is_some(), "{tool}");
+        assert!(h.query_by_label("Random Seed (blank for none):").is_none(), "{tool}");
+        h.state_mut().dialog = None;
+    }
+}
+
+#[test]
 fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {
