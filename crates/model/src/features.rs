@@ -614,10 +614,20 @@ pub struct Shape {
 /// [`EquationCache::refresh`] whenever the source changes, never saved, and ignored when shapes
 /// are compared. Painters read it and never lay equations out themselves, so nothing in a paint
 /// path can reach the layout engine.
+///
+/// An entry answers only for the source it was built from, compared in full: a hash match alone
+/// is not enough, so two sources whose hashes collide never share a layout. A source over
+/// [`gridcraft_math::MAX_SOURCE_BYTES`] is not copied into the entry (it never lays out, so its
+/// entry is always an error); it is matched by its length and hash, and only by another source
+/// over the cap.
 #[derive(Clone, Debug, Default)]
 pub struct EquationCache {
-    /// A hash of the source the layout was built from.
+    /// A hash of the source the entry was built from (a quick first check).
     key: u64,
+    /// The source's length in bytes.
+    len: usize,
+    /// The source itself, when it is within the length cap.
+    source: Option<std::sync::Arc<str>>,
     layout: Option<Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>>,
 }
 
@@ -635,10 +645,29 @@ fn source_key(src: &str) -> u64 {
 }
 
 impl EquationCache {
+    /// Whether this entry was built from `src`.
+    fn holds(&self, src: &str) -> bool {
+        if self.layout.is_none() || self.len != src.len() || self.key != source_key(src) {
+            return false;
+        }
+        match &self.source {
+            Some(s) => **s == *src,
+            None => src.len() > gridcraft_math::MAX_SOURCE_BYTES,
+        }
+    }
+
+    /// Makes this the entry for `src`, with `layout`.
+    fn store(&mut self, src: &str, layout: Result<std::sync::Arc<gridcraft_math::MathList>, gridcraft_math::MathError>) {
+        self.key = source_key(src);
+        self.len = src.len();
+        self.source = (src.len() <= gridcraft_math::MAX_SOURCE_BYTES).then(|| std::sync::Arc::from(src));
+        self.layout = Some(layout);
+    }
+
     /// The layout of `src`, or why it has none; `None` until [`EquationCache::refresh`] has run
     /// for this source.
     pub fn get(&self, src: &str) -> Option<Result<&gridcraft_math::MathList, &gridcraft_math::MathError>> {
-        if self.key != source_key(src) {
+        if !self.holds(src) {
             return None;
         }
         self.layout.as_ref().map(|r| r.as_ref().map(|l| l.as_ref()))
@@ -646,19 +675,16 @@ impl EquationCache {
 
     /// Lays `src` out again unless the cache already holds its layout. True when it did.
     pub fn refresh(&mut self, src: &str) -> bool {
-        let key = source_key(src);
-        if self.layout.is_some() && self.key == key {
+        if self.holds(src) {
             return false;
         }
-        self.key = key;
-        self.layout = Some(gridcraft_math::layout(src).map(std::sync::Arc::new));
+        self.store(src, gridcraft_math::layout(src).map(std::sync::Arc::new));
         true
     }
 
     /// Records that `src` was not laid out, and why, without running the layout engine.
     pub fn refuse(&mut self, src: &str, message: &str) {
-        self.key = source_key(src);
-        self.layout = Some(Err(gridcraft_math::MathError { span: None, message: message.to_string() }));
+        self.store(src, Err(gridcraft_math::MathError { span: None, message: message.to_string() }));
     }
 }
 
@@ -840,5 +866,49 @@ mod trendline_forecast_tests {
         assert_eq!(Trendline::clamp_forecast(f64::INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(f64::NEG_INFINITY), 0.0);
         assert_eq!(Trendline::clamp_forecast(1e300), Trendline::MAX_FORECAST);
+    }
+}
+
+#[cfg(test)]
+mod equation_cache_tests {
+    use super::{EquationCache, source_key};
+
+    fn glyphs(c: &EquationCache, src: &str) -> Option<String> {
+        let list = c.get(src)?.ok()?;
+        Some(list.items.iter().filter_map(|i| if let gridcraft_math::Item::Glyph(g) = i { Some(g.ch) } else { None }).collect())
+    }
+
+    #[test]
+    fn a_hash_collision_never_returns_another_sources_layout() {
+        let (a, b) = ("x^2", "y^3");
+        let mut c = EquationCache::default();
+        assert!(c.refresh(a));
+        assert_eq!(glyphs(&c, a).as_deref(), Some("x2"));
+        // Forge a collision: the entry claims `b`'s hash; `b` has `a`'s length, so only the
+        // full comparison tells them apart.
+        c.key = source_key(b);
+        assert!(c.get(b).is_none(), "`b` is a miss, not `a`'s layout");
+        assert!(c.refresh(b), "`b` is laid out afresh");
+        assert_eq!(glyphs(&c, b).as_deref(), Some("y3"));
+        assert!(c.get(a).is_none(), "the entry is `b`'s now");
+        // A refusal does not answer for a colliding source either.
+        c.refuse(a, "not laid out");
+        c.key = source_key(b);
+        assert!(c.get(b).is_none());
+    }
+
+    #[test]
+    fn sources_over_the_cap_are_not_copied_and_never_lay_out() {
+        let long = "x".repeat(gridcraft_math::MAX_SOURCE_BYTES + 1);
+        let mut c = EquationCache::default();
+        assert!(c.refresh(&long));
+        assert!(c.source.is_none(), "an over-cap source is not kept");
+        assert!(matches!(c.get(&long), Some(Err(_))));
+        assert!(!c.refresh(&long), "still cached");
+        let other = "y".repeat(gridcraft_math::MAX_SOURCE_BYTES + 1);
+        assert!(c.get(&other).is_none());
+        // Even a forged collision between two over-cap sources yields only an error.
+        c.key = source_key(&other);
+        assert!(matches!(c.get(&other), Some(Err(_))));
     }
 }
