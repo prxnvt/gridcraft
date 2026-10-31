@@ -356,7 +356,13 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                     ] {
                         d.values.insert(k.into(), v);
                     }
-                    d.values.remove("modelNote");
+                    // The options go back to their defaults too.
+                    for (key, _, _) in SOLVER_OPTIONS {
+                        d.values.remove(key);
+                    }
+                    for key in ["requireBounds", "optionsBackup", "modelNote"] {
+                        d.values.remove(key);
+                    }
                 }
                 Err(e) => {
                     d.values.insert("modelNote".into(), json!(crate::clean_error(&e)));
