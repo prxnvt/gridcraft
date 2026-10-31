@@ -352,6 +352,52 @@ fn reopen(s: &mut Session) {
 }
 
 #[test]
+fn a_kept_button_action_comes_back_only_on_the_same_button() {
+    use crate::cmd::controls::{load_action_names, with_action_names};
+    let mut s = s();
+    s.execute("macro.save", json!({"name": "Mark", "steps": [{"command": "cell.set", "params": {"cell": "A1", "input": "m"}}]})).unwrap();
+    s.execute("insert.button", json!({"at": "D2", "text": "Run", "command": "cell.set", "params": {"cell": "A9", "input": "cmd"}})).unwrap();
+    s.execute("insert.button", json!({"at": "D6", "text": "Other"})).unwrap();
+    s.execute("insert.button", json!({"at": "D9", "text": "Fixed", "macro": "Mark", "input": "F1:G2"})).unwrap();
+    let wb = (*s.doc().unwrap().wb).clone();
+    let stored = with_action_names(&wb).unwrap().unwrap();
+    let actions = |wb: &gridcraft_model::Workbook| wb.sheet(0).unwrap().controls.iter().map(|c| c.action.clone()).collect::<Vec<_>>();
+    let kept = |wb: &gridcraft_model::Workbook| {
+        let mut wb = wb.clone();
+        for c in &mut wb.sheet_mut(0).unwrap().controls {
+            // As xlsx carries them: a macro on the selection, or nothing for a command.
+            c.action = match c.action.take() {
+                Some(ControlAction::Macro { name, .. }) => Some(ControlAction::Macro { name, input: MacroInput::Selection, output: None }),
+                _ => None,
+            };
+        }
+        wb
+    };
+    // The same buttons in the same places get their actions back.
+    let mut same = kept(&stored);
+    load_action_names(&mut same);
+    assert_eq!(actions(&same), actions(&wb));
+    // Another application removed the first button: the command must not move to "Other".
+    let mut shifted = kept(&stored);
+    shifted.sheet_mut(0).unwrap().controls.remove(0);
+    load_action_names(&mut shifted);
+    assert_eq!(shifted.sheets[0].controls[0].action, None, "the command stays with the removed button");
+    // A button given another macro there keeps it; a command doesn't replace a macro either.
+    let mut reassigned = kept(&stored);
+    for i in [0, 2] {
+        reassigned.sheet_mut(0).unwrap().controls[i].action =
+            Some(ControlAction::Macro { name: "Other".into(), input: MacroInput::Selection, output: None });
+    }
+    load_action_names(&mut reassigned);
+    for i in [0, 2] {
+        assert!(
+            matches!(&reassigned.sheets[0].controls[i].action, Some(ControlAction::Macro { name, input: MacroInput::Selection, .. }) if name == "Other"),
+            "{i}"
+        );
+    }
+}
+
+#[test]
 fn every_kind_and_action_survives_xlsx() {
     let mut s = s();
     s.execute("macro.save", json!({"name": "Mark", "steps": [{"command": "cell.set", "params": {"cell": "Input.cell(1,1)", "input": "m"}}], "inputs": [{"name": "Input", "kind": "range"}], "output": {"onConflict": "overwrite"}})).unwrap();

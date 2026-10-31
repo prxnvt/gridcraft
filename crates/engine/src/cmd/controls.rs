@@ -563,14 +563,15 @@ fn plain(a: &ControlAction) -> bool {
 }
 
 /// A copy of `wb` for xlsx with the button actions xlsx can't express (commands, fixed inputs,
-/// output cells) in a hidden name, keyed by sheet name and the control's place on the sheet.
-/// `None` when there is nothing to store.
+/// output cells) in a hidden name, keyed by sheet name and the control's place on the sheet, with
+/// the button's name and anchor cell to check it is still the same button when the file comes
+/// back. `None` when there is nothing to store.
 pub(crate) fn with_action_names(wb: &Workbook) -> Result<Option<Workbook>> {
     let mut items = Vec::new();
     for sh in &wb.sheets {
         for (i, c) in sh.controls.iter().enumerate() {
             if let Some(a) = c.action.as_ref().filter(|a| !plain(a)) {
-                items.push(json!({"sheet": sh.name, "index": i, "action": a}));
+                items.push(json!({"sheet": sh.name, "index": i, "name": c.display_name(), "at": c.anchor.cell.a1(), "action": a}));
             }
         }
     }
@@ -587,7 +588,11 @@ pub(crate) fn with_action_names(wb: &Workbook) -> Result<Option<Workbook>> {
 }
 
 /// After a file is opened: gives buttons back the actions kept in the hidden name, and removes
-/// it. Entries that don't match a button, or don't parse, are dropped.
+/// it. Entries that don't parse, or don't match a button, are dropped: the button at the stored
+/// place must have the stored name and anchor cell (another application may have added, removed
+/// or reordered controls), and must not have been given another macro since (a stored macro
+/// action comes back only on a button that still runs that macro, a stored command only on one
+/// the file gives no macro).
 pub(crate) fn load_action_names(wb: &mut Workbook) {
     let Some(items) = stash::get_json(wb, ACTIONS_KEY) else { return };
     stash::remove(wb, ACTIONS_KEY);
@@ -599,10 +604,22 @@ pub(crate) fn load_action_names(wb: &mut Workbook) {
             ControlAction::Command { id, params } => !id.is_empty() && id.len() <= 200 && params.is_object(),
         };
         let Some(si) = wb.sheet_index(sheet) else { continue };
-        if !valid || !wb.sheet(si).is_some_and(|sh| sh.controls.get(index as usize).is_some_and(|c| c.kind == ControlKind::Button)) {
+        let Ok(index) = usize::try_from(index) else { continue };
+        let text = |k: &str| item.get(k).and_then(Json::as_str);
+        let same = |c: &FormControl| {
+            c.kind == ControlKind::Button
+                && text("name").is_none_or(|n| n == c.display_name())
+                && text("at").is_none_or(|a| a == c.anchor.cell.a1())
+                && match (&c.action, &action) {
+                    (None, _) => true,
+                    (Some(ControlAction::Macro { name: now, .. }), ControlAction::Macro { name: kept, .. }) => now.eq_ignore_ascii_case(kept),
+                    _ => false,
+                }
+        };
+        if !valid || !wb.sheet(si).is_some_and(|sh| sh.controls.get(index).is_some_and(same)) {
             continue;
         }
-        if let Some(c) = wb.sheet_mut(si).and_then(|sh| sh.controls.get_mut(index as usize)) {
+        if let Some(c) = wb.sheet_mut(si).and_then(|sh| sh.controls.get_mut(index)) {
             c.action = Some(action);
         }
     }
