@@ -241,6 +241,43 @@ fn data_analysis_picks_its_input_and_output_ranges() {
 }
 
 #[test]
+fn choosing_new_worksheet_ply_after_picking_an_output_range_sticks() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 1);
+    drag(&mut h, "D2", "D2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(field(&h, "outputTo"), "range");
+
+    let ply = h.get_by_label("New Worksheet Ply:").rect();
+    click_at(&mut h, ply.center());
+    h.run_steps(3);
+    assert_eq!(field(&h, "outputTo"), "newSheet", "the radio choice is not overridden by the Output Range box");
+    let labels = h.get_by_label("Labels in first row").rect();
+    click_at(&mut h, labels.center());
+    assert_eq!(field(&h, "outputTo"), "newSheet", "a checkbox click keeps the choice");
+
+    // Picking into Output Range ended with the radio choice: a later selection leaves it alone.
+    drag(&mut h, "F4", "F5");
+    assert_eq!(field(&h, "output"), "$D$2");
+    assert_eq!(field(&h, "outputTo"), "newSheet");
+
+    // Typing a range in the box chooses Output Range again.
+    let boxes: Vec<egui::Rect> = h
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .filter(|n| n.rect().center().y > ply.top() - 40.0 && n.rect().center().y < ply.top())
+        .map(|n| n.rect())
+        .collect();
+    assert_eq!(boxes.len(), 1, "the Output Range box, on the row above New Worksheet Ply");
+    click_at(&mut h, boxes[0].center());
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "H1");
+    assert_eq!(field(&h, "output"), "H1");
+    assert_eq!(field(&h, "outputTo"), "range");
+}
+
+#[test]
 fn solver_picks_its_objective_variables_and_constraint_cells() {
     let mut h = harness(workbook());
     h.state_mut().open_dialog("solver", json!({}));

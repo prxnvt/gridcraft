@@ -161,11 +161,19 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
             let r = ui.radio(to == choice, text_label);
             if r.clicked() {
                 d.values.insert("outputTo".into(), json!(choice));
+                // Another output option ends picking into Output Range, so a later selection on
+                // the grid doesn't choose it again.
+                if key != "output" && d.refs.target.as_deref() == Some("output") {
+                    d.refs.target = None;
+                }
             }
             if key == "output" {
+                let before = d.values.get(key).cloned();
+                let was_target = d.refs.target.as_deref() == Some(key);
                 ref_edit(app, ui, d, key, RefLabel::By(r.id), 190.0);
-                // Typing or picking an output range chooses it.
-                if d.refs.target.as_deref() == Some(key) {
+                // Clicking into the box, typing or picking an output range chooses it; only a
+                // change does, so an option chosen later stays chosen.
+                if d.refs.target.as_deref() == Some(key) && (!was_target || d.values.get(key) != before.as_ref()) {
                     d.values.insert("outputTo".into(), json!(choice));
                 }
             } else {
