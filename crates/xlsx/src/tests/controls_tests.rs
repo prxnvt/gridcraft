@@ -181,6 +181,35 @@ fn vml_only_controls_are_read_and_clamped() {
     assert_eq!(c[2].action, Some(ControlAction::Macro { name: "Tidy".into(), input: MacroInput::Selection, output: None }));
 }
 
+/// Shapes with a named `id` and their number in `o:spid`, as some producers write them.
+const VML_SPID: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+<v:shape id="Button 1" o:spid="_x0000_s1025" o:button="t"><v:textbox><div>Go</div></v:textbox><x:ClientData ObjectType="Button"><x:Anchor>1, 0, 6, 0, 3, 0, 7, 0</x:Anchor><x:FmlaMacro>[0]!Tidy</x:FmlaMacro></x:ClientData></v:shape>
+<v:shape id="Spinner 2" o:spid="_x0000_s1026"><x:ClientData ObjectType="Spin"><x:Anchor>1, 0, 1, 0, 1, 20, 3, 0</x:Anchor><x:Val>7</x:Val><x:Max>9</x:Max></x:ClientData></v:shape>
+</xml>"##;
+
+#[test]
+fn vml_shapes_are_also_found_by_their_spid() {
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/></Relationships>"#;
+    // The button is listed in <controls> without a properties part; the spin button is only in
+    // the VML.
+    let bytes = minimal(
+        r#"<sheetData/><legacyDrawing r:id="rId9"/><controls><control shapeId="1025" name="Go Button"/></controls>"#,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/drawings/vmlDrawing1.vml", VML_SPID)],
+        "",
+        "",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let c = &wb.sheet(0).unwrap().controls;
+    assert_eq!(c.len(), 2, "{c:?}");
+    assert_eq!((c[0].kind, c[0].name.as_str(), c[0].text.as_str()), (ControlKind::Button, "Go Button", "Go"));
+    assert_eq!(c[0].action, Some(ControlAction::Macro { name: "Tidy".into(), input: MacroInput::Selection, output: None }));
+    assert_eq!((c[1].kind, c[1].value, c[1].max), (ControlKind::Spin, 7, 9));
+    // Saved again, each is written once and nothing of them is kept twice.
+    let out = write_xlsx(&wb).unwrap();
+    let (back, _) = read_xlsx(&out).unwrap();
+    assert_eq!(back.sheet(0).unwrap().controls.len(), 2);
+}
+
 #[test]
 fn the_properties_part_wins_over_the_vml() {
     let mut wb = book();

@@ -388,6 +388,12 @@ fn shape_number(id: &str) -> Option<u64> {
     id.trim().trim_start_matches("_x0000_s").parse().ok()
 }
 
+/// A VML shape's number: from its `id` (`_x0000_s1025`), else from `o:spid`, where producers that
+/// give the shape a named id (`id="Button 1"`) keep it.
+fn number_of(shape: &El) -> Option<u64> {
+    shape.attr("id").and_then(shape_number).or_else(|| shape.attr("spid").and_then(shape_number))
+}
+
 /// Reads a sheet's buttons, scroll bars and spin buttons: each `<control>` with its properties
 /// part, else its VML shape, and VML shapes the sheet doesn't list (files that only have VML).
 /// Returns the shape numbers of the controls it read, so pass-through keeps only the others.
@@ -398,7 +404,7 @@ pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, rels: &[Rel], sheet: &mut S
         None => None,
     };
     let shapes: Vec<&El> = vml.as_ref().map(|v| v.kids("shape").collect()).unwrap_or_default();
-    let shape_of = |n: u64| shapes.iter().copied().find(|s| s.attr("id").and_then(shape_number) == Some(n));
+    let shape_of = |n: u64| shapes.iter().copied().find(|s| number_of(s) == Some(n));
     // Every shape the sheet lists, read here or not.
     let mut listed: HashSet<u64> = HashSet::new();
     for ctl in controls.map(controls_in).unwrap_or_default() {
@@ -447,7 +453,7 @@ pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, rels: &[Rel], sheet: &mut S
     }
     // Controls known only from the VML.
     for s in &shapes {
-        let Some(n) = s.attr("id").and_then(shape_number) else { continue };
+        let Some(n) = number_of(s) else { continue };
         if listed.contains(&n) || sheet.controls.len() >= MAX_CONTROLS {
             continue;
         }
