@@ -154,3 +154,31 @@ fn a_text_box_stays_a_text_box_and_hostile_sources_survive() {
     assert_eq!(s[2].kind, ShapeKind::TextBox);
     assert_eq!(s[2].text, "plain");
 }
+
+#[test]
+fn office_math_outside_the_subset_reads_the_fallback() {
+    let wb = book(vec![equation(1, "B2", "x^2", Color::Auto)]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    // Another writer: no GridCraft source, Office Math the reader does not convert (a
+    // pre-subscript), and a fallback text box with its own text.
+    while let Some(a) = d.find(" descr=\"gridcraft:latex:") {
+        let b = d[a + 8..].find('"').unwrap() + a + 9;
+        d.replace_range(a..b, "");
+    }
+    let (m0, m1) = (d.find("<m:oMath>").unwrap(), d.find("</m:oMath>").unwrap());
+    d.replace_range(
+        m0..m1 + "</m:oMath>".len(),
+        "<m:oMath><m:sPre><m:sub><m:r><m:t>1</m:t></m:r></m:sub><m:sup><m:r><m:t>2</m:t></m:r></m:sup><m:e><m:r><m:t>y</m:t></m:r></m:e></m:sPre></m:oMath>",
+    );
+    let fb = d.find("<mc:Fallback>").unwrap();
+    let t = d[fb..].find("<a:t>x^2</a:t>").unwrap() + fb;
+    d.replace_range(t..t + "<a:t>x^2</a:t>".len(), "<a:t>the writer's fallback</a:t>");
+    parts.insert(name, d.into_bytes());
+    let (back, _) = read_xlsx(&rezip(&parts)).unwrap();
+    let s = shapes(&back);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].kind, ShapeKind::TextBox, "not an equation");
+    assert_eq!(s[0].text, "the writer's fallback", "the fallback is read, not the empty Office Math box");
+}

@@ -132,8 +132,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
     for (n, a) in x.children.iter().enumerate() {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
         let n = n + 1;
-        // Objects in markup-compatibility blocks: the first choice (chartex frames), else the
-        // fallback.
+        // Objects in markup-compatibility blocks: the first choice (chartex frames, or Office Math
+        // that converts to LaTeX), else the fallback.
         let objs: Vec<&El> = a
             .children
             .iter()
@@ -141,8 +141,14 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                 "AlternateContent" => o
                     .child("Choice")
                     .filter(|c| {
+                        // Office Math is taken only when it converts: otherwise the fallback
+                        // (a picture or text from the writer) keeps the equation visible.
                         c.child("graphicFrame").is_some()
-                            || c.child("sp").and_then(|sp| sp.child("txBody")).and_then(|tb| crate::omml::find_math(tb, 0)).is_some()
+                            || c.child("sp")
+                                .and_then(|sp| sp.child("txBody"))
+                                .and_then(|tb| crate::omml::find_math(tb, 0))
+                                .and_then(crate::omml::to_latex)
+                                .is_some()
                     })
                     .or_else(|| o.child("Fallback"))
                     .map(|c| c.children.iter().collect())
