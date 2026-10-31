@@ -324,3 +324,83 @@ fn editor_syntax_is_covered() {
     let missing: Vec<(&str, Outcome)> = COVERAGE.iter().map(|s| (*s, run(s))).filter(|(_, o)| !matches!(o, Outcome::Laid(n) if *n > 0)).collect();
     assert!(missing.is_empty(), "unsupported: {missing:?}");
 }
+
+/// Whether every number in `list` is finite and within the caps the wrapper promises.
+fn within_caps(list: &gridcraft_math::MathList) -> bool {
+    use gridcraft_math::{Item, MAX_EM, MAX_ITEMS, PathCmd};
+    let ok = |v: f32| v.is_finite() && v.abs() <= MAX_EM;
+    let path_ok = |c: &PathCmd| match *c {
+        PathCmd::MoveTo(a, b) | PathCmd::LineTo(a, b) => ok(a) && ok(b),
+        PathCmd::QuadTo(a, b, c, d) => [a, b, c, d].into_iter().all(ok),
+        PathCmd::CubicTo(a, b, c, d, e, f) => [a, b, c, d, e, f].into_iter().all(ok),
+        PathCmd::Close => true,
+    };
+    list.items.len() <= MAX_ITEMS
+        && [list.width, list.height, list.depth].into_iter().all(ok)
+        && list.items.iter().all(|i| match i {
+            Item::Glyph(g) => [g.x, g.y, g.size, g.width, g.height, g.depth].into_iter().all(ok),
+            Item::Rule(r) => [r.x, r.y, r.width, r.height].into_iter().all(ok),
+            Item::Path(p) => ok(p.x) && ok(p.y) && p.commands.iter().all(path_ok),
+        })
+}
+
+#[test]
+fn the_guarded_entry_points_survive_hostile_input() {
+    // What every caller (commands, the editor's preview, the xlsx writer) reaches: `layout`,
+    // `check` and `to_omml`, with their caps. Random token soup, mutations of valid input, and
+    // inputs at and past the caps; none may panic, a layout stays within its caps, and an error's
+    // span stays on char boundaries inside the source.
+    let mut rng = Rng(0x6a09_e667_f3bc_c909);
+    let mut inputs: Vec<String> = Vec::new();
+    for _ in 0..1500 {
+        let mut s = String::new();
+        for _ in 0..1 + rng.below(32) {
+            match rng.below(12) {
+                0 => s.push(char::from_u32(rng.below(0x11_0000) as u32).unwrap_or('\u{FFFD}')),
+                1 => s.push_str(rng.pick(COVERAGE)),
+                _ => s.push_str(rng.pick(TOKENS)),
+            }
+        }
+        inputs.push(s);
+    }
+    for (open, close) in [("{", "}"), ("\\left(", "\\right)"), ("\\begin{matrix}", "\\end{matrix}"), ("\\sqrt{", "}")] {
+        for d in [31, 32, 33, 500] {
+            inputs.push(format!("{}x{}", open.repeat(d), close.repeat(d)));
+        }
+    }
+    let cap = gridcraft_math::MAX_SOURCE_BYTES;
+    inputs.push("x".repeat(cap));
+    inputs.push("x".repeat(cap + 1));
+    inputs.push(format!("{}\u{e9}", "x".repeat(cap - 1)));
+    inputs.push("\\rule{1e308em}{1e308em}".into());
+    inputs.push("\\def\\a{\\a\\a}\\a".into());
+    let mut failures = Vec::new();
+    for s in &inputs {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let laid = gridcraft_math::layout(s);
+            let checked = gridcraft_math::check(s);
+            let omml = gridcraft_math::to_omml(s, 11.0);
+            (laid, checked, omml)
+        }));
+        let Ok((laid, checked, omml)) = r else {
+            failures.push(format!("panicked: {s:?}"));
+            continue;
+        };
+        if let Ok(list) = &laid
+            && !within_caps(list)
+        {
+            failures.push(format!("outside the caps: {s:?}"));
+        }
+        for e in [laid.as_ref().err(), checked.as_ref().err(), omml.as_ref().err()].into_iter().flatten() {
+            if let Some(span) = &e.span
+                && !(span.start <= span.end && span.end <= s.len() && s.is_char_boundary(span.start) && s.is_char_boundary(span.end))
+            {
+                failures.push(format!("span {span:?} off the source: {s:?}"));
+            }
+        }
+        if laid.is_ok() && checked.is_err() {
+            failures.push(format!("lays out but does not check: {s:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

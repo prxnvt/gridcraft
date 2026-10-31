@@ -182,3 +182,58 @@ fn office_math_outside_the_subset_reads_the_fallback() {
     assert_eq!(s[0].kind, ShapeKind::TextBox, "not an equation");
     assert_eq!(s[0].text, "the writer's fallback", "the fallback is read, not the empty Office Math box");
 }
+
+#[test]
+fn hostile_sources_round_trip_exactly() {
+    // Sources built from the characters XML and LaTeX treat specially: each is saved (as Office
+    // Math with a fallback, or as text) and read back as the same equation source.
+    const PARTS: &[&str] = &[
+        "x",
+        "\\frac{a}{b}",
+        "\"",
+        "'",
+        "<",
+        ">",
+        "&",
+        "&amp;",
+        "]]>",
+        "<!--",
+        "\n",
+        "\t",
+        "\r",
+        "\r\n",
+        " ",
+        "\u{e9}",
+        "\u{1F600}",
+        "\u{4E2D}",
+        "{",
+        "}",
+        "^",
+        "_",
+        "\\\\",
+        "%",
+    ];
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = |n: usize| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % n as u64) as usize
+    };
+    let mut sources = Vec::new();
+    for _ in 0..200 {
+        let mut s = String::from("x");
+        for _ in 0..1 + next(10) {
+            s.push_str(PARTS[next(PARTS.len())]);
+        }
+        sources.push(s);
+    }
+    let shapes_in: Vec<Shape> = sources.iter().enumerate().map(|(i, s)| equation(i as u32 + 1, &format!("B{}", i * 4 + 2), s, Color::Auto)).collect();
+    let (back, _) = read_xlsx(&write_xlsx(&book(shapes_in)).unwrap()).unwrap();
+    let s = shapes(&back);
+    assert_eq!(s.len(), sources.len());
+    for (x, src) in s.iter().zip(&sources) {
+        assert_eq!(x.kind, ShapeKind::Equation, "{src:?}");
+        assert_eq!(&x.text, src, "the source survives exactly");
+    }
+}
