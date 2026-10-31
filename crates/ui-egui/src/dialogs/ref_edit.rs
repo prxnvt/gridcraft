@@ -46,11 +46,20 @@ fn ref_edit_id(key: &str) -> egui::Id {
     egui::Id::unique("gridcraft.ref_edit").with(key)
 }
 
-/// The grid selection as a reference: absolute areas joined by commas, each with the sheet name
-/// when the selection is on another sheet than the one the dialog was opened on.
-fn selection_ref(app: &SheetApp, home_sheet: Option<&str>) -> String {
+/// Whether the reference box `key` of dialog `dialog` takes several areas joined by commas.
+/// Solver's variable cells do; every other box takes one cell or range, which its command parses
+/// as a single reference.
+fn takes_several_areas(dialog: &str, key: &str) -> bool {
+    dialog == "solver" && key == "variables"
+}
+
+/// The grid selection as a reference, with the sheet name when the selection is on another sheet
+/// than the one the dialog was opened on: every area joined by commas when `several`, otherwise
+/// only the area being selected (the last one).
+fn selection_ref(app: &SheetApp, home_sheet: Option<&str>, several: bool) -> String {
     let Some(doc) = app.session.active() else { return String::new() };
-    let areas = doc.selection.ranges.iter().map(abs);
+    let current = [doc.selection.current()];
+    let areas = if several { doc.selection.ranges.as_slice() } else { &current[..] }.iter().map(abs);
     match doc.wb.active() {
         Some(sh) if home_sheet.is_some_and(|h| !h.eq_ignore_ascii_case(&sh.name)) => {
             let sheet = gridcraft_engine::formula::quote_sheet(&sh.name);
@@ -118,7 +127,7 @@ pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
     }
     d.refs.target = Some(key.to_string());
     d.refs.refocus = false;
-    d.refs.seen = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()));
+    d.refs.seen = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()), takes_several_areas(&d.name, key));
     d.refs.seen_sheet = active_sheet_name(app);
 }
 
@@ -152,7 +161,7 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
         if r.gained_focus() {
             begin_pick(app, d, key);
         } else if d.refs.target.as_deref() == Some(key) {
-            let sel = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()));
+            let sel = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()), takes_several_areas(&d.name, key));
             let sheet = active_sheet_name(app);
             if sheet != d.refs.seen_sheet {
                 // Another sheet was shown: its selection is where that sheet was left, not a pick.

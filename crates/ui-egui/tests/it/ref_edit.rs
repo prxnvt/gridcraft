@@ -336,3 +336,31 @@ fn a_sheet_inserted_while_picking_keeps_references_and_the_way_home() {
     assert!(h.state().dialog.is_none());
     assert_eq!(selection(&h), (1, "B5".into()), "cancelling returns to the dialog's own sheet, now at index 1");
 }
+
+#[test]
+fn a_box_for_one_reference_takes_only_the_area_being_selected() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // Several areas, as Ctrl+click adds them: By changing cell takes one reference.
+    h.state_mut().session.execute("selection.set", json!({"range": "A1,C3:C4"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(field(&h, "changing"), "$C$3:$C$4", "only the area being selected, not a union");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+
+    // Solver's variable cells take several areas, as in Excel.
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 1);
+    assert_eq!(collapsed(&h).as_deref(), Some("variables"));
+    h.state_mut().session.execute("selection.set", json!({"range": "A1,C3:C4"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(field(&h, "variables"), "$A$1,$C$3:$C$4");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("objective"));
+    h.state_mut().session.execute("selection.set", json!({"range": "B5,D7"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(field(&h, "objective"), "$D$7", "the objective is one cell");
+}
