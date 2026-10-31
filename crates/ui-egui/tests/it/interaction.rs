@@ -856,6 +856,25 @@ fn data_analysis_form_keeps_ok_on_screen_in_a_short_window() {
 }
 
 #[test]
+fn random_seed_shows_only_where_numbers_are_drawn() {
+    // Patterned generation and periodic sampling draw nothing, so their forms have no seed.
+    let seed = "Random Seed (blank for a new sequence):";
+    let mut h = harness(blank());
+    for (tool, key, value, shown) in [
+        ("randomNumberGeneration", "distribution", "uniform", true),
+        ("randomNumberGeneration", "distribution", "patterned", false),
+        ("sampling", "method", "random", true),
+        ("sampling", "method", "periodic", false),
+    ] {
+        h.state_mut().open_dialog("analysisToolPak", json!({"tool": tool}));
+        h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(value));
+        h.run_steps(2);
+        assert_eq!(h.query_by_label(seed).is_some(), shown, "{tool} {value}");
+        h.state_mut().dialog = None;
+    }
+}
+
+#[test]
 fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {

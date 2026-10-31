@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Data Analysis…",
         ["Data", "Analysis"],
         None,
-        "{tool: anovaSingle|anovaTwoFactorWith|anovaTwoFactorWithout|correlation|covariance|descriptive|exponentialSmoothing|fTest|fourierAnalysis|histogram|movingAverage|randomNumberGeneration|rankPercentile|regression|sampling|tTestPaired|tTestEqual|tTestUnequal|zTest (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?; regression: inputY, inputX, constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?; anovaTwoFactorWithout: range, labels? (the first row holds column names and the first column row names), alpha?; anovaTwoFactorWith: range (first row and column hold labels), rowsPerSample, alpha?; zTest: range1, range2, variance1, variance2 (known variances), alpha?, hypothesizedDifference?; fourierAnalysis: range (one row or column of 2^k numbers or complex text, at most 4096), inverse?; randomNumberGeneration: variables? (1), count (per variable; not for patterned), distribution: uniform{from, to} | normal{mean, standardDeviation} | bernoulli{p} | binomial{p, trials} | poisson{lambda} | patterned{from, to, step, repeatEach, repeatSequence} | discrete{valueRange: two columns of value and probability}, seed? (whole number; the same seed repeats the numbers; the result reports the seed used), at most 1,000,000 numbers; sampling: range, method?: periodic|random, period (periodic), samples (random, with replacement), seed?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
+        "{tool: anovaSingle|anovaTwoFactorWith|anovaTwoFactorWithout|correlation|covariance|descriptive|exponentialSmoothing|fTest|fourierAnalysis|histogram|movingAverage|randomNumberGeneration|rankPercentile|regression|sampling|tTestPaired|tTestEqual|tTestUnequal|zTest (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?; regression: inputY, inputX, constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?; anovaTwoFactorWithout: range, labels? (the first row holds column names and the first column row names), alpha?; anovaTwoFactorWith: range (first row and column hold labels), rowsPerSample, alpha?; zTest: range1, range2, variance1, variance2 (known variances), alpha?, hypothesizedDifference?; fourierAnalysis: range (one row or column of 2^k numbers or complex text, at most 4096), inverse?; randomNumberGeneration: variables? (1), count (per variable; not for patterned), distribution: uniform{from, to} | normal{mean, standardDeviation} | bernoulli{p} | binomial{p, trials} | poisson{lambda} | patterned{from, to, step, repeatEach, repeatSequence} | discrete{valueRange: two columns of value and probability}, seed? (whole number, not for patterned; the same seed repeats the numbers; the result reports the seed used), at most 1,000,000 numbers; sampling: range, method?: periodic|random, period (periodic), samples (random, with replacement), seed?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
         has_doc,
         run
     )]
@@ -1616,6 +1616,11 @@ fn random_numbers(s: &Session, p: &Json, seed: u64) -> Result<Grid> {
     Ok(g)
 }
 
+/// Whether Random Number Generation writes a patterned sequence (which uses no seed).
+fn patterned(p: &Json) -> bool {
+    text(p, &["distribution"]).map(norm).is_some_and(|d| d == "patterned")
+}
+
 fn random_sampling(p: &Json) -> bool {
     text(p, &["method"]).is_some_and(|m| m.eq_ignore_ascii_case("random"))
 }
@@ -1775,7 +1780,13 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
         "anovaTwoFactorWith" => anova_two_factor_with(s, p)?,
         "zTest" => z_test(s, p)?,
         "fourierAnalysis" => fourier_analysis(s, p)?,
-        "randomNumberGeneration" => random_numbers(s, p, *seed.insert(seed_of(p)?))?,
+        "randomNumberGeneration" => {
+            // A patterned sequence draws nothing: its seed is neither read nor reported.
+            if !patterned(p) {
+                seed = Some(seed_of(p)?);
+            }
+            random_numbers(s, p, seed.unwrap_or(0))?
+        }
         "sampling" => {
             if random_sampling(p) {
                 seed = Some(seed_of(p)?);
@@ -2308,6 +2319,25 @@ mod tests {
             p["alpha"] = json!("");
             s.execute("data.analysisToolPak", p).unwrap_or_else(|e| panic!("{base} blank alpha: {e}"));
         }
+    }
+
+    #[test]
+    fn a_patterned_sequence_ignores_the_seed() {
+        // Patterned generation draws nothing, so a seed left in the form (even one that isn't a
+        // number) neither blocks the run nor shows up in the result.
+        let mut s = s();
+        for seed in [json!("abc"), json!(7)] {
+            let r = s
+                .execute(
+                    "data.analysisToolPak",
+                    json!({"tool": "randomNumberGeneration", "distribution": "patterned", "from": 1, "to": 3, "seed": seed, "outputTo": "newSheet"}),
+                )
+                .unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+            assert!(r.get("seed").is_none(), "seed {seed}: {r}");
+        }
+        // A random distribution still refuses the bad seed.
+        let bad = json!({"tool": "randomNumberGeneration", "distribution": "uniform", "count": 2, "seed": "abc", "outputTo": "newSheet"});
+        assert!(s.execute("data.analysisToolPak", bad).is_err());
     }
 
     #[test]

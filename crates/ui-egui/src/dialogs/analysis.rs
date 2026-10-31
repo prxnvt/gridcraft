@@ -117,20 +117,28 @@ fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
                 "discrete" => vec![Text { key: "valueRange", label: "Value and Probability Input Range:" }],
                 _ => vec![Text { key: "from", label: "Between:" }, Text { key: "to", label: "And:" }],
             });
-            v.push(Text { key: "seed", label: "Random Seed (blank for a new sequence):" });
+            // A patterned sequence draws nothing, so it has no seed.
+            if dist != "patterned" {
+                v.push(Text { key: "seed", label: "Random Seed (blank for a new sequence):" });
+            }
             v
         }
-        "sampling" => vec![
-            range(),
-            labels(),
-            Choice { key: "method", label: "Sampling Method:", options: vec![("periodic", "Periodic"), ("random", "Random")] },
+        "sampling" => {
+            let mut v = vec![
+                range(),
+                labels(),
+                Choice { key: "method", label: "Sampling Method:", options: vec![("periodic", "Periodic"), ("random", "Random")] },
+            ];
+            // Periodic sampling takes every period-th value and draws nothing, so only random
+            // sampling has a seed.
             if values.get("method").and_then(Json::as_str) == Some("random") {
-                Text { key: "samples", label: "Number of Samples:" }
+                v.push(Text { key: "samples", label: "Number of Samples:" });
+                v.push(Text { key: "seed", label: "Random Seed (blank for a new sequence):" });
             } else {
-                Text { key: "period", label: "Period:" }
-            },
-            Text { key: "seed", label: "Random Seed (blank for a new sequence):" },
-        ],
+                v.push(Text { key: "period", label: "Period:" });
+            }
+            v
+        }
         "fourierAnalysis" => vec![range(), labels(), Check { key: "inverse", label: "Inverse" }],
         "exponentialSmoothing" => {
             vec![range(), labels(), Text { key: "damping", label: "Damping factor:" }, Check { key: "standardErrors", label: "Standard Errors" }]
