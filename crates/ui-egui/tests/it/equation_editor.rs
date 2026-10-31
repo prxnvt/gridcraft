@@ -180,3 +180,22 @@ fn the_gallery_inserts_its_examples() {
     assert_eq!(eqs.len(), 1, "one gallery example inserted");
     assert_eq!(eqs[0].text, gridcraft_engine::math::GALLERY[0].1);
 }
+
+#[test]
+fn reopening_after_escape_focuses_the_source_again() {
+    let mut h = harness(blank());
+    h.state_mut().run("ui.ribbonTab", json!({"tab": "Insert"})).unwrap();
+    h.run_steps(2);
+    for round in 0..2 {
+        h.get_by_label("Equation").click();
+        h.run_steps(3);
+        assert_eq!(dialog_latex(&h).as_deref(), Some(""), "round {round}: the editor is open");
+        type_text(&mut h, "x");
+        assert_eq!(dialog_latex(&h).as_deref(), Some("x"), "round {round}: typing goes into the source");
+        // Escape closes the dialog without OK or Cancel.
+        h.input_mut().events.extend([key_event(Key::Escape, true, Modifiers::NONE), key_event(Key::Escape, false, Modifiers::NONE)]);
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none(), "round {round}: Escape closes the editor");
+    }
+    assert!(equations(&h).is_empty(), "nothing was inserted");
+}

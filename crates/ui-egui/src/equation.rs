@@ -151,12 +151,13 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     let mark = pv.result.as_ref().err().and_then(|e| e.span.clone()).or_else(|| pv.result.as_ref().err().map(|_| text.len()..text.len()));
     let mark = mark.filter(|_| !text.trim().is_empty());
     let r = code_editor_marked(ui, edit_id, &mut text, Lang::Latex, 6, mark);
-    // Focus the source when the dialog opens and after a quick-insert button.
-    let focus_once = edit_id.with("focused-once");
+    // Focus the source when the dialog opens and after a quick-insert button. The "opened" flag
+    // lives on the dialog, so every way of closing it (OK, Cancel, Escape, the close button)
+    // leaves the next one to focus its source again.
     let refocus = ui.ctx().data_mut(|m| m.remove_temp::<bool>(edit_id.with("refocus")).unwrap_or(false));
-    if refocus || !ui.ctx().data(|m| m.get_temp::<bool>(focus_once).unwrap_or(false)) {
+    if refocus || !d.focus_initialized {
         r.request_focus();
-        ui.ctx().data_mut(|m| m.insert_temp(focus_once, true));
+        d.focus_initialized = true;
     }
     let pv = preview(ui.ctx(), ui.scope_id().with("equation-preview"), &text);
     d.values.insert("latex".into(), json!(text));
@@ -195,11 +196,9 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     ui.allocate_ui_with_layout(vec2(ui.available_width(), 28.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let ok = ui.add_enabled(valid, egui::Button::new(egui::RichText::new("OK").color(t.on_accent)).fill(t.accent).min_size(vec2(64.0, 0.0)));
         if ok.clicked() || (valid && cmd_enter) {
-            ui.ctx().data_mut(|m| m.remove::<bool>(focus_once));
             *confirm = true;
         }
         if ui.add(egui::Button::new("Cancel").min_size(vec2(64.0, 0.0))).clicked() {
-            ui.ctx().data_mut(|m| m.remove::<bool>(focus_once));
             *open = false;
         }
         let verb = if d.command == Some("equation.edit") { "apply" } else { "insert" };
