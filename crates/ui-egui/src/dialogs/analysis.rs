@@ -312,12 +312,18 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
     // Reports describe the solution whether it is kept or not.
     let solved = d.values.get("values").and_then(Json::as_object).is_some_and(|v| !v.is_empty());
+    // Integer models, the Evolutionary method and Value Of goals have no Sensitivity report.
+    let sensitivity = d.values.get("model").is_none_or(gridcraft_engine::cmd::solver::sensitivity_applies);
+    let offered = |key: &str| key != "sensitivityReport" || sensitivity;
     if solved {
         ui.add_space(4.0);
         ui.label("Reports:");
-        for (key, label) in [("answerReport", "Answer"), ("limitsReport", "Limits")] {
-            let mut on = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-            if ui.checkbox(&mut on, label).changed() {
+        for (key, label) in [("answerReport", "Answer"), ("sensitivityReport", "Sensitivity"), ("limitsReport", "Limits")] {
+            let mut on = offered(key) && d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
+            let check = ui
+                .add_enabled(offered(key), egui::Checkbox::new(&mut on, label))
+                .on_disabled_hover_text("Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints.");
+            if check.changed() {
                 d.values.insert(key.into(), json!(on));
             }
         }
@@ -329,9 +335,9 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         if changed && restore {
             app.run_or_alert("edit.undo", json!({}));
         }
-        let reports: Vec<&str> = [("answerReport", "answer"), ("limitsReport", "limits")]
+        let reports: Vec<&str> = [("answerReport", "answer"), ("sensitivityReport", "sensitivity"), ("limitsReport", "limits")]
             .into_iter()
-            .filter(|(key, _)| d.values.get(*key).and_then(Json::as_bool) == Some(true))
+            .filter(|(key, _)| offered(key) && d.values.get(*key).and_then(Json::as_bool) == Some(true))
             .map(|(_, kind)| kind)
             .collect();
         if solved && !reports.is_empty() {

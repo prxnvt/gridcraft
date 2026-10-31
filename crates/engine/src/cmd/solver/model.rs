@@ -291,6 +291,25 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
     Ok(Model { sheet, objective, goal, vars, vars_text, cons, non_negative, method, evo: evo_options(p) })
 }
 
+/// Whether `data.solver` params (such as the `model` of its result) describe a model that can
+/// have a Sensitivity report: Simplex LP or GRG Nonlinear, a Max or Min objective and no
+/// integer or binary constraints.
+pub fn sensitivity_applies(p: &Json) -> bool {
+    let method = str_param(p, "method").unwrap_or("grg").to_ascii_lowercase().replace([' ', '_', '-'], "");
+    let goal = str_param(p, "goal").or_else(|| str_param(p, "to")).unwrap_or("max").to_ascii_lowercase();
+    let integer = p.get("constraints").and_then(Json::as_array).is_some_and(|list| {
+        list.iter().any(|c| {
+            let rel = match c {
+                Json::String(t) => split_constraint(t).map(|(_, rel, _)| rel),
+                Json::Object(_) => str_param(c, "op").or_else(|| str_param(c, "relation")).and_then(Rel::parse),
+                _ => None,
+            };
+            matches!(rel, Some(Rel::Int | Rel::Bin))
+        })
+    });
+    !integer && !matches!(method.as_str(), "evolutionary" | "evo" | "genetic") && !matches!(goal.as_str(), "value" | "valueof" | "value of")
+}
+
 // ---------------------------------------------------------------- saved model
 
 fn ref_text(sheet_name: &str, cells: &str) -> String {
