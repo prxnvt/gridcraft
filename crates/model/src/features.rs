@@ -654,6 +654,12 @@ impl EquationCache {
         self.layout = Some(gridcraft_math::layout(src).map(std::sync::Arc::new));
         true
     }
+
+    /// Records that `src` was not laid out, and why, without running the layout engine.
+    pub fn refuse(&mut self, src: &str, message: &str) {
+        self.key = source_key(src);
+        self.layout = Some(Err(gridcraft_math::MathError { span: None, message: message.to_string() }));
+    }
 }
 
 /// The kinds of floating object a sheet holds. Commands name an object by kind and

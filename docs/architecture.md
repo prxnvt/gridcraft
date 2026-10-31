@@ -145,7 +145,9 @@ code that calls the layout engine (RaTeX), and only through `layout`, `check` an
 which cap the source (4 KB, nesting 32) and run under `catch_unwind`. The result is cached on
 the shape (`Shape::math`, never saved); `Workbook::refresh_equations` rebuilds stale layouts when
 a document is created and on every commit, so painting only reads the cache and nothing in a
-paint path can reach the layout engine. The equation editor's preview and the gallery are the
+paint path can reach the layout engine. One call lays out at most 128 KB of source
+(`MAX_EQUATION_LAYOUT_BYTES`); equations past it keep an error and show their source until edited,
+so a file with thousands of equations opens in bounded time. The equation editor's preview and the gallery are the
 only other callers, through the same guarded entry points. The gate that admitted RaTeX is
 recorded in [`decisions.md`](decisions.md) and re-run by `crates/math/tests/gate.rs`.
 

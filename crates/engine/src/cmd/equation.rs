@@ -6,7 +6,7 @@
 //! the new content.
 
 use gridcraft_math::{MathError, MathList};
-use gridcraft_model::{Anchor, AnchorMode, Color, Shape, ShapeKind};
+use gridcraft_model::{Anchor, AnchorMode, Color, EquationCache, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, EngineError, PROTECTED, Result, Session, bad, cell_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
@@ -118,7 +118,9 @@ fn edit_equation(s: &mut Session, p: &Json) -> Result<Json> {
     if sh.is_protected() {
         return Err(EngineError::Other(PROTECTED.into()));
     }
-    if shape.text == latex {
+    // The same source is a no-op, unless it has no layout yet (a file with more equations than
+    // are laid out at once): then OK lays it out.
+    if shape.text == latex && matches!(shape.math.get(latex), Some(Ok(_))) {
         return ok();
     }
     let list = lay_out(CMD, latex)?;
@@ -132,6 +134,7 @@ fn edit_equation(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let shape = cx.sheet_mut(sheet)?.shapes.iter_mut().find(|x| x.id == id).ok_or_else(|| bad(CMD, "no such equation"))?;
         shape.text = latex.to_string();
+        shape.math = EquationCache::default();
         shape.math.refresh(latex);
         shape.anchor.width = width;
         shape.anchor.height = height;

@@ -139,3 +139,40 @@ fn equations_on_a_protected_sheet_are_locked() {
     assert!(s.execute("equation.edit", json!({"id": id, "latex": "y"})).is_err());
     assert!(s.execute("insert.equation", json!({"latex": "y"})).is_err());
 }
+
+#[test]
+fn a_file_with_too_many_equations_lays_out_a_bounded_amount() {
+    // About 1 KB each: past the budget, equations are refused without running the layout engine,
+    // so opening the file takes bounded time.
+    let source = format!("x{}", "+x".repeat(500));
+    let count = gridcraft_model::MAX_EQUATION_LAYOUT_BYTES / source.len() + 40;
+    let mut s = s();
+    let first = insert(&mut s, json!({"latex": "x", "cell": "A1"}));
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    if let Some(sh) = wb.sheet_mut(0) {
+        let template = sh.shapes.iter().find(|x| x.id == first).cloned().unwrap();
+        sh.shapes.clear();
+        for i in 0..count {
+            let mut e = template.clone();
+            e.id = 100 + i as u32;
+            e.text = source.clone();
+            e.math = Default::default();
+            sh.shapes.push(e);
+        }
+    }
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(wb, None, "Book".into(), crate::Trust::FromFile));
+    let shapes = t.doc().unwrap().wb.active().unwrap().shapes.clone();
+    let laid = shapes.iter().filter(|x| matches!(x.math.get(&x.text), Some(Ok(_)))).count();
+    let refused: Vec<&Shape> =
+        shapes.iter().filter(|x| matches!(x.math.get(&x.text), Some(Err(e)) if e.message == gridcraft_model::EQUATION_BUDGET_MESSAGE)).collect();
+    assert_eq!(laid + refused.len(), count, "every equation has a layout or the budget's error");
+    assert!(laid * source.len() <= gridcraft_model::MAX_EQUATION_LAYOUT_BYTES, "{laid} laid out");
+    assert!(refused.len() >= 40, "{} refused", refused.len());
+    // A later edit does not retry them all, and OK on one, unchanged, lays it out.
+    let id = refused[0].id;
+    t.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    assert!(matches!(equation(&t, id).math.get(&source), Some(Err(_))));
+    t.execute("equation.edit", json!({"id": id, "latex": source})).unwrap();
+    assert!(matches!(equation(&t, id).math.get(&source), Some(Ok(_))), "editing lays it out");
+}
