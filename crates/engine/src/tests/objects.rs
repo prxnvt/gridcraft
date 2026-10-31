@@ -190,3 +190,20 @@ fn a_copied_sheet_gives_its_objects_fresh_ids() {
     }
     assert!(s.doc().unwrap().wb.next_object_id() > *ids.last().unwrap_or(&0));
 }
+
+#[test]
+fn bubble_sizes_follow_edits_like_the_other_series_references() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 3, 10], [2, 5, 20], [3, 2, 30]]})).unwrap();
+    let chart = id_of(&s.execute("insert.chart", json!({"range": "A1:B3", "type": "bubble"})).unwrap(), "chart");
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts.iter_mut().find(|c| c.id == chart).unwrap().series[0]
+        .bubble_sizes = Some("Sheet1!$C$1:$C$3".into());
+    let sizes = |s: &Session| sheet(s, 0).charts.iter().find(|c| c.id == chart).and_then(|c| c.series[0].bubble_sizes.clone()).unwrap_or_default();
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!(sizes(&s), "Sheet1!$C$2:$C$4", "an inserted row moves the bubble sizes with their cells");
+    s.execute("edit.cut", json!({"range": "C2:C4"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert_eq!(sizes(&s), "Sheet1!$F$2:$F$4", "a cut-move takes the bubble sizes with the cells");
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Data"})).unwrap();
+    assert_eq!(sizes(&s), "Data!$F$2:$F$4", "a renamed sheet is renamed in the bubble sizes");
+}

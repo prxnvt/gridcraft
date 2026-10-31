@@ -358,12 +358,12 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
     rewrite_cell_links(wb, |host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e));
 }
 
-/// Runs `f` over every reference a floating object holds (a chart's series values, categories
-/// and name, and the source block it was made from). Every edit that moves references calls it:
-/// inserting and deleting lines and cells and cut-moves (through [`rewrite_all_formulas`]), and
-/// renaming and deleting sheets. `f` maps a reference held by an object on the sheet named `host`
-/// to its new form; text that does not parse is kept. A source block that no longer exists is
-/// dropped.
+/// Runs `f` over every reference a floating object holds (a chart's series values, categories,
+/// name and bubble sizes, and the source block it was made from). Every edit that moves
+/// references calls it: inserting and deleting lines and cells and cut-moves (through
+/// [`rewrite_all_formulas`]), and renaming and deleting sheets. `f` maps a reference held by an
+/// object on the sheet named `host` to its new form; text that does not parse is kept. A source
+/// block that no longer exists is dropped.
 pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(&str, gridcraft_formula::Expr) -> gridcraft_formula::Expr) {
     for si in 0..wb.sheets.len() {
         let Some(host) = wb.sheets.get(si).filter(|s| !s.charts.is_empty()).map(|s| s.name.clone()) else { continue };
@@ -380,6 +380,7 @@ pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(
                 se.values = fix(&se.values);
                 se.categories = se.categories.as_deref().map(fix);
                 se.name = se.name.as_deref().map(fix);
+                se.bubble_sizes = se.bubble_sizes.as_deref().map(fix);
             }
         }
     }
