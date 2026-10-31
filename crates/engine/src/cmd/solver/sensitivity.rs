@@ -13,6 +13,15 @@ use super::{CellRef, DocState, EPS, EngineError, LP_WORK, Result, Sheet, Trial, 
 /// Excel prints an unlimited allowable change as 1E+30.
 const NO_LIMIT: f64 = 1e30;
 
+/// Most arithmetic the Lagrange multipliers of a nonlinear model may take (about a second): a
+/// pass over k binding rows and f free variables costs about 2·k²·f, and each pass drops at
+/// most one row, so a model at the constraint limit could otherwise take minutes.
+#[cfg(not(test))]
+const MULTIPLIER_WORK: u64 = 1_000_000_000;
+/// A low limit in tests, so the refusal is reachable with a small model.
+#[cfg(test)]
+const MULTIPLIER_WORK: u64 = 20_000;
+
 /// Why a model has no Sensitivity report (`None` when it has one).
 pub(super) fn sensitivity_refusal(m: &Model, prob: &Problem) -> Option<&'static str> {
     if prob.integer.iter().any(|b| *b) {
@@ -293,12 +302,29 @@ fn gradients(ev: &mut Evaluator, inp: &ReportInput) -> Result<(Vec<f64>, Vec<Vec
 /// Least squares on the free variables: ∇f = Σ λᵢ ∇gᵢ over the `active` rows. An inequality's
 /// multiplier has the sign that tightening it costs (λ ≥ 0 for `lhs ≤ rhs` when maximising); a
 /// row whose multiplier has the other sign isn't binding, so it leaves and the rest are solved
-/// again.
-fn multipliers(rows: &[Row], goal: Goal, mut active: Vec<usize>, free: &[usize], df: &[f64], dg: &[Vec<f64>], scale: f64) -> Vec<f64> {
+/// again. The work is bounded by `budget` (see [`MULTIPLIER_WORK`]); past it the report is
+/// refused.
+fn multipliers(
+    rows: &[Row],
+    goal: Goal,
+    mut active: Vec<usize>,
+    free: &[usize],
+    (df, dg): (&[f64], &[Vec<f64>]),
+    scale: f64,
+    budget: u64,
+) -> Result<Vec<f64>> {
     let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
     let goal_sign = if goal == Goal::Max { 1.0 } else { -1.0 };
     let mut lambda = vec![0.0; rows.len()];
+    let mut work = 0u64;
     while !active.is_empty() {
+        let (k, f) = (active.len() as u64, (free.len() as u64).max(1));
+        work = work.saturating_add(2u64.saturating_mul(k).saturating_mul(k).saturating_mul(f));
+        if work > budget {
+            return Err(EngineError::Other(
+                "The Sensitivity report of this nonlinear model has too many binding constraints to work out in reasonable time.".into(),
+            ));
+        }
         let normal: Vec<Vec<f64>> =
             active.iter().map(|&i| active.iter().map(|&k| free.iter().map(|&j| grad(i, j) * grad(k, j)).sum()).collect()).collect();
         let rhs: Vec<f64> = active.iter().map(|&i| free.iter().map(|&j| grad(i, j) * df.get(j).copied().unwrap_or(0.0)).sum()).collect();
@@ -330,7 +356,7 @@ fn multipliers(rows: &[Row], goal: Goal, mut active: Vec<usize>, free: &[usize],
             }
         }
     }
-    lambda
+    Ok(lambda)
 }
 
 /// GRG Nonlinear: reduced gradients and the binding rows' Lagrange multipliers.
@@ -357,7 +383,7 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
             v > inp.prob.lo.get(j).copied().unwrap_or(f64::NEG_INFINITY) + tol && v < inp.prob.hi.get(j).copied().unwrap_or(f64::INFINITY) - tol
         })
         .collect();
-    let lambda = multipliers(&ev.rows, m.goal, active, &free, &df, &dg, at.scale);
+    let lambda = multipliers(&ev.rows, m.goal, active, &free, (&df, &dg), at.scale, MULTIPLIER_WORK)?;
     let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
     let var_rows = m
         .vars
@@ -381,4 +407,29 @@ fn nonlinear_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
         })
         .collect();
     Ok((var_rows, con_rows, vec!["Cell", "Name", "Final Value", "Reduced Gradient"], vec!["Cell", "Name", "Final Value", "Lagrange Multiplier"]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Goal, MULTIPLIER_WORK, Row, Sense, multipliers};
+    use gridcraft_core::CellRef;
+
+    #[test]
+    fn multipliers_at_the_constraint_limit_stop_at_the_work_limit() {
+        // 1,000 binding `<=` rows over 200 free variables, each multiplier with the wrong sign:
+        // without a limit every pass would drop one row and solve again, about 4·10⁸ operations
+        // a pass for up to 1,000 passes. The limit (lowered in tests) refuses it at once.
+        let (k, f) = (1000usize, 200usize);
+        let rows: Vec<Row> = (0..k).map(|_| Row { lhs: CellRef::new(0, 0), sense: Sense::Le, rhs: None, rhs_const: 0.0 }).collect();
+        let dg: Vec<Vec<f64>> = (0..k).map(|i| (0..f).map(|j| if j == i % f { 1.0 } else { 0.0 }).collect()).collect();
+        let df = vec![-1.0; f];
+        let free: Vec<usize> = (0..f).collect();
+        let got = multipliers(&rows, Goal::Max, (0..k).collect(), &free, (&df, &dg), 1.0, MULTIPLIER_WORK);
+        assert!(got.is_err());
+        // A small model within the limit still gets its multipliers: ∇f = (1, 2) on two
+        // binding rows with unit gradients.
+        let dg2 = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let got = multipliers(&rows[..2], Goal::Max, vec![0, 1], &free[..2], (&[1.0, 2.0], &dg2), 1.0, MULTIPLIER_WORK).unwrap();
+        assert_eq!(got, vec![1.0, 2.0]);
+    }
 }

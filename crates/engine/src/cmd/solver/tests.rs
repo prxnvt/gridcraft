@@ -518,6 +518,25 @@ fn sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers() {
     assert!(close(&report_row(&s, &rep, "$D$2", &["D", "E"]), &[1.0, -2.0], 1e-4));
 }
 #[test]
+fn nonlinear_sensitivity_with_too_many_binding_constraints_is_refused_without_change() {
+    // 80 binding rows on two free variables pass the work limit (lowered in tests); 40 don't.
+    let mut s = s();
+    set(&mut s, &[("A1", "5"), ("A2", "5"), ("B1", "=A1*A2")]);
+    for r in 1..=80 {
+        set(&mut s, &[(&format!("D{r}"), "=A1+A2")]);
+    }
+    let report = |rows: u32| json!({"reports": ["sensitivity"], "model": {"objective": "B1", "variables": "A1:A2", "constraints": [format!("D1:D{rows} <= 10")]}});
+    let before = s.doc().unwrap().clone();
+    let err = s.execute("data.solverReport", report(80)).unwrap_err();
+    assert!(err.to_string().contains("too many binding constraints"), "{err}");
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
+    assert_eq!((d.undo.len(), d.redo.len()), (before.undo.len(), before.redo.len()));
+    let r = s.execute("data.solverReport", report(40)).unwrap();
+    assert_eq!(r["sheets"], json!(["Sensitivity Report 1"]), "{r}");
+}
+
+#[test]
 fn sensitivity_applies_agrees_with_the_report() {
     let mut s = s();
     set(&mut s, &[("A1", "1"), ("B1", "=3*A1")]);
