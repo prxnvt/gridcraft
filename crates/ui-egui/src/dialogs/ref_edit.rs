@@ -13,6 +13,9 @@ pub(super) struct RefBoxes {
     /// The selection last written into the target (or present when picking began); only a
     /// different selection replaces what the box holds.
     seen: String,
+    /// The sheet shown when `seen` was taken: changing sheets only refreshes `seen`, since the
+    /// other sheet's own selection is not a pick.
+    seen_sheet: String,
     /// The sheet (by name: its index changes when sheets are inserted or moved while the dialog
     /// is open), ranges and active cell from before picking began, put back when the dialog runs
     /// its command or closes.
@@ -116,6 +119,12 @@ pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
     d.refs.target = Some(key.to_string());
     d.refs.refocus = false;
     d.refs.seen = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()));
+    d.refs.seen_sheet = active_sheet_name(app);
+}
+
+/// The name of the sheet shown in the active workbook.
+fn active_sheet_name(app: &SheetApp) -> String {
+    app.session.active().and_then(|doc| doc.wb.active()).map(|sh| sh.name.clone()).unwrap_or_default()
 }
 
 /// Stops picking and puts back the sheet and selection from before picking began.
@@ -144,7 +153,12 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
             begin_pick(app, d, key);
         } else if d.refs.target.as_deref() == Some(key) {
             let sel = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()));
-            if sel != d.refs.seen {
+            let sheet = active_sheet_name(app);
+            if sheet != d.refs.seen_sheet {
+                // Another sheet was shown: its selection is where that sheet was left, not a pick.
+                d.refs.seen = sel;
+                d.refs.seen_sheet = sheet;
+            } else if sel != d.refs.seen {
                 // The person selected on the grid: the selection becomes the reference.
                 s = sel.clone();
                 d.refs.seen = sel;

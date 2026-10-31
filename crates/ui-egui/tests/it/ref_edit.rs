@@ -190,6 +190,31 @@ fn a_range_on_another_sheet_carries_the_sheet_name_and_cancel_returns_home() {
 }
 
 #[test]
+fn switching_sheets_while_picking_keeps_a_typed_reference() {
+    let mut s = workbook();
+    s.execute("home.insertSheet", json!({"name": "Rates Table", "before": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    type_text(&mut h, "B2");
+    assert_eq!(field(&h, "changing"), "B2");
+    // The sheet tabs' "Next sheet" and "Previous sheet" arrows, below the grid at the left.
+    let grid = h.state().grid.rect.unwrap();
+    click_at(&mut h, egui::pos2(grid.left() + 44.0, grid.bottom() + 16.0));
+    assert_eq!(selection(&h).0, 1, "the next sheet is active while picking");
+    assert_eq!(field(&h, "changing"), "B2", "changing sheets alone is not a pick");
+    click_at(&mut h, egui::pos2(grid.left() + 20.0, grid.bottom() + 16.0));
+    assert_eq!(selection(&h).0, 0, "back on the dialog's own sheet");
+    assert_eq!(field(&h, "changing"), "B2", "coming back is not a pick either");
+    click_at(&mut h, egui::pos2(grid.left() + 44.0, grid.bottom() + 16.0));
+    drag(&mut h, "A2", "A4");
+    assert_eq!(field(&h, "changing"), "'Rates Table'!$A$2:$A$4", "a selection on the other sheet still is");
+}
+
+#[test]
 fn clicking_into_a_box_picks_into_it_and_another_field_stops_picking() {
     let mut h = harness(workbook());
     open_goal_seek(&mut h);
