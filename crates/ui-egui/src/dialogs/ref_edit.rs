@@ -13,9 +13,10 @@ pub(super) struct RefBoxes {
     /// The selection last written into the target (or present when picking began); only a
     /// different selection replaces what the box holds.
     seen: String,
-    /// The sheet, ranges and active cell from before picking began, put back when the dialog
-    /// runs its command or closes.
-    home: Option<(usize, String, String)>,
+    /// The sheet (by name: its index changes when sheets are inserted or moved while the dialog
+    /// is open), ranges and active cell from before picking began, put back when the dialog runs
+    /// its command or closes.
+    home: Option<(String, String, String)>,
     /// The target took a selection from the grid and takes the keyboard back once the pointer
     /// is released, so typing still edits the box.
     refocus: bool,
@@ -44,11 +45,11 @@ fn ref_edit_id(key: &str) -> egui::Id {
 
 /// The grid selection as a reference: absolute areas joined by commas, each with the sheet name
 /// when the selection is on another sheet than the one the dialog was opened on.
-fn selection_ref(app: &SheetApp, home_sheet: Option<usize>) -> String {
+fn selection_ref(app: &SheetApp, home_sheet: Option<&str>) -> String {
     let Some(doc) = app.session.active() else { return String::new() };
     let areas = doc.selection.ranges.iter().map(abs);
     match doc.wb.active() {
-        Some(sh) if home_sheet.is_some_and(|h| h != doc.wb.active_sheet()) => {
+        Some(sh) if home_sheet.is_some_and(|h| !h.eq_ignore_ascii_case(&sh.name)) => {
             let sheet = gridcraft_engine::formula::quote_sheet(&sh.name);
             areas.map(|a| format!("{sheet}!{a}")).collect::<Vec<_>>().join(",")
         }
@@ -107,13 +108,14 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
 pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
     if d.refs.home.is_none()
         && let Some(doc) = app.session.active()
+        && let Some(sheet) = doc.wb.active()
     {
         let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
-        d.refs.home = Some((doc.wb.active_sheet(), ranges.join(","), doc.selection.active.a1()));
+        d.refs.home = Some((sheet.name.clone(), ranges.join(","), doc.selection.active.a1()));
     }
     d.refs.target = Some(key.to_string());
     d.refs.refocus = false;
-    d.refs.seen = selection_ref(app, d.refs.home.as_ref().map(|h| h.0));
+    d.refs.seen = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()));
 }
 
 /// Stops picking and puts back the sheet and selection from before picking began.
@@ -141,7 +143,7 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
         if r.gained_focus() {
             begin_pick(app, d, key);
         } else if d.refs.target.as_deref() == Some(key) {
-            let sel = selection_ref(app, d.refs.home.as_ref().map(|h| h.0));
+            let sel = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()));
             if sel != d.refs.seen {
                 // The person selected on the grid: the selection becomes the reference.
                 s = sel.clone();

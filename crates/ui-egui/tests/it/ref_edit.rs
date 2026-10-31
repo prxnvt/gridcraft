@@ -293,3 +293,21 @@ fn solver_picks_its_objective_variables_and_constraint_cells() {
     assert_eq!(field(&h, "newLhs"), "$D$4");
     assert_eq!(field(&h, "objective"), "B5");
 }
+
+#[test]
+fn a_sheet_inserted_while_picking_keeps_references_and_the_way_home() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // A sheet inserted before the dialog's own sheet (from the ribbon, which stays usable) moves
+    // that sheet to index 1 and becomes the active sheet at index 0.
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Inputs", "before": 0})).unwrap();
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "A2", "A3");
+    assert_eq!(field(&h, "changing"), "Inputs!$A$2:$A$3", "a range on the new sheet carries its name");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (1, "B5".into()), "cancelling returns to the dialog's own sheet, now at index 1");
+}
