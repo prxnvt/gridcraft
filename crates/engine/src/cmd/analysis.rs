@@ -121,7 +121,7 @@ fn confidence(p: &Json, key: &str) -> Result<Option<f64>> {
 }
 
 fn alpha(p: &Json) -> Result<f64> {
-    match num(p, "alpha") {
+    match opt_num(p, "alpha")? {
         None => Ok(0.05),
         Some(a) if a > 0.0 && a < 1.0 => Ok(a),
         Some(_) => Err(bad(CMD, "alpha must be between 0 and 1")),
@@ -2285,6 +2285,28 @@ mod tests {
             let e = s.execute("data.analysisToolPak", with(&base, key, "0,3")).unwrap_err().to_string();
             assert!(e.contains(key), "{key}: {e}");
             s.execute("data.analysisToolPak", with(&base, key, " ")).unwrap_or_else(|e| panic!("{key} blank: {e}"));
+        }
+    }
+
+    #[test]
+    fn an_alpha_that_is_not_a_number_is_refused() {
+        // A decimal comma or a typo in Alpha must not run the test at 0.05 without a word.
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["", "c1", "c2"], ["r1", 1, 2], ["r1", 2, 4], ["r2", 3, 6], ["r2", 5, 9]]}))
+            .unwrap();
+        for base in [
+            json!({"tool": "zTest", "range1": "Sheet1!B2:B5", "range2": "Sheet1!C2:C5", "variance1": 1, "variance2": 4}),
+            json!({"tool": "anovaTwoFactorWithout", "range": "Sheet1!B2:C5"}),
+            json!({"tool": "anovaTwoFactorWith", "range": "Sheet1!A1:C5", "rowsPerSample": 2}),
+            json!({"tool": "tTestEqual", "range1": "Sheet1!B2:B5", "range2": "Sheet1!C2:C5"}),
+        ] {
+            let mut p = base.clone();
+            p["alpha"] = json!("0,01");
+            let e = s.execute("data.analysisToolPak", p).unwrap_err().to_string();
+            assert!(e.contains("alpha"), "{base}: {e}");
+            let mut p = base.clone();
+            p["alpha"] = json!("");
+            s.execute("data.analysisToolPak", p).unwrap_or_else(|e| panic!("{base} blank alpha: {e}"));
         }
     }
 
