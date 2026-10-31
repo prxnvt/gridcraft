@@ -632,8 +632,9 @@ impl Editor {
 /// Closing the editor's workbook (File › Close, Cmd+W, the Backstage Close, a window's close
 /// button) while the draft has unsaved changes: the editor asks about them first, as its own
 /// close button does, and the close (`id` with `params`) goes on once the editor has closed;
-/// Cancel keeps both. Returns whether the editor was asked. A close that leaves the workbook open
-/// (one of its several windows), or a forced one, goes ahead as before.
+/// Cancel keeps both. Closing the window that shows the editor asks too, even when the workbook
+/// stays open in another window. Returns whether the editor was asked. A close of another of the
+/// workbook's windows, or a forced one, goes ahead as before.
 pub fn ask_before_closing(app: &mut SheetApp, id: &str, params: &Json) -> bool {
     let flag = |k: &str| params.get(k).and_then(Json::as_bool) == Some(true);
     if flag("force") {
@@ -646,12 +647,13 @@ pub fn ask_before_closing(app: &mut SheetApp, id: &str, params: &Json) -> bool {
         _ => None,
     };
     let Some(owner) = window.and_then(|w| app.session.window(w)).map(|w| w.doc_uid) else { return false };
-    let only = app.session.windows().iter().filter(|w| w.doc_uid == owner).count() <= 1;
-    if owner != doc || !(only || (id == "file.close" && flag("document"))) {
-        return false;
-    }
     // The editor asks in the window it is shown in.
     let Some(home) = app.window_with_dialog("macroEditor") else { return false };
+    let only = app.session.windows().iter().filter(|w| w.doc_uid == owner).count() <= 1;
+    // The workbook closes, or the window that shows the editor does (taking the editor with it).
+    if owner != doc || !(only || (id == "file.close" && flag("document")) || window == Some(home)) {
+        return false;
+    }
     if app.ui_window() != Some(home) {
         app.enter_window(home);
     }

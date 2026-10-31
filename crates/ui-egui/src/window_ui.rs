@@ -139,12 +139,17 @@ impl SheetApp {
         }
     }
 
-    /// The window that shows the dialog `name`: the current one or a parked one.
+    /// The window that shows the dialog `name`: the current one or a parked one. A window that has
+    /// closed shows nothing, even while its parked state is still kept.
     pub(crate) fn window_with_dialog(&self, name: &str) -> Option<u64> {
         if self.dialog.as_ref().is_some_and(|d| d.name == name) {
             return self.ui_window;
         }
-        self.parked.iter().filter(|(_, w)| w.dialog.as_ref().is_some_and(|d| d.name == name)).map(|(id, _)| *id).min()
+        self.parked
+            .iter()
+            .filter(|(id, w)| w.dialog.as_ref().is_some_and(|d| d.name == name) && self.session.window(**id).is_some())
+            .map(|(id, _)| *id)
+            .min()
     }
 
     /// Whether a window other than the current one has a cell or text-box draft open.

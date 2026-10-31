@@ -793,3 +793,50 @@ fn an_untouched_new_macro_closes_without_asking_however_the_editor_closes() {
     assert!(h.state().macros.editor.is_none());
     assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
 }
+
+#[test]
+fn closing_the_window_that_shows_the_editor_asks_about_its_draft() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let home = h.state().session.active_window().unwrap();
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    let other = h.state().session.active_window().unwrap();
+    assert_ne!(other, home);
+    // The workbook stays open in its other window, but the editor's window would take the draft.
+    let r = h.state_mut().run("window.close", json!({"window": home})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_window(), Some(home), "the editor's window comes forward to ask");
+    assert!(asks_about(&h, &name));
+    answer(&mut h, "Cancel");
+    assert!(h.state().session.window(home).is_some());
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    // File › Close in the editor's window asks too; Don't Save closes that window and the editor.
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(h.state().session.window(home).is_none());
+    assert!(h.state().session.window(other).is_some(), "the workbook stays open in its other window");
+}
+
+#[test]
+fn closing_the_window_that_shows_a_saved_editor_closes_the_editor_with_it() {
+    let mut h = harness();
+    three(&mut h);
+    let home = h.state().session.active_window().unwrap();
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    let r = h.state_mut().run("window.close", json!({"window": home})).unwrap();
+    assert_eq!(r["closed"], true);
+    h.run_steps(3);
+    // Nothing is left of an editor no window shows: a new one opens, and nothing was lost.
+    assert!(h.state().macros.editor.is_none());
+    h.state_mut().open_dialog("macroEditor", json!({"macro": "Three"}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"));
+}
