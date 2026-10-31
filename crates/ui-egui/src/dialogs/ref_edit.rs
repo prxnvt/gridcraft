@@ -16,10 +16,9 @@ pub(super) struct RefBoxes {
     /// The sheet shown when `seen` was taken: changing sheets only refreshes `seen`, since the
     /// other sheet's own selection is not a pick.
     seen_sheet: String,
-    /// The sheet (by name: its index changes when sheets are inserted or moved while the dialog
-    /// is open), ranges and active cell from before picking began, put back when the dialog runs
-    /// its command or closes.
-    home: Option<(String, String, String)>,
+    /// The sheet, ranges and active cell from before picking began, put back when the dialog
+    /// runs its command or closes.
+    home: Option<Home>,
     /// The target took a selection from the grid and takes the keyboard back once the pointer
     /// is released, so typing still edits the box.
     refocus: bool,
@@ -30,6 +29,36 @@ pub(super) struct RefBoxes {
     rect: Option<egui::Rect>,
     /// The dialog was drawn collapsed last frame.
     was_collapsed: bool,
+}
+
+/// Where picking began: the dialog's own sheet and the selection to put back.
+#[derive(Clone, Debug)]
+struct Home {
+    /// The sheet's name. Followed by name when sheets are inserted or moved while the dialog is
+    /// open (indexes change), and by position when the sheet itself is renamed.
+    sheet: String,
+    /// The sheet's index and the workbook's sheet count when last seen, to tell a rename in
+    /// place (same count, the name gone from that index) from a deleted sheet.
+    index: usize,
+    count: usize,
+    ranges: String,
+    active: String,
+}
+
+/// Keeps the dialog's own sheet across changes made while it is open: a sheet inserted, moved or
+/// deleted elsewhere moves its index, and a rename of the sheet itself changes its name.
+fn follow_home(app: &SheetApp, refs: &mut RefBoxes) {
+    let (Some(doc), Some(home)) = (app.session.active(), refs.home.as_mut()) else { return };
+    let count = doc.wb.sheets.len();
+    if let Some(i) = doc.wb.sheet_index(&home.sheet) {
+        home.index = i;
+    } else if count == home.count
+        && let Some(sheet) = doc.wb.sheets.get(home.index)
+    {
+        // The sheet was renamed where it is.
+        home.sheet = sheet.name.clone();
+    }
+    home.count = count;
 }
 
 /// How a reference box is named for screen readers.
@@ -74,11 +103,13 @@ fn selection_ref(app: &SheetApp, home_sheet: Option<&str>, several: bool) -> Str
 /// pressing OK. Collapsed, the dialog shrinks to the box where its top-left corner was, leaving
 /// the sheet free for selecting; expanded again, it comes back where it was.
 pub(super) fn place_window<'a>(
+    app: &SheetApp,
     ctx: &egui::Context,
     d: &mut Dialog,
     window: egui::Window<'a>,
     window_id: egui::Id,
 ) -> (egui::Window<'a>, Option<String>) {
+    follow_home(app, &mut d.refs);
     if d.refs.collapsed.is_some()
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) | i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
     {
@@ -123,11 +154,17 @@ pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
         && let Some(sheet) = doc.wb.active()
     {
         let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
-        d.refs.home = Some((sheet.name.clone(), ranges.join(","), doc.selection.active.a1()));
+        d.refs.home = Some(Home {
+            sheet: sheet.name.clone(),
+            index: doc.wb.active_sheet(),
+            count: doc.wb.sheets.len(),
+            ranges: ranges.join(","),
+            active: doc.selection.active.a1(),
+        });
     }
     d.refs.target = Some(key.to_string());
     d.refs.refocus = false;
-    d.refs.seen = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()), takes_several_areas(&d.name, key));
+    d.refs.seen = selection_ref(app, d.refs.home.as_ref().map(|h| h.sheet.as_str()), takes_several_areas(&d.name, key));
     d.refs.seen_sheet = active_sheet_name(app);
 }
 
@@ -140,8 +177,9 @@ fn active_sheet_name(app: &SheetApp) -> String {
 pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) {
     d.refs.target = None;
     d.refs.collapsed = None;
-    if let Some((sheet, range, active)) = d.refs.home.take() {
-        let _ = app.session.run("selection.set", json!({"sheet": sheet, "range": range, "active": active}));
+    follow_home(app, &mut d.refs);
+    if let Some(home) = d.refs.home.take() {
+        let _ = app.session.run("selection.set", json!({"sheet": home.sheet, "range": home.ranges, "active": home.active}));
     }
 }
 
@@ -161,7 +199,7 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
         if r.gained_focus() {
             begin_pick(app, d, key);
         } else if d.refs.target.as_deref() == Some(key) {
-            let sel = selection_ref(app, d.refs.home.as_ref().map(|h| h.0.as_str()), takes_several_areas(&d.name, key));
+            let sel = selection_ref(app, d.refs.home.as_ref().map(|h| h.sheet.as_str()), takes_several_areas(&d.name, key));
             let sheet = active_sheet_name(app);
             if sheet != d.refs.seen_sheet {
                 // Another sheet was shown: its selection is where that sheet was left, not a pick.

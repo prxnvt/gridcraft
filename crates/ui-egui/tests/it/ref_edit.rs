@@ -364,3 +364,27 @@ fn a_box_for_one_reference_takes_only_the_area_being_selected() {
     h.run_steps(3);
     assert_eq!(field(&h, "objective"), "$D$7", "the objective is one cell");
 }
+
+#[test]
+fn renaming_the_dialogs_sheet_while_picking_keeps_the_way_home() {
+    let mut s = workbook();
+    s.execute("home.insertSheet", json!({"name": "Rates", "before": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // The dialog's own sheet is renamed from the ribbon while the box picks.
+    h.state_mut().session.execute("sheet.rename", json!({"sheet": 0, "name": "Model"})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "$C$3", "the renamed sheet is still the dialog's own: no sheet name");
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+    drag(&mut h, "A2", "A2");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (0, "B5".into()), "cancelling returns to the renamed sheet and its selection");
+}

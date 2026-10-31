@@ -163,7 +163,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
-    let (window, collapsed) = place_window(ctx, &mut d, window, window_id);
+    let (window, collapsed) = place_window(app, ctx, &mut d, window, window_id);
     let shown = window.show(ctx, |ui| {
             if let Some(key) = &collapsed {
                 let title = d.title.clone();
