@@ -232,3 +232,53 @@ fn the_properties_part_wins_over_the_vml() {
     let (back, _) = read_xlsx(&zipped).unwrap();
     assert_eq!(back.sheet(0).unwrap().controls[0].max, 500);
 }
+
+/// A hostile sheet: more controls than a sheet keeps, properties parts that are not XML or hold
+/// numbers no control can take, shape ids that are not numbers, and oversized names, captions and
+/// links. Reading must not panic, must keep at most the cap, and every control it keeps must pass
+/// the model's rules.
+#[test]
+fn hostile_form_controls_are_capped_and_repaired() {
+    let n = 13_000;
+    let mut controls = String::from("<controls>");
+    let anchor = r#"<controlPr><anchor><from><xdr:col>1</xdr:col><xdr:colOff>-99999999999</xdr:colOff><xdr:row>99999999999</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>-4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></to></anchor></controlPr>"#;
+    for i in 0..n {
+        let rid = match i % 10 {
+            0 => "rIdB",
+            1 => "rIdC",
+            _ => "rIdA",
+        };
+        let _ = std::fmt::Write::write_fmt(
+            &mut controls,
+            format_args!(r#"<control shapeId="{}" r:id="{rid}" name="{}">{anchor}</control>"#, 2000 + i, "n".repeat(400)),
+        );
+    }
+    controls
+        .push_str(r#"<control shapeId="99999999999999999999999" r:id="rIdA"/><control shapeId="x" r:id="rIdA"/><control r:id="rIdA"/></controls>"#);
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdA" Type="http://schemas.microsoft.com/office/2006/relationships/ctrlProp" Target="../ctrlProps/a.xml"/><Relationship Id="rIdB" Type="http://schemas.microsoft.com/office/2006/relationships/ctrlProp" Target="../ctrlProps/b.xml"/><Relationship Id="rIdC" Type="http://schemas.microsoft.com/office/2006/relationships/ctrlProp" Target="../ctrlProps/missing.xml"/></Relationships>"#;
+    let link = format!("$B${}", "9".repeat(500));
+    let prop_a = format!(
+        r#"<?xml version="1.0"?><formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" objectType="Scroll" fmlaLink="{link}" min="1e400" max="NaN" inc="-inf" page="18446744073709551616" val="-7"/>"#
+    );
+    let body = format!(r#"<sheetData/>{controls}"#)
+        .replace("<controls>", r#"<controls xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">"#);
+    let bytes = minimal(
+        &body,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/ctrlProps/a.xml", &prop_a), ("xl/ctrlProps/b.xml", "\u{0}\u{1}not xml <<<")],
+        "",
+        "",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let c = &wb.sheet(0).unwrap().controls;
+    assert_eq!(c.len(), 10_000, "the cap of one sheet");
+    for x in c {
+        assert_eq!(x.kind, ControlKind::Slider);
+        assert!(x.check_numbers().is_ok(), "{x:?}");
+        assert!(x.value >= x.min && x.value <= x.max, "{x:?}");
+        assert!(x.name.chars().count() <= 255 && x.link.is_none(), "{x:?}");
+        assert!(x.anchor.width >= 1.0 && x.anchor.height >= 1.0 && x.anchor.cell.row < gridcraft_core::MAX_ROWS, "{x:?}");
+    }
+    // Written back and read again, the kept controls stay valid.
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(0).unwrap().controls.len(), c.len());
+}
