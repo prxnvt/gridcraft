@@ -833,6 +833,87 @@ fn solver_dialog_saves_loads_and_resets_the_model() {
 }
 
 #[test]
+fn solver_options_go_with_the_solve() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solver", json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary"}));
+    h.run_steps(2);
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().title, "Solver Options");
+    // Cancel keeps the options as they were; OK keeps the edits.
+    let put = |h: &mut egui_kittest::Harness<'_, SheetApp>, k: &str, v: serde_json::Value| {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(k.into(), v);
+    };
+    put(&mut h, "maxEvaluations", json!("7"));
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!((d.title.as_str(), d.values.get("maxEvaluations")), ("Solver Parameters", Some(&json!("20000"))));
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    put(&mut h, "requireBounds", json!(false));
+    put(&mut h, "randomSeed", json!("11"));
+    h.get_by_label("  OK  ").click();
+    h.run_steps(2);
+    h.get_by_label("  Solve  ").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("solverResults"), "{:?}", h.state().message);
+    assert!(matches!(value(&h, "A1"), Value::Number(v) if (v - 4.0).abs() < 1e-6));
+    let saved = gridcraft_engine::cmd::solver::saved_model(&h.state().session.active().unwrap().wb, 0).unwrap();
+    assert_eq!((saved["randomSeed"].as_f64(), saved["requireBounds"].as_bool()), (Some(11.0), Some(false)));
+}
+
+#[test]
+fn solver_reset_all_resets_the_options() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    let options = json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary", "maxEvaluations": "7", "integerOptimality": "5", "randomSeed": "11", "requireBounds": false});
+    h.state_mut().open_dialog("solver", options);
+    h.run_steps(2);
+    h.get_by_label("Reset All").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    for key in ["maxEvaluations", "integerOptimality", "randomSeed", "requireBounds"] {
+        assert_eq!(d.values.get(key), None, "{key}");
+    }
+    // Options shows the defaults again.
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!((d.values.get("maxEvaluations"), d.values.get("randomSeed")), (Some(&json!("20000")), Some(&json!("0"))));
+}
+
+#[test]
+fn escape_in_solver_options_cancels_the_options_only() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solver", json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary"}));
+    h.run_steps(2);
+    // A parameter edited before opening Options stays; the option edited there is undone.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("constraints".into(), json!(["A1 <= 9"]));
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("maxEvaluations".into(), json!("7"));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let d = h.state().dialog.as_ref().expect("Escape leaves the Solver dialog open");
+    assert_eq!((d.title.as_str(), d.values.get("maxEvaluations")), ("Solver Parameters", Some(&json!("20000"))));
+    assert_eq!(d.values.get("constraints"), Some(&json!(["A1 <= 9"])));
+    // In the parameters, Escape closes the dialog as before.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
 fn solver_results_write_the_chosen_reports() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {

@@ -424,7 +424,7 @@ fn save_and_load_model_round_trip_through_cells() {
             "AND($A$1:$A$2=INT($A$1:$A$2))",
             "AND(($A$2=0)+($A$2=1))",
             "AND($A$1>=1)",
-            "{2,1,100,0.075,0,1,0.0001,50}",
+            "{2,1,100,0.075,0,1,0.0001,50,20000,0}",
         ]
     );
     // The constraint cells show whether each constraint holds at the solution (4, 0).
@@ -578,6 +578,84 @@ fn load_model_keeps_the_evolutionary_convergence_and_generations() {
     // Reset All removes the GridCraft name with the rest.
     s.execute("data.solverReset", json!({})).unwrap();
     assert!(s.doc().unwrap().wb.names.iter().all(|n| n.scope != Some(0)));
+}
+
+#[test]
+fn solver_options_are_saved_with_the_model() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=10*A1+13*A2"), ("B2", "=5*A1+6*A2")]);
+    let p = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 10", "A1:A2 bin"], "method": "evolutionary", "maxEvaluations": "3000", "integerOptimality": 5, "convergence": 0.001, "generationsWithoutImprovement": 20, "mutationRate": "0.1"});
+    let r = s.execute("data.solver", p).unwrap();
+    assert!(r["evaluations"].as_u64().unwrap() <= 3001, "{r}");
+    // The options survive XLSX in the hidden names, as given or as text.
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "o.xlsx", "base64": b64})).unwrap();
+    let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+    let f = |k: &str| m[k].as_f64();
+    assert_eq!((f("maxEvaluations"), f("integerOptimality"), f("convergence")), (Some(3000.0), Some(5.0), Some(0.001)), "{m}");
+    assert_eq!((f("generationsWithoutImprovement"), f("mutationRate")), (Some(20.0), Some(0.1)));
+    // Out-of-range options are clamped, not refused.
+    let r = s.execute("data.solver", json!({"saved": true, "maxEvaluations": "1e300", "integerOptimality": -4})).unwrap();
+    assert_eq!((r["model"]["maxEvaluations"].as_f64(), r["model"]["integerOptimality"].as_f64()), (Some(200_000.0), Some(0.0)));
+}
+
+#[test]
+fn excel_iteration_and_time_limits_are_not_read_as_gridcraft_options() {
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=ABS(A1-3)")]);
+    let model = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "evolutionary"});
+    s.execute("data.solver", model.clone()).unwrap();
+    let names = |s: &Session| -> Vec<String> {
+        let d = s.doc().unwrap();
+        d.wb.names.iter().filter(|n| n.scope == Some(0)).map(|n| n.name.clone()).collect()
+    };
+    // GridCraft's evaluation limit and generations go under its own names, not Excel's.
+    let saved = names(&s);
+    assert!(saved.iter().all(|n| n != "solver_itr" && n != "solver_mni"), "{saved:?}");
+    assert!(saved.iter().any(|n| n == "gridcraft_solver_evals") && saved.iter().any(|n| n == "gridcraft_solver_stall"), "{saved:?}");
+    // Excel's own limits, as a workbook from Excel holds them: 100 iterations, 30 seconds.
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        wb.names.retain(|n| !n.name.starts_with("gridcraft_"));
+        for (name, formula) in [("solver_itr", "100"), ("solver_mni", "30")] {
+            wb.names.push(gridcraft_model::DefinedName {
+                name: name.into(),
+                scope: Some(0),
+                formula: formula.into(),
+                comment: String::new(),
+                hidden: true,
+            });
+        }
+    }
+    let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+    assert!(m["maxEvaluations"].is_null() && m["generationsWithoutImprovement"].is_null(), "{m}");
+    set(&mut s, &[("A1", "0")]);
+    let r = s.execute("data.solver", json!({"saved": true})).unwrap();
+    assert!(r["evaluations"].as_u64().unwrap() > 100, "{r}");
+    assert!((n(&s, "A1") - 3.0).abs() < 1e-3, "{r}");
+    // Saving again replaces GridCraft's names; Reset All removes them with the rest.
+    s.execute(
+        "data.solver",
+        json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex", "keep": false}),
+    )
+    .ok();
+    let saved = names(&s);
+    assert_eq!(saved.iter().filter(|n| n.starts_with("gridcraft_")).collect::<Vec<_>>(), ["gridcraft_solver_evals"], "{saved:?}");
+    s.execute("data.solver", model).unwrap();
+    s.execute("data.solverReset", json!({})).unwrap();
+    assert!(names(&s).is_empty(), "{:?}", names(&s));
+}
+
+#[test]
+fn integer_optimality_reads_a_percent_sign_as_percent() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=3*A1")]);
+    for (given, want) in [(json!("5%"), 5.0), (json!(" 2.5 % "), 2.5), (json!("5"), 5.0), (json!(5), 5.0), (json!("150%"), 100.0)] {
+        let p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4", "A1 int"], "method": "simplex", "integerOptimality": given});
+        let r = s.execute("data.solver", p).unwrap();
+        assert_eq!(r["model"]["integerOptimality"].as_f64(), Some(want), "{given}: {r}");
+    }
 }
 
 #[test]
