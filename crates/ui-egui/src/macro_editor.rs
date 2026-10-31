@@ -932,7 +932,13 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
             restore_home(app, &ed.refs);
         }
         if ed.quit {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if app.native_windows {
+                // Each workbook window is a native window whose close button closes only it:
+                // the quit goes on directly.
+                app.continue_quit(ctx);
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
         if let Some((id, params)) = ed.then_close.take() {
             app.run_or_alert(&id, params);
@@ -941,8 +947,8 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
 }
 
 /// Asks the open step editor to close, as its close button does: it asks about a debug run or
-/// unsaved steps first. With `quit` (the window is closing), the window close goes on once the
-/// editor has closed; a Cancel in its questions keeps both open.
+/// unsaved steps first. With `quit` (the window is closing, or the app is quitting), the close or
+/// quit goes on once the editor has closed; a Cancel in its questions keeps both open.
 pub fn request_close(app: &mut SheetApp, quit: bool) {
     if let Some(ed) = app.macros.editor.as_mut() {
         ed.close_requested = true;

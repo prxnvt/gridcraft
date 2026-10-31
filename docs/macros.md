@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-10-31 · **Change:** minor (closing a workbook asks about the step editor's unsaved draft first; earlier: recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-10-31 · **Change:** minor (closing a workbook or quitting asks about the step editor's unsaved draft first; earlier: recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -299,8 +299,8 @@ other macros open; a macro that was left out is not in the saved file.
   the workbook itself is saved; Save or Don't Save goes on to close the workbook, which then asks
   about its own unsaved changes, and Cancel keeps both open. A new macro that has not been edited
   does not ask. It keeps its window until it closes itself: another dialog asked for meanwhile is
-  refused with a message, and closing the app first asks about the editor's debug run and unsaved
-  steps, then about unsaved workbooks.
+  refused with a message, and closing the app (its window's close button, Quit, Cmd+Q) first asks
+  about the editor's debug run and unsaved steps, then about unsaved workbooks.
 - **Debug bar.** Check dry-runs the macro and colours the grid: inputs blue, the cells it writes
   green, the cells among them that hold data red. Run runs it as one undo step. Step, Continue and
   Run to Here start the debugger when needed (`macro.debug` with the editor's breakpoints and

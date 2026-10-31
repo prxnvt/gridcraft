@@ -420,3 +420,22 @@ fn arrange_all_lays_out_the_native_windows_active_first() {
     let r = |x, y, w, h| craft_window::Rect::new(x, y, w, h);
     assert_eq!(tiled, [r(0.0, 0.0, 500.0, 400.0), r(500.0, 0.0, 500.0, 400.0), r(0.0, 400.0, 1000.0, 400.0)]);
 }
+
+#[test]
+fn quit_with_the_macro_editor_open_goes_on_once_the_editor_has_closed() {
+    let mut desk = Desk::new(false);
+    desk.app.run("macro.save", json!({"macro": {"name": "Kept", "steps": []}})).unwrap();
+    let d = desk.app.session.active_mut().unwrap();
+    d.saved = d.wb.clone();
+    desk.app.open_dialog("macroEditor", json!({"macro": "Kept"}));
+    desk.frames(3);
+    assert!(desk.app.macros.editor.is_some());
+    // The editor has nothing unsaved, so it closes; then the quit goes on as the app's quit, not
+    // as the editor window's close button (which would close only that workbook's window).
+    let mut sent = desk.frame_with(|app, ctx| app.request_quit(ctx));
+    sent.extend(desk.frames(2));
+    assert!(desk.app.macros.editor.is_none());
+    assert!(desk.app.allow_close, "the quit goes on: {sent:?}");
+    assert!(sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+    assert_eq!(desk.app.session.documents().len(), 1, "the workbook was not closed on its own");
+}

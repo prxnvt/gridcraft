@@ -701,3 +701,36 @@ fn a_new_macros_name_change_alone_makes_closing_ask() {
     assert!(asks_about(&h, "Renamed"));
     assert!(is_open(&h, book));
 }
+
+/// Quit (Cmd+Q, the macOS Quit menu, a Dock quit) and the commands the app answered with over the
+/// next frames.
+fn request_quit(h: &mut Harness) -> Vec<egui::ViewportCommand> {
+    let ctx = h.ctx.clone();
+    h.state_mut().request_quit(&ctx);
+    step_commands(h)
+}
+
+#[test]
+fn quit_asks_about_the_editors_unsaved_steps_first() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    // Every workbook is saved, but the draft is not: the app stays and the editor asks.
+    let sent = request_quit(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(!h.state().allow_close);
+    assert!(asks_about(&h, &name));
+    // Cancel keeps the app and the draft.
+    answer(&mut h, "Cancel");
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    // Asked again, Don't Save closes the editor and the quit goes on.
+    request_quit(&mut h);
+    assert!(asks_about(&h, &name));
+    h.get_by_label("Don't Save").click();
+    let sent = step_commands(&mut h);
+    assert!(h.state().macros.editor.is_none());
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+}
