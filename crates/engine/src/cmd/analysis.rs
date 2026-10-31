@@ -1269,7 +1269,10 @@ fn known_variance(p: &Json, key: &str) -> Result<f64> {
 /// z-Test: Two Sample for Means, for two samples whose population variances are known.
 fn z_test(s: &Session, p: &Json) -> Result<Grid> {
     let alpha = alpha(p)?;
-    let hmd = num(p, "hypothesizedDifference").or_else(|| num(p, "difference")).unwrap_or(0.0);
+    let hmd = match opt_num(p, "hypothesizedDifference")? {
+        Some(d) => d,
+        None => num_or(p, "difference", 0.0)?,
+    };
     let (v1, v2) = (known_variance(p, "variance1")?, known_variance(p, "variance2")?);
     let a = single(s, p, "range1", "Variable 1")?;
     let b = single(s, p, "range2", "Variable 2")?;
@@ -1449,9 +1452,24 @@ fn seed_of(p: &Json) -> Result<u64> {
     }
 }
 
+/// A number parameter: `None` when absent, null or blank; an error when present but not a
+/// finite number (a typed "0,3" or "abc" must not quietly become the default).
+fn opt_num(p: &Json, key: &str) -> Result<Option<f64>> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(t)) if t.trim().is_empty() => Ok(None),
+        Some(_) => num(p, key).map(Some).ok_or_else(|| EngineError::Other(format!("`{key}` must be a number."))),
+    }
+}
+
+/// A number parameter, `default` when absent or blank.
+fn num_or(p: &Json, key: &str, default: f64) -> Result<f64> {
+    Ok(opt_num(p, key)?.unwrap_or(default))
+}
+
 /// A whole-number parameter of at least `min`, `default` when absent.
 fn whole(p: &Json, key: &str, default: Option<f64>, min: f64) -> Result<f64> {
-    match num(p, key).or(default) {
+    match opt_num(p, key)?.or(default) {
         Some(x) if x >= min && x.fract() == 0.0 => Ok(x),
         Some(_) => Err(EngineError::Other(format!("`{key}` must be a whole number of at least {min}."))),
         None => Err(bad(CMD, format!("missing `{key}`"))),
@@ -1460,7 +1478,7 @@ fn whole(p: &Json, key: &str, default: Option<f64>, min: f64) -> Result<f64> {
 
 /// A probability parameter in [0, 1].
 fn probability(p: &Json) -> Result<f64> {
-    match num(p, "p").unwrap_or(0.5) {
+    match num_or(p, "p", 0.5)? {
         x if (0.0..=1.0).contains(&x) => Ok(x),
         _ => Err(EngineError::Other("The p value must be between 0 and 1.".into())),
     }
@@ -1493,7 +1511,7 @@ fn draw_table(cdf: &[f64], r: &mut Rng) -> f64 {
 /// The numbers of a patterned sequence: `from` to `to` in steps, each number repeated, the whole
 /// sequence repeated.
 fn pattern(p: &Json) -> Result<Vec<f64>> {
-    let (from, to, step) = (num(p, "from").unwrap_or(1.0), num(p, "to").unwrap_or(1.0), num(p, "step").unwrap_or(1.0));
+    let (from, to, step) = (num_or(p, "from", 1.0)?, num_or(p, "to", 1.0)?, num_or(p, "step", 1.0)?);
     let (each, times) = (whole(p, "repeatEach", Some(1.0), 1.0)?, whole(p, "repeatSequence", Some(1.0), 1.0)?);
     if step <= 0.0 || to < from {
         return Err(EngineError::Other("The pattern must run from a smaller number to a larger one in positive steps.".into()));
@@ -1534,11 +1552,11 @@ fn random_numbers(s: &Session, p: &Json, seed: u64) -> Result<Grid> {
     let count = cells(whole(p, "count", None, 1.0)?)?;
     let mut draw: Box<dyn FnMut(&mut Rng) -> f64> = match dist.as_str() {
         "uniform" => {
-            let (a, b) = (num(p, "from").unwrap_or(0.0), num(p, "to").unwrap_or(1.0));
+            let (a, b) = (num_or(p, "from", 0.0)?, num_or(p, "to", 1.0)?);
             Box::new(move |r| a + (b - a) * r.uniform())
         }
         "normal" => {
-            let (m, sd) = (num(p, "mean").unwrap_or(0.0), num(p, "standardDeviation").unwrap_or(1.0));
+            let (m, sd) = (num_or(p, "mean", 0.0)?, num_or(p, "standardDeviation", 1.0)?);
             if sd < 0.0 {
                 return Err(EngineError::Other("The standard deviation must not be negative.".into()));
             }
@@ -1557,7 +1575,7 @@ fn random_numbers(s: &Session, p: &Json, seed: u64) -> Result<Grid> {
             Box::new(move |r| draw_table(&cdf, r))
         }
         "poisson" => {
-            let lambda = num(p, "lambda").unwrap_or(1.0);
+            let lambda = num_or(p, "lambda", 1.0)?;
             if lambda <= 0.0 || lambda > 100_000.0 {
                 return Err(EngineError::Other("Lambda must be greater than 0 and at most 100000.".into()));
             }
@@ -2235,6 +2253,38 @@ mod tests {
             q["tool"] = json!("sampling");
             q["output"] = json!("G1");
             assert!(s.execute("data.analysisToolPak", q).is_err(), "{p}");
+        }
+    }
+
+    #[test]
+    fn options_typed_as_text_that_is_not_a_number_are_refused() {
+        // A form sends its options as text; one that doesn't read as a number (a decimal comma,
+        // a typo) is an error, not the default, while a blank option takes the default.
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [2, 4], [3, 6]]})).unwrap();
+        let rng = |dist: &str| json!({"tool": "randomNumberGeneration", "count": 3, "distribution": dist, "seed": 1, "outputTo": "newSheet"});
+        let z = json!({"tool": "zTest", "range1": "Sheet1!A1:A3", "range2": "Sheet1!B1:B3", "variance1": 1, "variance2": 4, "outputTo": "newSheet"});
+        let with = |base: &Json, key: &str, val: &str| {
+            let mut p = base.clone();
+            p[key] = json!(val);
+            p
+        };
+        let cases = [
+            (rng("uniform"), "from"),
+            (rng("uniform"), "to"),
+            (rng("normal"), "mean"),
+            (rng("normal"), "standardDeviation"),
+            (rng("bernoulli"), "p"),
+            (rng("binomial"), "p"),
+            (rng("poisson"), "lambda"),
+            (rng("patterned"), "step"),
+            (rng("uniform"), "variables"),
+            (z.clone(), "hypothesizedDifference"),
+        ];
+        for (base, key) in cases {
+            let e = s.execute("data.analysisToolPak", with(&base, key, "0,3")).unwrap_err().to_string();
+            assert!(e.contains(key), "{key}: {e}");
+            s.execute("data.analysisToolPak", with(&base, key, " ")).unwrap_or_else(|e| panic!("{key} blank: {e}"));
         }
     }
 
