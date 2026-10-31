@@ -344,3 +344,21 @@ fn each_drag_of_an_object_is_its_own_undo_step() {
     h.run_steps(2);
     assert_eq!(rect(&h, o.image), start, "a second undo takes back the move");
 }
+
+#[test]
+fn dragging_an_unselected_object_by_its_edge_moves_it() {
+    let (mut h, o) = fixture();
+    assert_eq!(h.state().selected_object, None);
+    let before = rect(&h, o.shape);
+    // On the bottom-right corner, where the handle would be if the shape were selected; the
+    // pointer shows Move there, and the press selects and moves the shape.
+    let grab = Handle::BottomRight.pos(before) - vec2(2.0, 2.0);
+    h.input_mut().events.push(Event::PointerMoved(grab));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move);
+    drag(&mut h, grab, grab + vec2(30.0, 20.0));
+    let after = rect(&h, o.shape);
+    assert_eq!(h.state().selected_object, Some(o.shape));
+    assert!((after.size() - before.size()).length() < 0.5, "not resized: {before:?} {after:?}");
+    assert!((after.min - before.min - vec2(30.0, 20.0)).length() < 1.0, "moved with the pointer: {before:?} {after:?}");
+}

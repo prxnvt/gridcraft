@@ -124,16 +124,18 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         // A drag is recognised only after the pointer has moved, so grab the object where the press began.
         let at = if primary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos };
         // The selected object's handles reach a little outside it, so they win over hit-testing.
-        let on_handle = at.and_then(|p| crate::chartview::selected_handle(app, geo, sh, p)).map(|(o, r, _)| (o, r));
+        // Only they resize: a press anywhere on another object selects and moves it, as the
+        // hover cursor shows.
+        let on_handle = at.and_then(|p| crate::chartview::selected_handle(app, geo, sh, p));
+        let handle = on_handle.map(|(.., h)| h);
         if let Some(p) = at
-            && let Some((obj, rect)) = on_handle.or_else(|| crate::chartview::hit(app, geo, sh, p))
+            && let Some((obj, _)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
         {
             app.selected_object = Some(obj);
             if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
                 return;
             }
             if primary_drag && let Some(a) = sh.object_anchor(obj) {
-                let handle = crate::objects::handle_at(rect, p);
                 app.grid.drag = Drag::Object { obj, start: p, orig: (a.cell, a.dx, a.dy, a.width, a.height), handle, stepped: false };
                 // The first recognised drag frame already holds movement away from the press.
                 if let Some(now) = pos {
