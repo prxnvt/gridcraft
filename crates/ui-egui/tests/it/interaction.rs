@@ -801,6 +801,17 @@ fn data_analysis_dialog_opens_every_tool_form() {
 }
 
 #[test]
+fn two_factor_anova_without_replication_labels_caption_names_the_first_column() {
+    // Ticked, Labels makes the tool take the first cell of every data row as the row's name, so
+    // the caption must not say the labels are only in the first row.
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "anovaTwoFactorWithout"}));
+    h.run_steps(2);
+    assert!(h.query_by_label("Labels in first row and first column").is_some());
+    assert!(h.query_by_label("Labels in first row").is_none());
+}
+
+#[test]
 fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {

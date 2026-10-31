@@ -57,7 +57,11 @@ fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
         ],
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
-        "anovaTwoFactorWithout" => vec![range(), labels(), Text { key: "alpha", label: "Alpha:" }],
+        // With Labels ticked this tool reads row names from the first column as well as column
+        // names from the first row, so the caption says both.
+        "anovaTwoFactorWithout" => {
+            vec![range(), Check { key: "labels", label: "Labels in first row and first column" }, Text { key: "alpha", label: "Alpha:" }]
+        }
         "anovaTwoFactorWith" => vec![
             Note("The input range holds column labels in its first row and sample labels in its first column.".into()),
             range(),
