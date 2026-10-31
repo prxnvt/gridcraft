@@ -562,6 +562,25 @@ fn saving_a_shorter_model_over_a_longer_one_clears_the_rest() {
 }
 
 #[test]
+fn load_model_keeps_the_evolutionary_convergence_and_generations() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=ABS(A1-3)")]);
+    let evo = json!({"objective": "B1", "goal": "min", "variables": "A1", "constraints": ["A1 <= 4"], "method": "evolutionary", "convergence": 0.001, "generationsWithoutImprovement": 20});
+    s.execute("data.solverSaveModel", json!({"to": "H1", "model": evo})).unwrap();
+    let m = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap()["model"].clone();
+    assert_eq!((m["convergence"].as_f64(), m["generationsWithoutImprovement"].as_f64()), (Some(0.001), Some(20.0)), "{m}");
+    // They survive XLSX; Excel's time limit (solver_mni, in seconds) isn't written or read.
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "c.xlsx", "base64": b64})).unwrap();
+    let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+    assert_eq!((m["convergence"].as_f64(), m["generationsWithoutImprovement"].as_f64()), (Some(0.001), Some(20.0)), "{m}");
+    assert!(!s.doc().unwrap().wb.names.iter().any(|n| n.name == "solver_mni"));
+    // Reset All removes the GridCraft name with the rest.
+    s.execute("data.solverReset", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.names.iter().all(|n| n.scope != Some(0)));
+}
+
+#[test]
 fn limits_report_of_a_nonlinear_model() {
     // The largest rectangle with perimeter at most 20 (5 × 5): with the height held at 5, the
     // width ranges over 0..5, the area over 0..25.

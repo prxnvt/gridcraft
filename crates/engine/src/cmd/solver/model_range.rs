@@ -1,7 +1,7 @@
 //! Load/Save Model and Reset All: the model written on cells of its sheet, read back from them,
 //! and removed from the sheet.
 
-use super::model::{Rhs, model_formulas, parse_model, parse_model_formulas, save_model, saved_model};
+use super::model::{Rhs, is_model_name, model_formulas, parse_model, parse_model_formulas, save_model, saved_model};
 use super::{
     Cell, CellRef, DefinedName, EngineError, Json, LOAD_CMD, MAX_CONSTRAINTS, RangeRef, Result, SAVE_CMD, Session, Sheet, Value, bad, edit, json,
     split_sheet, str_param,
@@ -142,8 +142,8 @@ pub(super) fn load_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Whether a defined name belongs to the saved model of `sheet`.
-fn is_model_name(n: &DefinedName, sheet: usize) -> bool {
-    n.scope == Some(sheet) && n.name.to_ascii_lowercase().starts_with("solver_")
+fn is_sheet_model_name(n: &DefinedName, sheet: usize) -> bool {
+    n.scope == Some(sheet) && is_model_name(&n.name)
 }
 
 /// `data.solverReset`: Reset All removes the active sheet's model. A model the sheet reads from
@@ -152,9 +152,9 @@ fn is_model_name(n: &DefinedName, sheet: usize) -> bool {
 pub(super) fn reset_model(s: &mut Session, _p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let active = d.wb.active_sheet();
-    let removed = d.wb.names.iter().filter(|n| is_model_name(n, active)).count();
+    let removed = d.wb.names.iter().filter(|n| is_sheet_model_name(n, active)).count();
     let mut after = d.wb.names.clone();
-    after.retain(|n| !is_model_name(n, active));
+    after.retain(|n| !is_sheet_model_name(n, active));
     let masked = {
         let mut probe = (*d.wb).clone();
         probe.names = after;
@@ -162,7 +162,7 @@ pub(super) fn reset_model(s: &mut Session, _p: &Json) -> Result<Json> {
     };
     if removed > 0 || masked {
         edit(s, |cx| {
-            cx.wb.names.retain(|n| !is_model_name(n, active));
+            cx.wb.names.retain(|n| !is_sheet_model_name(n, active));
             if masked {
                 cx.wb.names.push(DefinedName {
                     name: "solver_opt".into(),

@@ -313,10 +313,20 @@ fn ref_text(sheet_name: &str, cells: &str) -> String {
     abs_text(Some(sheet_name), cells)
 }
 
+/// The generations without improvement have no Excel equivalent: Excel's `solver_mni` is a time
+/// in seconds. They are saved under a GridCraft name, which Excel ignores.
+const STALL_NAME: &str = "gridcraft_solver_stall";
+
+/// Whether `name` is one of the hidden names of a saved model.
+pub(super) fn is_model_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("solver_") || name == STALL_NAME
+}
+
 /// The model as hidden names scoped to its sheet (replacing any saved before).
 pub(super) fn save_model(wb: &mut Workbook, m: &Model) {
     let Some(sheet_name) = wb.sheet(m.sheet).map(|s| s.name.clone()) else { return };
-    wb.names.retain(|n| !(n.scope == Some(m.sheet) && n.name.to_ascii_lowercase().starts_with("solver_")));
+    wb.names.retain(|n| !(n.scope == Some(m.sheet) && is_model_name(&n.name)));
     let mut put = |name: String, formula: String| {
         wb.names.push(DefinedName { name, scope: Some(m.sheet), formula, comment: String::new(), hidden: true });
     };
@@ -359,6 +369,8 @@ pub(super) fn save_model(wb: &mut Workbook, m: &Model) {
         put("solver_mrt".into(), m.evo.mutation.to_string());
         put("solver_rsd".into(), m.evo.seed.to_string());
         put("solver_rbv".into(), if m.evo.require_bounds { "1" } else { "2" }.into());
+        put("solver_cvg".into(), m.evo.convergence.to_string());
+        put(STALL_NAME.into(), m.evo.stall.to_string());
     }
     put("solver_ver".into(), "3".into());
 }
@@ -413,7 +425,13 @@ pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
         "nonNegative": get("solver_neg").as_deref().map(str::trim) != Some("2"),
         "method": method,
     });
-    for (name, key) in [("solver_ssz", "populationSize"), ("solver_mrt", "mutationRate"), ("solver_rsd", "randomSeed")] {
+    for (name, key) in [
+        ("solver_ssz", "populationSize"),
+        ("solver_mrt", "mutationRate"),
+        ("solver_rsd", "randomSeed"),
+        ("solver_cvg", "convergence"),
+        (STALL_NAME, "generationsWithoutImprovement"),
+    ] {
         if let Some(v) = get(name).and_then(|v| num_text(&v)) {
             model[key] = json!(v);
         }
