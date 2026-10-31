@@ -812,6 +812,20 @@ fn two_factor_anova_without_replication_labels_caption_names_the_first_column() 
 }
 
 #[test]
+fn random_number_generation_form_hides_the_count_for_a_patterned_sequence() {
+    // A patterned sequence ignores the count (its from, to, step and repeats set the length), so
+    // the form offers the count only for the random distributions.
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "randomNumberGeneration"}));
+    h.run_steps(2);
+    assert!(h.query_by_label("Number of Random Numbers:").is_some());
+    h.state_mut().dialog.as_mut().unwrap().values.insert("distribution".into(), json!("patterned"));
+    h.run_steps(2);
+    assert!(h.query_by_label("Number of Random Numbers:").is_none());
+    assert!(h.query_by_label("Repeating each sequence (times):").is_some());
+}
+
+#[test]
 fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {

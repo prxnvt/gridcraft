@@ -82,29 +82,32 @@ fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
             vec![range(), labels(), Text { key: "interval", label: "Interval:" }, Check { key: "standardErrors", label: "Standard Errors" }]
         }
         "randomNumberGeneration" => {
-            let mut v = vec![
-                Text { key: "variables", label: "Number of Variables:" },
-                Text { key: "count", label: "Number of Random Numbers:" },
-                Choice {
-                    key: "distribution",
-                    label: "Distribution:",
-                    options: vec![
-                        ("uniform", "Uniform"),
-                        ("normal", "Normal"),
-                        ("bernoulli", "Bernoulli"),
-                        ("binomial", "Binomial"),
-                        ("poisson", "Poisson"),
-                        ("patterned", "Patterned"),
-                        ("discrete", "Discrete"),
-                    ],
-                },
-            ];
-            v.extend(match values.get("distribution").and_then(Json::as_str).unwrap_or("uniform") {
+            let dist = values.get("distribution").and_then(Json::as_str).unwrap_or("uniform");
+            let mut v = vec![Text { key: "variables", label: "Number of Variables:" }];
+            // A patterned sequence sets its own length, so it has no count to type.
+            if dist != "patterned" {
+                v.push(Text { key: "count", label: "Number of Random Numbers:" });
+            }
+            v.push(Choice {
+                key: "distribution",
+                label: "Distribution:",
+                options: vec![
+                    ("uniform", "Uniform"),
+                    ("normal", "Normal"),
+                    ("bernoulli", "Bernoulli"),
+                    ("binomial", "Binomial"),
+                    ("poisson", "Poisson"),
+                    ("patterned", "Patterned"),
+                    ("discrete", "Discrete"),
+                ],
+            });
+            v.extend(match dist {
                 "normal" => vec![Text { key: "mean", label: "Mean:" }, Text { key: "standardDeviation", label: "Standard deviation:" }],
                 "bernoulli" => vec![Text { key: "p", label: "p Value:" }],
                 "binomial" => vec![Text { key: "p", label: "p Value:" }, Text { key: "trials", label: "Number of trials:" }],
                 "poisson" => vec![Text { key: "lambda", label: "Lambda:" }],
                 "patterned" => vec![
+                    Note("Each number is repeated, then the whole sequence; together they set how many values are written.".into()),
                     Text { key: "from", label: "From:" },
                     Text { key: "to", label: "To:" },
                     Text { key: "step", label: "In steps of:" },
