@@ -1,6 +1,7 @@
 use super::chart::format_series;
 use super::{
-    Anchor, CellRef, Color, EngineError, Json, Result, Session, Shape, Sheet, anchor_mode_name, bad, bool_param, edit, json, str_param, u32_param,
+    Anchor, CellRef, Color, EngineError, Json, Result, Session, Shape, ShapeKind, Sheet, anchor_mode_name, bad, bool_param, edit, json, str_param,
+    u32_param,
 };
 
 pub(super) fn shape_fill(s: &mut Session, p: &Json) -> Result<Json> {
@@ -82,7 +83,8 @@ pub(super) fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let mut v = Vec::new();
     for c in &sh.shapes {
-        v.push(json!({"kind": "shape", "id": c.id, "name": format!("{:?} {}", c.kind, c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
+        let kind = if c.kind == ShapeKind::Equation { "equation" } else { "shape" };
+        v.push(json!({"kind": kind, "id": c.id, "name": format!("{:?} {}", c.kind, c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     for c in &sh.images {
         v.push(json!({"kind": "image", "id": c.id, "name": format!("Picture {}", c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
