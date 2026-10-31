@@ -32,7 +32,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
-    let events = ctx.input(|i| i.events.clone());
+    let events = grid_events(app, ctx, sh);
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
@@ -155,5 +155,22 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             _ => {}
         }
+    }
+}
+
+/// This frame's input events, without those the focused form control took.
+fn grid_events(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> Vec<egui::Event> {
+    let events = ctx.input(|i| i.events.clone());
+    events.into_iter().filter(|ev| !form_control_event(app, sh, ev)).collect()
+}
+
+/// Whether the focused form control takes `ev`: arrows, Page Up and Down, Home, End, Space and
+/// Enter without Ctrl, Cmd or Alt, and the space a Space press types (it presses a focused button
+/// and doesn't start typing in a cell).
+fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool {
+    match ev {
+        egui::Event::Text(text) => text == " " && app.grid.focused_control.is_some() && app.selected_object.is_none(),
+        egui::Event::Key { key, pressed: true, modifiers: m, .. } => !m.command && !m.ctrl && !m.alt && crate::form_controls::key(app, sh, *key),
+        _ => false,
     }
 }
