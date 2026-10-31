@@ -766,3 +766,30 @@ fn a_refused_save_while_quitting_stops_the_quit() {
         h.state_mut().macros.editor.as_mut().unwrap().draft.name = "Taken".into();
     }
 }
+
+#[test]
+fn an_untouched_new_macro_closes_without_asking_however_the_editor_closes() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let open_new = |h: &mut Harness| {
+        h.state_mut().open_dialog("macroEditor", json!({}));
+        h.run_steps(3);
+        assert!(h.state().macros.editor.as_ref().is_some_and(|e| e.dirty && e.saved_as.is_none()));
+    };
+    // Its own close button.
+    open_new(&mut h);
+    h.state_mut().macros.editor.as_mut().unwrap().close_requested = true;
+    h.run_steps(3);
+    assert!(h.state().macros.editor.is_none(), "no Save changes question for a macro nobody edited");
+    // The control channel's cancel.
+    open_new(&mut h);
+    let r = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "ui.dialog.cancel", &json!({}));
+    assert!(matches!(&r, gridcraft_ui_egui::control::Outcome::Done(v) if v.get("error").is_none()));
+    h.run_steps(2);
+    assert!(h.state().macros.editor.is_none());
+    // Quit, with every workbook saved: the editor closes and the quit goes on.
+    open_new(&mut h);
+    let sent = request_quit(&mut h);
+    assert!(h.state().macros.editor.is_none());
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+}

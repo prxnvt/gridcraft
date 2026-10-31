@@ -913,7 +913,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
         if app.session.macro_debug.is_some() {
             ed.ask_stop = true;
             ed.closing = true;
-        } else if ed.dirty {
+        } else if ed.has_unsaved_changes() {
             ed.ask_close = true;
         } else {
             *open = false;
@@ -965,7 +965,7 @@ pub fn close_now(app: &mut SheetApp) -> Result<(), String> {
     if app.session.macro_debug.is_some() {
         return Err("A macro is being debugged: stop it first (macro.debug {\"action\": \"stop\"}).".into());
     }
-    if app.macros.editor.as_ref().is_some_and(|ed| ed.dirty) {
+    if app.macros.editor.as_ref().is_some_and(Editor::has_unsaved_changes) {
         return Err("The macro step editor has unsaved steps: save them or close the editor in its window.".into());
     }
     if let Some(ed) = app.macros.editor.take()
@@ -1079,7 +1079,7 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
                 ed.ask_stop = false;
                 stop(app, ed, keep);
                 if ed.closing {
-                    if ed.dirty { ed.ask_close = true } else { *open = false }
+                    if ed.has_unsaved_changes() { ed.ask_close = true } else { *open = false }
                 }
                 ed.closing = false;
             }
