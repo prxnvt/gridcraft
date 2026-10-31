@@ -683,3 +683,21 @@ fn an_untouched_new_macro_does_not_make_closing_ask() {
     assert!(h.state().macros.editor.is_none());
     assert!(h.state().dialog.is_none());
 }
+
+#[test]
+fn a_new_macros_name_change_alone_makes_closing_ask() {
+    let mut h = harness();
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    let book = h.state().session.active().unwrap().uid;
+    // Only the name changes, as typing in the Name box does.
+    let ed = h.state_mut().macros.editor.as_mut().unwrap();
+    ed.draft.name = "Renamed".into();
+    ed.dirty = true;
+    h.run_steps(2);
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, "Renamed"));
+    assert!(is_open(&h, book));
+}

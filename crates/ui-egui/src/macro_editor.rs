@@ -57,6 +57,9 @@ pub struct Editor {
     pub draft: Macro,
     /// The name the macro is saved under (`None` until it is first saved).
     pub saved_as: Option<String>,
+    /// The name the editor opened with: a new macro that still has it and nothing else counts
+    /// as untouched.
+    pub opened_as: String,
     pub dirty: bool,
     /// The selected row: a step path (`3`, `2.1`, `4.then.1`) or an If branch (`4.then`).
     pub selected: Option<String>,
@@ -526,6 +529,7 @@ pub fn open(app: &mut SheetApp, params: &Json) -> Option<Dialog> {
     let doc = doc.uid;
     app.macros.editor = Some(Editor {
         doc,
+        opened_as: draft.name.clone(),
         draft,
         dirty: saved_as.is_none(),
         saved_as,
@@ -618,9 +622,9 @@ fn ensure_saved(app: &mut SheetApp, ed: &mut Editor) -> bool {
 
 impl Editor {
     /// The draft holds changes not yet saved into the workbook. A new macro counts once it
-    /// differs from the empty one the editor started with, whatever its name.
+    /// differs from the empty one the editor started with, its name included.
     pub fn has_unsaved_changes(&self) -> bool {
-        let untouched = Macro { name: self.draft.name.clone(), inputs: vec![NamedInput::default()], ..Default::default() };
+        let untouched = Macro { name: self.opened_as.clone(), inputs: vec![NamedInput::default()], ..Default::default() };
         self.dirty && (self.saved_as.is_some() || self.draft != untouched)
     }
 }
