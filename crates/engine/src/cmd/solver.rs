@@ -43,8 +43,8 @@ mod sensitivity;
 
 use evolutionary::{EvoEnd, evolutionary};
 use lp::{Outcome, branch_and_bound, linear_program, linearize, solve_lp};
-pub use model::saved_model;
 use model::{Goal, Method, Model, model_params, parse_model, save_model};
+pub use model::{saved_model, sensitivity_applies};
 use nlp::{nlp, project};
 use problem::{Evaluator, as_num, build_problem};
 use reports::{ReportInput, insert_report_selections, prepare_reports, report, report_kinds, write_reports};

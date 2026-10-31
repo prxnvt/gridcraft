@@ -518,6 +518,31 @@ fn sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers() {
     assert!(close(&report_row(&s, &rep, "$D$2", &["D", "E"]), &[1.0, -2.0], 1e-4));
 }
 #[test]
+fn sensitivity_applies_agrees_with_the_report() {
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("B1", "=3*A1")]);
+    for (extra, ok) in [
+        (json!({}), true),
+        (json!({"goal": "min"}), true),
+        (json!({"method": "grg"}), true),
+        (json!({"goal": "value", "value": 3}), false),
+        (json!({"constraints": ["A1 <= 4", "A1 int"]}), false),
+        (json!({"constraints": ["A1 <= 4", {"lhs": "A1", "op": "bin"}]}), false),
+        (json!({"method": "evolutionary"}), false),
+    ] {
+        let mut p = json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex", "keep": false});
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        assert_eq!(super::sensitivity_applies(&p), ok, "{p}");
+        let r = s.execute("data.solver", p.clone()).unwrap();
+        assert_eq!(super::sensitivity_applies(&r["model"]), ok, "{p}");
+        let rep = s.execute("data.solverReport", json!({"reports": ["sensitivity"], "model": r["model"], "values": r["values"]}));
+        assert_eq!(rep.is_ok(), ok, "{p}: {rep:?}");
+    }
+}
+
+#[test]
 fn limits_report_of_a_nonlinear_model() {
     // The largest rectangle with perimeter at most 20 (5 × 5): with the height held at 5, the
     // width ranges over 0..5, the area over 0..25.
