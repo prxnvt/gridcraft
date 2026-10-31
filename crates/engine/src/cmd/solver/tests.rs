@@ -538,6 +538,30 @@ fn reset_all_masks_a_workbook_level_model_and_keeps_other_sheets_models() {
 }
 
 #[test]
+fn saving_a_shorter_model_over_a_longer_one_clears_the_rest() {
+    let mut s = s();
+    set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2"), ("H9", "=1+1")]);
+    let long = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24", "B3 <= 6", "A1 <= 3", "A2 <= 3"]});
+    let short = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 24"]});
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1", "model": long})).unwrap()["range"], "H1:H7");
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H1", "model": short})).unwrap()["range"], "H1:H4");
+    // The old model's last rows are cleared; a formula below it stays.
+    for r in 5..=7 {
+        assert_eq!(formula(&s, &format!("H{r}")), "", "H{r}");
+    }
+    assert_eq!(formula(&s, "H9"), "1+1");
+    let loaded = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap();
+    assert_eq!(loaded["model"]["constraints"], json!(["B2 <= 24"]), "{loaded}");
+    // Reading down from one cell stops at the options row even with formulas right below it.
+    set(&mut s, &[("H5", "=2+2")]);
+    let loaded = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap();
+    assert_eq!(loaded["model"]["constraints"], json!(["B2 <= 24"]), "{loaded}");
+    // Saving over cells that hold no model leaves them as they are.
+    assert_eq!(s.execute("data.solverSaveModel", json!({"to": "H8", "model": short})).unwrap()["range"], "H8:H11");
+    assert_eq!(formula(&s, "H5"), "2+2");
+}
+
+#[test]
 fn limits_report_of_a_nonlinear_model() {
     // The largest rectangle with perimeter at most 20 (5 × 5): with the height held at 5, the
     // width ranges over 0..5, the area over 0..25.

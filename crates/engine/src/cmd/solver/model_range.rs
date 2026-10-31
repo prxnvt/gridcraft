@@ -3,12 +3,49 @@
 
 use super::model::{Rhs, model_formulas, parse_model, parse_model_formulas, save_model, saved_model};
 use super::{
-    Cell, CellRef, DefinedName, EngineError, Json, LOAD_CMD, MAX_CONSTRAINTS, RangeRef, Result, SAVE_CMD, Session, bad, edit, json, split_sheet,
-    str_param,
+    Cell, CellRef, DefinedName, EngineError, Json, LOAD_CMD, MAX_CONSTRAINTS, RangeRef, Result, SAVE_CMD, Session, Sheet, Value, bad, edit, json,
+    split_sheet, str_param,
 };
 use crate::cmd::cell_param_on;
 
-/// `data.solverSaveModel`: writes the model on cells of its sheet, in one step.
+/// Most cells a model written by Save Model takes: the objective, the variables, the options
+/// and one per constraint.
+const MAX_MODEL_ROWS: usize = MAX_CONSTRAINTS + 3;
+
+fn is_options_row(formula: &str) -> bool {
+    formula.trim().trim_start_matches('=').trim_start().starts_with('{')
+}
+
+/// The formulas from `start` down: to the first cell without a formula, or through the options
+/// row (`{…}`) that ends a model written by Save Model; at most [`MAX_MODEL_ROWS`] cells.
+fn formulas_down(sheet: &Sheet, start: CellRef) -> Vec<(CellRef, String)> {
+    let mut out = Vec::new();
+    for k in 0..MAX_MODEL_ROWS as u32 {
+        let Some(c) = start.row.checked_add(k).map(|row| CellRef::new(row, start.col)) else { break };
+        let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone()) else { break };
+        let last = is_options_row(&f);
+        out.push((c, f));
+        if last {
+            break;
+        }
+    }
+    out
+}
+
+/// The cells of a model written by Save Model that starts at `start` (none if the cells there
+/// don't hold one).
+fn saved_model_cells(sheet: &Sheet, start: CellRef) -> Vec<CellRef> {
+    let old = formulas_down(sheet, start);
+    let rows: Vec<String> = old.iter().map(|(_, f)| f.clone()).collect();
+    if rows.last().is_some_and(|f| is_options_row(f)) && parse_model_formulas(&rows).is_ok() {
+        old.into_iter().map(|(c, _)| c).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// `data.solverSaveModel`: writes the model on cells of its sheet, in one step. Saving over a
+/// longer model saved at the same cell clears the rest of it, so Load Model reads the new one.
 pub(super) fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let params = match p.get("model") {
@@ -41,6 +78,16 @@ pub(super) fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other(format!("{} overlaps the model's cells; choose another place to save it.", range.a1())));
     }
     let sheet = model.sheet;
+    // What is left of a model saved here before; the new model's own cells stay.
+    let stale: Vec<CellRef> = s
+        .doc()?
+        .wb
+        .sheet(sheet)
+        .map(|sh| saved_model_cells(sh, to))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| !range.contains(*c) && !used.contains(c))
+        .collect();
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let cells: Vec<CellRef> = range.iter().collect();
@@ -49,7 +96,11 @@ pub(super) fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
             cell.style = sh.style_id(*c);
             sh.set_cell(*c, cell);
         }
-        for c in cells {
+        for c in &stale {
+            let style = sh.style_id(*c);
+            sh.set_cell(*c, Cell { value: Value::Empty, formula: None, style });
+        }
+        for c in cells.into_iter().chain(stale) {
             cx.touch(sheet, c);
         }
         Ok(())
@@ -67,11 +118,11 @@ pub(super) fn load_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("Load Model reads a model saved on the active sheet.".into()));
     }
     let r = RangeRef::parse(body.trim()).ok_or_else(|| bad(LOAD_CMD, format!("not a range: `{text}`")))?;
-    let cap = MAX_CONSTRAINTS + 3;
+    let cap = MAX_MODEL_ROWS;
     let sheet = d.wb.sheet(active).ok_or(EngineError::NoDocument)?;
     let formula = |c: CellRef| sheet.cell(c).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone());
     let rows: Vec<String> = if r.is_single() {
-        (0..cap as u32).map_while(|k| r.start.row.checked_add(k).and_then(|row| formula(CellRef::new(row, r.start.col)))).collect()
+        formulas_down(sheet, r.start).into_iter().map(|(_, f)| f).collect()
     } else {
         if r.count() > cap as u64 {
             return Err(EngineError::Other(format!("The range is too large for a saved model (at most {cap} cells).")));
