@@ -228,10 +228,16 @@ pub fn layout_job(text: &str, lang: Lang, font: &FontId, plain: egui::Color32, s
 
 /// Underlines the byte range `mark` of `job` in `color` (an error's position), splitting the
 /// sections it crosses. An empty range marks the character before it (the end of the text, for
-/// an error about missing input). A range past the end of the text is clamped to it.
+/// an error about missing input). A range past the end of the text is clamped to it, and its
+/// ends are moved out to char boundaries: the mark may come from an earlier version of the text
+/// (the equation editor computes it before this frame's edit), and egui slices the text at every
+/// section boundary.
 pub fn underline(job: &mut egui::text::LayoutJob, mark: Range<usize>, color: egui::Color32) {
     let text = job.text.as_str();
-    let mut mark = mark.start.min(text.len())..mark.end.min(text.len());
+    let floor = |i: usize| (0..=i.min(text.len())).rev().find(|&b| text.is_char_boundary(b)).unwrap_or(0);
+    let ceil = |i: usize| (i.min(text.len())..=text.len()).find(|&b| text.is_char_boundary(b)).unwrap_or(text.len());
+    let start = floor(mark.start);
+    let mut mark = start..ceil(mark.end).max(start);
     if mark.is_empty() {
         let start = text.get(..mark.start).and_then(|t| t.char_indices().next_back()).map_or(0, |(i, _)| i);
         mark = start..mark.start.max(start + text.get(start..).and_then(|t| t.chars().next()).map_or(0, char::len_utf8));
