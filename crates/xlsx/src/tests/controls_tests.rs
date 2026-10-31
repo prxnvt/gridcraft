@@ -282,3 +282,24 @@ fn hostile_form_controls_are_capped_and_repaired() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.sheet(0).unwrap().controls.len(), c.len());
 }
+
+/// Each listed control finds its VML shape through an index, so a sheet of many controls reads in
+/// linear time (it used to scan every shape for every control).
+#[test]
+#[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+fn many_listed_controls_read_in_linear_time() {
+    let mut wb = Workbook::default();
+    if let Some(sh) = wb.sheet_mut(0) {
+        for i in 0..10_000u32 {
+            let a = anchor(&format!("B{}", i + 1), 60.0, 18.0);
+            sh.controls.push(FormControl { id: i + 1, kind: ControlKind::Spin, anchor: a, ..Default::default() });
+        }
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let t0 = std::time::Instant::now();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let took = t0.elapsed();
+    assert_eq!(back.sheet(0).unwrap().controls.len(), 10_000);
+    // About 0.4 s here; scanning every shape for every control took over 8 s.
+    assert!(took < std::time::Duration::from_secs(3), "{took:?}");
+}

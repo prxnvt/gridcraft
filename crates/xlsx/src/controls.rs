@@ -12,7 +12,7 @@
 //! list boxes, drop-downs, ActiveX controls) are left to pass-through (`passthrough.rs`), which
 //! keeps them unchanged; a sheet can hold both, in one `<controls>` element and one VML drawing.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use gridcraft_core::CellRef;
@@ -404,7 +404,14 @@ pub fn read(cx: &mut Ctx<'_>, controls: Option<&El>, rels: &[Rel], sheet: &mut S
         None => None,
     };
     let shapes: Vec<&El> = vml.as_ref().map(|v| v.kids("shape").collect()).unwrap_or_default();
-    let shape_of = |n: u64| shapes.iter().copied().find(|s| number_of(s) == Some(n));
+    // Looked up once per listed control: an index keeps a sheet of many controls linear.
+    let mut by_number: HashMap<u64, &El> = HashMap::with_capacity(shapes.len());
+    for s in &shapes {
+        if let Some(n) = number_of(s) {
+            by_number.entry(n).or_insert(s);
+        }
+    }
+    let shape_of = |n: u64| by_number.get(&n).copied();
     // Every shape the sheet lists, read here or not.
     let mut listed: HashSet<u64> = HashSet::new();
     for ctl in controls.map(controls_in).unwrap_or_default() {
