@@ -5,16 +5,20 @@ use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_engine::model::StepKind;
-use gridcraft_ui_egui::SheetApp;
+use gridcraft_engine::model::{Step, StepKind};
+use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness() -> Harness {
+    harness_with(Default::default())
+}
+
+fn harness_with(services: Services) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = SheetApp::new(session, services);
     app.ui.ribbon_tab = "Automate".into();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
@@ -280,7 +284,7 @@ fn a_new_macro_never_replaces_one_with_its_name() {
         {
             let ed = h.state_mut().macros.editor.as_mut().unwrap();
             ed.draft.name = "three".into();
-            ed.draft.steps = vec![gridcraft_engine::model::Step::command("cell.set", json!({"cell": "B1", "input": "x"}))];
+            ed.draft.steps = vec![Step::command("cell.set", json!({"cell": "B1", "input": "x"}))];
             ed.dirty = true;
         }
         h.run_steps(2);
@@ -306,7 +310,7 @@ fn a_rename_that_lands_before_a_failed_save_is_remembered() {
         let ed = h.state_mut().macros.editor.as_mut().unwrap();
         ed.draft.name = "Renamed".into();
         // Too large to keep in the workbook: the rename lands, the save after it fails.
-        ed.draft.steps.push(gridcraft_engine::model::Step::command("cell.set", json!({"cell": "A4", "input": big})));
+        ed.draft.steps.push(Step::command("cell.set", json!({"cell": "A4", "input": big})));
         ed.dirty = true;
     }
     h.run_steps(2);
@@ -366,7 +370,7 @@ fn the_editor_works_only_on_the_workbook_it_opened_in() {
     // A new macro whose one step writes A1, not saved yet.
     h.state_mut().open_dialog("macroEditor", json!({"new": "Fresh"}));
     h.run_steps(3);
-    let step = gridcraft_engine::model::Step::command("cell.set", json!({"cell": "A1", "input": "ran"}));
+    let step = Step::command("cell.set", json!({"cell": "A1", "input": "ran"}));
     h.state_mut().macros.editor.as_mut().unwrap().draft.steps = vec![step];
     let book1 = h.state().session.active().unwrap().uid;
     // Another workbook becomes active while the editor is open (File › New, Switch Window, an agent).
@@ -551,4 +555,131 @@ fn a_macro_at_the_step_limit_opens_without_freezing_the_editor() {
     let ms = gridcraft_ui_egui::now_ms() - t;
     assert!(ms < 10_000.0, "five frames took {ms} ms");
     assert!(h.query_by_label_contains("Step 1: ").is_some());
+}
+
+/// Opens the editor on a new macro and gives its draft a step, as editing it does.
+fn edited_new_macro(h: &mut Harness) {
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    let ed = h.state_mut().macros.editor.as_mut().unwrap();
+    ed.draft.steps.push(Step::command("cell.set", json!({"cell": "A1", "input": "7"})));
+    ed.dirty = true;
+    h.run_steps(2);
+}
+
+/// Clicks a button of the editor's Save changes question: the question's buttons are drawn last
+/// (the formula bar has a Cancel and the editor a Save of their own).
+fn answer(h: &mut Harness, label: &str) {
+    h.get_all_by_role_and_label(egui::Role::Button, label).last().unwrap().click();
+    h.run_steps(4);
+}
+
+/// Whether the workbook `uid` is still open (the app starts a blank one when the last closes).
+fn is_open(h: &Harness, uid: u64) -> bool {
+    h.state().session.documents().iter().any(|d| d.uid == uid)
+}
+
+fn asks_about(h: &Harness, name: &str) -> bool {
+    h.query_by_label_contains(&format!("Save changes to macro “{name}”")).is_some()
+}
+
+#[test]
+fn closing_the_workbook_asks_about_an_unsaved_draft_first() {
+    let mut h = harness();
+    edited_new_macro(&mut h);
+    let name = h.state().macros.editor.as_ref().unwrap().draft.name.clone();
+    let book = h.state().session.active().unwrap().uid;
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    // The workbook is saved, but the draft is not: File › Close asks about the draft and waits.
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    assert!(is_open(&h, book));
+    // Cancel keeps the workbook and the draft.
+    answer(&mut h, "Cancel");
+    assert!(is_open(&h, book));
+    assert_eq!(h.state().macros.editor.as_ref().map(|e| e.draft.steps.len()), Some(1));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("macroEditor"));
+    // A window's close button (`window.close`) asks the same way.
+    let window = h.state().session.active_window().unwrap();
+    let r = h.state_mut().run("window.close", json!({"window": window})).unwrap();
+    assert_eq!(r["closed"], false);
+    h.run_steps(3);
+    assert!(asks_about(&h, &name));
+    answer(&mut h, "Cancel");
+    assert!(is_open(&h, book));
+    // Don't Save closes the editor, then the workbook (which has nothing of its own to ask about).
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(!is_open(&h, book));
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
+fn save_in_the_question_saves_the_macro_then_the_workbook_asks_about_itself() {
+    let path = std::env::temp_dir().join(format!("gridcraft-macro-draft-{}.xlsx", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let target = path.to_string_lossy().to_string();
+    let mut h = harness_with(Services { pick_save: Some(Box::new(move |_| Some(target.clone()))), ..Default::default() });
+    edited_new_macro(&mut h);
+    let book = h.state().session.active().unwrap().uid;
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    answer(&mut h, "Save");
+    // The macro is in the workbook now, which makes it unsaved: closing it goes on and asks.
+    assert!(h.state().macros.editor.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb.macros.len(), 1);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    h.get_all_by_role_and_label(egui::Role::Button, "Save").last().unwrap().click();
+    h.run_steps(4);
+    assert!(!is_open(&h, book));
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path.to_str().unwrap()})).unwrap();
+    let wb = &s.active().unwrap().wb;
+    assert_eq!(wb.macros.len(), 1);
+    assert_eq!(wb.macros[0].steps.len(), 1);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_draft_that_cannot_be_saved_keeps_its_workbook_open() {
+    let mut h = harness();
+    h.state_mut().run("macro.save", json!({"macro": {"name": "Taken", "steps": []}})).unwrap();
+    let d = h.state_mut().session.active_mut().unwrap();
+    d.saved = d.wb.clone();
+    edited_new_macro(&mut h);
+    let book = h.state().session.active().unwrap().uid;
+    // A new macro never replaces one with its name, so Save is refused.
+    h.state_mut().macros.editor.as_mut().unwrap().draft.name = "Taken".into();
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    answer(&mut h, "Save");
+    assert!(h.state().message.is_some());
+    h.state_mut().message = None;
+    h.run_steps(2);
+    assert!(h.state().macros.editor.is_some());
+    // Closing the editor itself later never closes the workbook the earlier question was about.
+    h.state_mut().macros.editor.as_mut().unwrap().close_requested = true;
+    h.run_steps(3);
+    answer(&mut h, "Don't Save");
+    assert!(h.state().macros.editor.is_none());
+    assert!(is_open(&h, book));
+}
+
+#[test]
+fn an_untouched_new_macro_does_not_make_closing_ask() {
+    let mut h = harness();
+    h.state_mut().open_dialog("macroEditor", json!({}));
+    h.run_steps(3);
+    assert!(h.state().macros.editor.as_ref().unwrap().dirty);
+    let book = h.state().session.active().unwrap().uid;
+    let r = h.state_mut().run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], true);
+    assert!(!is_open(&h, book));
+    h.run_steps(3);
+    assert!(h.state().macros.editor.is_none());
+    assert!(h.state().dialog.is_none());
 }
