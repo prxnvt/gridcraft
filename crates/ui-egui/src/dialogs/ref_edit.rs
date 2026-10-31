@@ -16,8 +16,8 @@ pub(super) struct RefBoxes {
     /// The sheet shown when `seen` was taken: changing sheets only refreshes `seen`, since the
     /// other sheet's own selection is not a pick.
     seen_sheet: String,
-    /// The sheet, ranges and active cell from before picking began, put back when the dialog
-    /// runs its command or closes.
+    /// The dialog's own sheet, from the first pick until the dialog closes, and the selection to
+    /// put back when it runs its command or closes.
     home: Option<Home>,
     /// The target took a selection from the grid and takes the keyboard back once the pointer
     /// is released, so typing still edits the box.
@@ -31,7 +31,9 @@ pub(super) struct RefBoxes {
     was_collapsed: bool,
 }
 
-/// Where picking began: the dialog's own sheet and the selection to put back.
+/// Where picking began: the dialog's own sheet, kept for as long as the dialog is open (a failed
+/// OK leaves it open, and a later OK still needs to know whether that sheet is there), and the
+/// selection to put back once.
 #[derive(Clone, Debug)]
 struct Home {
     /// The sheet's name, or `None` once the sheet is deleted. Followed by name when other sheets
@@ -41,8 +43,9 @@ struct Home {
     /// The workbook's sheet names, in order, when last seen: a rename is the one change that
     /// keeps the list's length and replaces only the home sheet's entry.
     names: Vec<String>,
-    ranges: String,
-    active: String,
+    /// The ranges and active cell from before picking began on the dialog's sheet, put back once
+    /// when the dialog runs its command or closes.
+    selection: Option<(String, String)>,
 }
 
 /// The message OK shows once the dialog's own sheet is gone.
@@ -176,17 +179,22 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
 /// Makes the reference box `key` the one grid selections fill. The first pick remembers the
 /// sheet and selection, which are put back when the dialog runs its command or closes.
 pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
-    if d.refs.home.is_none()
-        && let Some(doc) = app.session.active()
+    if let Some(doc) = app.session.active()
         && let Some(sheet) = doc.wb.active()
     {
         let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
-        d.refs.home = Some(Home {
-            sheet: Some(sheet.name.clone()),
-            names: doc.wb.sheets.iter().map(|s| s.name.clone()).collect(),
-            ranges: ranges.join(","),
-            active: doc.selection.active.a1(),
-        });
+        let selection = Some((ranges.join(","), doc.selection.active.a1()));
+        match d.refs.home.as_mut() {
+            None => {
+                d.refs.home = Some(Home { sheet: Some(sheet.name.clone()), names: doc.wb.sheets.iter().map(|s| s.name.clone()).collect(), selection })
+            }
+            // Picking again after a failed OK: the selection to put back is the one now on the
+            // dialog's sheet.
+            Some(home) if home.selection.is_none() && home.sheet.as_deref().is_some_and(|own| own.eq_ignore_ascii_case(&sheet.name)) => {
+                home.selection = selection;
+            }
+            Some(_) => {}
+        }
     }
     d.refs.target = Some(key.to_string());
     d.refs.refocus = false;
@@ -199,16 +207,21 @@ fn active_sheet_name(app: &SheetApp) -> String {
     app.session.active().and_then(|doc| doc.wb.active()).map(|sh| sh.name.clone()).unwrap_or_default()
 }
 
-/// Stops picking and puts back the sheet and selection from before picking began, unless that
-/// sheet was deleted: the selection is then left where it is.
+/// Stops picking and goes back to the dialog's own sheet, putting back the selection from before
+/// picking began (once), unless that sheet was deleted: the selection is then left where it is.
+/// The sheet itself is kept until the dialog closes.
 pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) {
     d.refs.target = None;
     d.refs.collapsed = None;
     follow_home(app, &mut d.refs);
-    if let Some(home) = d.refs.home.take()
-        && let Some(sheet) = home.sheet
-    {
-        let _ = app.session.run("selection.set", json!({"sheet": sheet, "range": home.ranges, "active": home.active}));
+    let Some(home) = d.refs.home.as_mut() else { return };
+    let Some(sheet) = home.sheet.clone() else { return };
+    if let Some((range, active)) = home.selection.take() {
+        let _ = app.session.run("selection.set", json!({"sheet": sheet, "range": range, "active": active}));
+    } else if !active_sheet_name(app).eq_ignore_ascii_case(&sheet) {
+        // Already put back by an earlier OK that failed: only the sheet is shown again, so
+        // references without a sheet name mean it.
+        let _ = app.session.run("sheet.activate", json!({"sheet": sheet}));
     }
 }
 

@@ -466,3 +466,63 @@ fn data_analysis_refuses_ok_once_its_sheet_is_deleted() {
     assert!(message.contains("was deleted"), "{message}");
     assert_eq!(sheet_names(&h), ["Rates"], "no report sheet was added");
 }
+
+#[test]
+fn ok_stays_refused_after_a_failed_ok_once_the_sheet_is_deleted() {
+    let mut h = harness(two_sheets());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    drag(&mut h, "B1", "B6");
+    assert_eq!(field(&h, "range"), "$B$1:$B$6");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    // An output range the command refuses: OK fails and the dialog stays open.
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("outputTo".into(), json!("range"));
+    d.values.insert("output".into(), json!("not a reference"));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "the failed OK leaves the dialog open");
+    assert!(h.state().message.is_some(), "and says why");
+    h.state_mut().message = None;
+
+    // The dialog's sheet is deleted; with a usable output range, OK must still be refused rather
+    // than run `$B$1:$B$6` against Rates.
+    h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("output".into(), json!("Rates!$H$1"));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
+    assert!(message.contains("was deleted"), "{message}");
+    let h1 = h.state().session.active().unwrap().wb.sheets[0].value(CellRef::parse("H1").unwrap());
+    assert!(h1.is_empty(), "no report was written on Rates: {h1:?}");
+}
+
+#[test]
+fn a_second_ok_after_a_failed_one_runs_on_the_dialogs_sheet() {
+    let mut h = harness(two_sheets());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    drag(&mut h, "B1", "B6");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("outputTo".into(), json!("range"));
+    d.values.insert("output".into(), json!("not a reference"));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some());
+    h.state_mut().message = None;
+    // The person looks at another sheet, then fixes the output range and presses OK again.
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("output".into(), json!("$H$1"));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let wb = &h.state().session.active().unwrap().wb;
+    assert!(!wb.sheets[0].value(CellRef::parse("H1").unwrap()).is_empty(), "the report is on the dialog's own sheet");
+    assert!(wb.sheets[1].value(CellRef::parse("H1").unwrap()).is_empty(), "not on the sheet shown");
+}
