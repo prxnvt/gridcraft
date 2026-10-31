@@ -484,7 +484,7 @@ fn press(s: &mut Session, p: &Json) -> Result<Json> {
                 let key = (doc, approval_key(&id, &params));
                 if !s.macro_approvals.contains(&key) {
                     if bool_param(p, "approve") != Some(true) {
-                        return Err(EngineError::Approve(format!("Run {id} from '{name}'? It {why}.")));
+                        return Err(EngineError::Approve(format!("Run {id} from '{name}'? It {why}{}.", path_note(&params))));
                     }
                     s.macro_approvals.insert(key);
                 }
@@ -495,6 +495,27 @@ fn press(s: &mut Session, p: &Json) -> Result<Json> {
             s.grouped(&name, |s| s.execute(&id, params.clone()))
         }
     }
+}
+
+/// The file a button's command names in its `path`, as ` (path)` for its approval question, so
+/// the person sees what it reads or writes before saying yes. Empty without a `path`; a long one
+/// is shortened in the middle.
+fn path_note(params: &Json) -> String {
+    let text = match params.get("path") {
+        None | Some(Json::Null) => return String::new(),
+        Some(Json::String(t)) => t.clone(),
+        Some(other) => other.to_string(),
+    };
+    let text: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let n = text.chars().count();
+    let shown = if n > 200 {
+        let head: String = text.chars().take(100).collect();
+        let tail: String = text.chars().skip(n - 99).collect();
+        format!("{head}…{tail}")
+    } else {
+        text
+    };
+    format!(" ({shown})")
 }
 
 /// The approval key of a button's command: its id and parameters, with a prefix that keeps it

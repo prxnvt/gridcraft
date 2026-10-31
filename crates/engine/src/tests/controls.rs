@@ -247,6 +247,35 @@ fn a_command_button_goes_through_the_policy_with_the_documents_trust() {
 }
 
 #[test]
+fn a_file_commands_approval_question_names_the_file() {
+    let mut s = s();
+    let b = id(&s.execute("insert.button", json!({"command": "file.exportCsv", "params": {"path": "/tmp/reports/q3 totals.csv"}})).unwrap());
+    match s.execute("control.press", json!({"id": b})) {
+        Err(EngineError::Approve(q)) => assert!(q.contains("writes a file (/tmp/reports/q3 totals.csv)"), "{q}"),
+        other => panic!("expected a question, got {other:?}"),
+    }
+    // A long path is shortened in the middle, and line breaks can't hide part of it.
+    let long = format!("/tmp/{}\n{}.csv", "a".repeat(300), "b".repeat(300));
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    if let Some(c) = sh.controls.iter_mut().find(|c| c.id as u64 == b) {
+        c.action = Some(ControlAction::Command { id: "file.exportCsv".into(), params: json!({"path": long}) });
+    }
+    match s.execute("control.press", json!({"id": b})) {
+        Err(EngineError::Approve(q)) => {
+            assert!(q.contains("(/tmp/aaa") && q.contains("…") && q.contains("bbb.csv)") && !q.contains('\n') && q.len() < 600, "{q}")
+        }
+        other => panic!("expected a question, got {other:?}"),
+    }
+    // Without a path the question is unchanged.
+    let plain = id(&s.execute("insert.button", json!({"command": "cell.set", "params": {"cell": "A1", "input": "1"}})).unwrap());
+    s.doc_mut().unwrap().trust = Trust::FromFile;
+    match s.execute("control.press", json!({"id": plain})) {
+        Err(EngineError::Approve(q)) => assert!(q.ends_with("came with a workbook you opened."), "{q}"),
+        other => panic!("expected a question, got {other:?}"),
+    }
+}
+
+#[test]
 fn hostile_params_are_refused() {
     let mut s = s();
     let c = id(&s.execute("insert.slider", json!({"width": 1e30, "height": -5, "at": "XFD1048576"})).unwrap());
