@@ -364,16 +364,17 @@ pub(super) fn save_model(wb: &mut Workbook, m: &Model) {
 }
 
 /// The saved model of a sheet as `data.solver` params, if any.
+///
+/// A sheet's own (sheet-level) model wins over one saved as workbook-level names, and its names
+/// are read alone, so the two never mix. A sheet-level `solver_opt` of `""` (written by Reset
+/// All over a workbook-level model) means the sheet has no model.
 pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
-    let get = |n: &str| {
-        wb.names
-            .iter()
-            .find(|d| d.name.eq_ignore_ascii_case(n) && (d.scope == Some(sheet) || d.scope.is_none()))
-            .map(|d| d.formula.trim().trim_start_matches('=').to_string())
-    };
+    let named = |n: &str, scope: Option<usize>| wb.names.iter().find(|d| d.name.eq_ignore_ascii_case(n) && d.scope == scope);
+    let scope = if named("solver_opt", Some(sheet)).is_some() { Some(sheet) } else { None };
+    let get = |n: &str| named(n, scope).map(|d| d.formula.trim().trim_start_matches('=').to_string());
     let local = |t: String| -> String { t.split(',').map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",") };
     let objective = local(get("solver_opt")?);
-    if objective.is_empty() {
+    if objective.trim_matches('"').trim().is_empty() {
         return None;
     }
     let goal = match get("solver_typ").as_deref().map(str::trim) {

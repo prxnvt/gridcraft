@@ -95,16 +95,34 @@ fn is_model_name(n: &DefinedName, sheet: usize) -> bool {
     n.scope == Some(sheet) && n.name.to_ascii_lowercase().starts_with("solver_")
 }
 
-/// `data.solverReset`: Reset All removes the active sheet's model.
+/// `data.solverReset`: Reset All removes the active sheet's model. A model the sheet reads from
+/// workbook-level names (which other sheets may read too) is left in place and masked by an
+/// empty sheet-level `solver_opt`, so no other sheet's model changes.
 pub(super) fn reset_model(s: &mut Session, _p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let active = d.wb.active_sheet();
     let removed = d.wb.names.iter().filter(|n| is_model_name(n, active)).count();
-    if removed > 0 {
+    let mut after = d.wb.names.clone();
+    after.retain(|n| !is_model_name(n, active));
+    let masked = {
+        let mut probe = (*d.wb).clone();
+        probe.names = after;
+        saved_model(&probe, active).is_some()
+    };
+    if removed > 0 || masked {
         edit(s, |cx| {
             cx.wb.names.retain(|n| !is_model_name(n, active));
+            if masked {
+                cx.wb.names.push(DefinedName {
+                    name: "solver_opt".into(),
+                    scope: Some(active),
+                    formula: "\"\"".into(),
+                    comment: String::new(),
+                    hidden: true,
+                });
+            }
             Ok(())
         })?;
     }
-    Ok(json!({"removed": removed}))
+    Ok(json!({"removed": removed, "masked": masked}))
 }

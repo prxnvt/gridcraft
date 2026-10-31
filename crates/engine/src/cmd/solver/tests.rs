@@ -479,6 +479,65 @@ fn save_and_load_model_round_trip_through_cells() {
 }
 
 #[test]
+fn reset_all_masks_a_workbook_level_model_and_keeps_other_sheets_models() {
+    let mut s = s();
+    set(&mut s, &[("A1", "1"), ("B1", "=2*A1")]);
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let (one, two) = {
+        let wb = &s.doc().unwrap().wb;
+        (wb.sheet_index("Sheet1").unwrap(), wb.sheet_index("Two").unwrap())
+    };
+    // A model saved as workbook-level names, which every sheet reads.
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        for (name, formula) in [
+            ("solver_opt", "Sheet1!$B$1"),
+            ("solver_adj", "Sheet1!$A$1"),
+            ("solver_typ", "1"),
+            ("solver_num", "0"),
+            ("solver_eng", "2"),
+            ("solver_ssz", "500"),
+        ] {
+            wb.names.push(gridcraft_model::DefinedName {
+                name: name.into(),
+                scope: None,
+                formula: formula.into(),
+                comment: String::new(),
+                hidden: true,
+            });
+        }
+    }
+    let model = |s: &Session, sheet: usize| super::saved_model(&s.doc().unwrap().wb, sheet);
+    assert_eq!(model(&s, one).map(|m| m["objective"].clone()), Some(json!("B1")));
+    // Reset All empties this sheet's model, which the dialog then shows, and no other sheet's.
+    let r = s.execute("data.solverReset", json!({})).unwrap();
+    assert_eq!(model(&s, one), None, "{r}");
+    assert_eq!(r["masked"], true, "{r}");
+    assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+    assert_eq!(model(&s, two).map(|m| m["objective"].clone()), Some(json!("B1")));
+    assert_eq!(s.doc().unwrap().wb.names.iter().filter(|n| n.scope.is_none()).count(), 6);
+    // Undo brings the model back; the mask survives XLSX.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(model(&s, one).is_some());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(model(&s, one), None);
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "r.xlsx", "base64": b64})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(model(&s, one), None);
+    assert!(model(&s, two).is_some());
+    // A model saved on the sheet replaces the mask and is read alone: the workbook-level
+    // population size doesn't leak into it.
+    s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 3"], "method": "simplex"})).unwrap();
+    let m = model(&s, one).unwrap();
+    assert_eq!((m["objective"].as_str(), m["populationSize"].is_null()), (Some("B1"), true), "{m}");
+    assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["masked"], true);
+    assert_eq!(model(&s, one), None);
+}
+
+#[test]
 fn limits_report_of_a_nonlinear_model() {
     // The largest rectangle with perimeter at most 20 (5 × 5): with the height held at 5, the
     // width ranges over 0..5, the area over 0..25.

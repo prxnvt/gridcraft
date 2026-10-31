@@ -109,7 +109,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             load_model_cells
         ),
-        cmd!("data.solverReset", "Reset All", [], None, "{} → {removed}. Removes the active sheet's Solver model.", has_doc, reset_model),
+        cmd!(
+            "data.solverReset",
+            "Reset All",
+            [],
+            None,
+            "{} → {removed, masked}. Removes the active sheet's Solver model. A model read from workbook-level names stays for the other sheets and is masked on this one by an empty sheet-level solver_opt (masked: true).",
+            has_doc,
+            reset_model
+        ),
     ]
 }
 
