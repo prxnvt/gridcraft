@@ -324,3 +324,23 @@ fn a_handle_under_the_headers_does_not_take_the_press() {
     drag(&mut h, grab, grab + vec2(40.0, 0.0));
     assert_eq!(rect(&h, o.shape), before, "the shape is neither moved nor resized");
 }
+
+#[test]
+fn each_drag_of_an_object_is_its_own_undo_step() {
+    let (mut h, o) = fixture();
+    let start = rect(&h, o.image);
+    click(&mut h, start.center());
+    drag(&mut h, start.center(), start.center() + vec2(30.0, 20.0));
+    let moved = rect(&h, o.image);
+    assert!((moved.min - start.min - vec2(30.0, 20.0)).length() < 1.0);
+    let grab = Handle::BottomRight.pos(moved);
+    drag(&mut h, grab, grab + vec2(24.0, 18.0));
+    let resized = rect(&h, o.image);
+    assert!((resized.size() - moved.size() - vec2(24.0, 18.0)).length() < 1.0);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(2);
+    assert_eq!(rect(&h, o.image), moved, "one undo takes back the resize only");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(2);
+    assert_eq!(rect(&h, o.image), start, "a second undo takes back the move");
+}

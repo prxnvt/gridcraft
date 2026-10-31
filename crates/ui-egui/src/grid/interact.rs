@@ -134,7 +134,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
             }
             if primary_drag && let Some(a) = sh.object_anchor(obj) {
                 let handle = crate::objects::handle_at(rect, p);
-                app.grid.drag = Drag::Object { obj, start: p, orig: (a.cell, a.dx, a.dy, a.width, a.height), handle };
+                app.grid.drag = Drag::Object { obj, start: p, orig: (a.cell, a.dx, a.dy, a.width, a.height), handle, stepped: false };
                 // The first recognised drag frame already holds movement away from the press.
                 if let Some(now) = pos {
                     drag_object(app, geo, sh, now);
@@ -956,9 +956,9 @@ pub(super) fn hidden_row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<u32> {
 }
 
 /// Moves the dragged object, or resizes it from the grabbed handle, to follow the pointer at `p`
-/// (logical coordinates). The whole drag coalesces into one undo step.
+/// (logical coordinates). The whole drag coalesces into one undo step of its own.
 fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
-    let Drag::Object { obj, start, orig, handle } = app.grid.drag.clone() else { return };
+    let Drag::Object { obj, start, orig, handle, stepped } = app.grid.drag.clone() else { return };
     let d = (p - start) / geo.z;
     let (cell, dx, dy, w, h) = orig;
     let x0 = sh.col_left(cell.col) as f32 + dx;
@@ -977,8 +977,16 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
         "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32,
         "width": x1 - x0, "height": y1 - y0,
     });
+    let revision = app.session.active().map(|d| d.revision);
     let _ = app.session.run("object.move", params);
-    coalesce_last_undo(app);
+    if stepped {
+        coalesce_last_undo(app);
+    } else if app.session.active().map(|d| d.revision) != revision
+        && let Drag::Object { stepped, .. } = &mut app.grid.drag
+    {
+        // The first step of this drag stays apart from an earlier drag's step of the same name.
+        *stepped = true;
+    }
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
