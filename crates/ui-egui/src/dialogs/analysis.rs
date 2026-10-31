@@ -1,4 +1,4 @@
-use super::ref_edit::{RefLabel, end_pick, ref_edit};
+use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, ref_edit};
 use super::show::{form_fields, ok_cancel};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
@@ -21,6 +21,10 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
     let (set, to, changing) = (get("set"), get("to"), get("changing"));
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
+    if *confirm && home_sheet_deleted(app, d) {
+        app.message = Some((d.title.clone(), SHEET_DELETED.into()));
+        *confirm = false;
+    }
     if *confirm {
         end_pick(app, d);
         match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {

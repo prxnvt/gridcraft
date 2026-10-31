@@ -34,31 +34,57 @@ pub(super) struct RefBoxes {
 /// Where picking began: the dialog's own sheet and the selection to put back.
 #[derive(Clone, Debug)]
 struct Home {
-    /// The sheet's name. Followed by name when sheets are inserted or moved while the dialog is
-    /// open (indexes change), and by position when the sheet itself is renamed.
-    sheet: String,
-    /// The sheet's index and the workbook's sheet count when last seen, to tell a rename in
-    /// place (same count, the name gone from that index) from a deleted sheet.
-    index: usize,
-    count: usize,
+    /// The sheet's name, or `None` once the sheet is deleted. Followed by name when other sheets
+    /// are inserted, moved or deleted (indexes change), and by position when the sheet itself is
+    /// renamed.
+    sheet: Option<String>,
+    /// The workbook's sheet names, in order, when last seen: a rename is the one change that
+    /// keeps the list's length and replaces only the home sheet's entry.
+    names: Vec<String>,
     ranges: String,
     active: String,
 }
 
-/// Keeps the dialog's own sheet across changes made while it is open: a sheet inserted, moved or
-/// deleted elsewhere moves its index, and a rename of the sheet itself changes its name.
+/// The message OK shows once the dialog's own sheet is gone.
+pub(super) const SHEET_DELETED: &str =
+    "The sheet this dialog was opened on was deleted. Cancel, then open the dialog again on the sheet it should use.";
+
+/// The workbook's sheet names, in order.
+fn sheet_names(app: &SheetApp) -> Vec<String> {
+    app.session.active().map(|doc| doc.wb.sheets.iter().map(|s| s.name.clone()).collect()).unwrap_or_default()
+}
+
+/// Keeps the dialog's own sheet across changes made while it is open. When its name is still
+/// there, it is still the sheet (others were inserted, moved or deleted). When it is gone and the
+/// only difference from last frame is that one entry, it was renamed. Any other way of losing the
+/// name (the sheet count changed, or other names changed too) means it was deleted, for good: a
+/// sheet inserted later is never taken for it.
 fn follow_home(app: &SheetApp, refs: &mut RefBoxes) {
-    let (Some(doc), Some(home)) = (app.session.active(), refs.home.as_mut()) else { return };
-    let count = doc.wb.sheets.len();
-    if let Some(i) = doc.wb.sheet_index(&home.sheet) {
-        home.index = i;
-    } else if count == home.count
-        && let Some(sheet) = doc.wb.sheets.get(home.index)
+    let Some(home) = refs.home.as_mut() else { return };
+    let names = sheet_names(app);
+    if let Some(sheet) = home.sheet.as_mut()
+        && !names.iter().any(|n| n.eq_ignore_ascii_case(sheet))
     {
-        // The sheet was renamed where it is.
-        home.sheet = sheet.name.clone();
+        home.sheet = renamed_to(&names, &home.names, sheet);
     }
-    home.count = count;
+    home.names = names;
+}
+
+/// The new name of the sheet `own` when `names` differs from `before` only by `own`'s entry.
+fn renamed_to(names: &[String], before: &[String], own: &str) -> Option<String> {
+    if names.len() != before.len() {
+        return None;
+    }
+    let mut changed = names.iter().zip(before).filter(|(now, then)| now != then);
+    let (now, then) = changed.next()?;
+    (changed.next().is_none() && then.eq_ignore_ascii_case(own)).then(|| now.clone())
+}
+
+/// Whether the sheet the dialog was opened on has been deleted while it picked: its references
+/// without a sheet name have nothing to refer to, so OK is refused with [`SHEET_DELETED`].
+pub(super) fn home_sheet_deleted(app: &SheetApp, d: &mut Dialog) -> bool {
+    follow_home(app, &mut d.refs);
+    d.refs.home.as_ref().is_some_and(|h| h.sheet.is_none())
 }
 
 /// How a reference box is named for screen readers.
@@ -85,12 +111,13 @@ fn takes_several_areas(dialog: &str, key: &str) -> bool {
 /// The grid selection as a reference, with the sheet name when the selection is on another sheet
 /// than the one the dialog was opened on: every area joined by commas when `several`, otherwise
 /// only the area being selected (the last one).
-fn selection_ref(app: &SheetApp, home_sheet: Option<&str>, several: bool) -> String {
+fn selection_ref(app: &SheetApp, home: Option<&Home>, several: bool) -> String {
     let Some(doc) = app.session.active() else { return String::new() };
     let current = [doc.selection.current()];
     let areas = if several { doc.selection.ranges.as_slice() } else { &current[..] }.iter().map(abs);
     match doc.wb.active() {
-        Some(sh) if home_sheet.is_some_and(|h| !h.eq_ignore_ascii_case(&sh.name)) => {
+        // Once the dialog's own sheet is deleted, every reference carries its sheet's name.
+        Some(sh) if home.is_some_and(|h| h.sheet.as_ref().is_none_or(|own| !own.eq_ignore_ascii_case(&sh.name))) => {
             let sheet = gridcraft_engine::formula::quote_sheet(&sh.name);
             areas.map(|a| format!("{sheet}!{a}")).collect::<Vec<_>>().join(",")
         }
@@ -155,16 +182,15 @@ pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
     {
         let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
         d.refs.home = Some(Home {
-            sheet: sheet.name.clone(),
-            index: doc.wb.active_sheet(),
-            count: doc.wb.sheets.len(),
+            sheet: Some(sheet.name.clone()),
+            names: doc.wb.sheets.iter().map(|s| s.name.clone()).collect(),
             ranges: ranges.join(","),
             active: doc.selection.active.a1(),
         });
     }
     d.refs.target = Some(key.to_string());
     d.refs.refocus = false;
-    d.refs.seen = selection_ref(app, d.refs.home.as_ref().map(|h| h.sheet.as_str()), takes_several_areas(&d.name, key));
+    d.refs.seen = selection_ref(app, d.refs.home.as_ref(), takes_several_areas(&d.name, key));
     d.refs.seen_sheet = active_sheet_name(app);
 }
 
@@ -173,13 +199,16 @@ fn active_sheet_name(app: &SheetApp) -> String {
     app.session.active().and_then(|doc| doc.wb.active()).map(|sh| sh.name.clone()).unwrap_or_default()
 }
 
-/// Stops picking and puts back the sheet and selection from before picking began.
+/// Stops picking and puts back the sheet and selection from before picking began, unless that
+/// sheet was deleted: the selection is then left where it is.
 pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) {
     d.refs.target = None;
     d.refs.collapsed = None;
     follow_home(app, &mut d.refs);
-    if let Some(home) = d.refs.home.take() {
-        let _ = app.session.run("selection.set", json!({"sheet": home.sheet, "range": home.ranges, "active": home.active}));
+    if let Some(home) = d.refs.home.take()
+        && let Some(sheet) = home.sheet
+    {
+        let _ = app.session.run("selection.set", json!({"sheet": sheet, "range": home.ranges, "active": home.active}));
     }
 }
 
@@ -199,7 +228,7 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
         if r.gained_focus() {
             begin_pick(app, d, key);
         } else if d.refs.target.as_deref() == Some(key) {
-            let sel = selection_ref(app, d.refs.home.as_ref().map(|h| h.sheet.as_str()), takes_several_areas(&d.name, key));
+            let sel = selection_ref(app, d.refs.home.as_ref(), takes_several_areas(&d.name, key));
             let sheet = active_sheet_name(app);
             if sheet != d.refs.seen_sheet {
                 // Another sheet was shown: its selection is where that sheet was left, not a pick.

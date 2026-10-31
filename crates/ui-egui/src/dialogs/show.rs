@@ -9,7 +9,7 @@ use super::format_cells::format_cells;
 use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
-use super::ref_edit::{RefLabel, end_pick, place_window, ref_edit, window_shown};
+use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, place_window, ref_edit, window_shown};
 use super::spelling::spelling;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
@@ -389,6 +389,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
+        confirm = false;
+    }
+    if confirm && d.command.is_some() && home_sheet_deleted(app, &mut d) {
+        // References without a sheet name would land on whichever sheet is shown now.
+        app.message = Some((d.title.clone(), SHEET_DELETED.into()));
         confirm = false;
     }
     if confirm {

@@ -388,3 +388,81 @@ fn renaming_the_dialogs_sheet_while_picking_keeps_the_way_home() {
     assert!(h.state().dialog.is_none());
     assert_eq!(selection(&h), (0, "B5".into()), "cancelling returns to the renamed sheet and its selection");
 }
+
+/// A workbook whose first sheet (the dialog's own, `Sheet1`) is followed by `Rates`.
+fn two_sheets() -> Session {
+    let mut s = workbook();
+    s.execute("home.insertSheet", json!({"name": "Rates", "before": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B5"})).unwrap();
+    s
+}
+
+fn sheet_names(h: &H) -> Vec<String> {
+    h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect()
+}
+
+#[test]
+fn a_deleted_sheet_is_not_taken_for_one_inserted_in_its_place() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    // The dialog's own sheet is deleted, and a new sheet then takes its place and its count.
+    h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Fresh", "before": 0})).unwrap();
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Fresh", "Rates"]);
+    drag(&mut h, "C3", "C3");
+    assert_eq!(field(&h, "changing"), "Fresh!$C$3", "the new sheet is not the dialog's own: picks carry its name");
+
+    // OK is refused rather than running unqualified references against another sheet.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
+    assert!(message.contains("was deleted"), "{message}");
+    let b2 = h.state().session.active().unwrap().wb.sheets[1].value(CellRef::parse("B2").unwrap());
+    assert_eq!(b2.as_f64(), None, "Goal Seek changed nothing: {b2:?}");
+
+    // Cancel doesn't put the old selection onto the new sheet.
+    h.state_mut().message = None;
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (0, "C3".into()), "the selection on the new sheet is left alone");
+}
+
+#[test]
+fn a_deleted_sheet_qualifies_picks_and_cancel_stays_put() {
+    let mut h = harness(two_sheets());
+    open_goal_seek(&mut h);
+    click_button(&mut h, "Collapse dialog", 1);
+    h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sheet_names(&h), ["Rates"]);
+    drag(&mut h, "A2", "A3");
+    assert_eq!(field(&h, "changing"), "Rates!$A$2:$A$3");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(selection(&h), (0, "A2:A3".into()), "nothing to go back to: the selection stays");
+}
+
+#[test]
+fn data_analysis_refuses_ok_once_its_sheet_is_deleted() {
+    let mut h = harness(two_sheets());
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    h.state_mut().session.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+    h.run_steps(3);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    let message = h.state().message.as_ref().map(|m| m.1.clone()).unwrap_or_default();
+    assert!(message.contains("was deleted"), "{message}");
+    assert_eq!(sheet_names(&h), ["Rates"], "no report sheet was added");
+}
