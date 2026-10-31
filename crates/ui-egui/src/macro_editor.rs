@@ -1115,8 +1115,10 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
                 if save(app, ed) {
                     *open = false;
                 } else {
-                    // The draft stays open with the reason shown; the workbook is not closed.
+                    // The draft stays open with the reason shown; the workbook is not closed and
+                    // the app does not quit, then or when the editor closes later.
                     ed.then_close = None;
+                    ed.quit = false;
                 }
             }
             Some(Some(false)) => {

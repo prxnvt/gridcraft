@@ -734,3 +734,35 @@ fn quit_asks_about_the_editors_unsaved_steps_first() {
     assert!(h.state().macros.editor.is_none());
     assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
 }
+
+#[test]
+fn a_refused_save_while_quitting_stops_the_quit() {
+    let mut h = harness();
+    h.state_mut().run("macro.save", json!({"macro": {"name": "Taken", "steps": []}})).unwrap();
+    let d = h.state_mut().session.active_mut().unwrap();
+    d.saved = d.wb.clone();
+    edited_new_macro(&mut h);
+    // A new macro never replaces one with its name, so the question's Save is refused.
+    h.state_mut().macros.editor.as_mut().unwrap().draft.name = "Taken".into();
+    for quit in [request_quit, request_window_close] {
+        h.run_steps(2);
+        let sent = quit(&mut h);
+        assert!(sent.contains(&egui::ViewportCommand::CancelClose) || !h.state().allow_close, "{sent:?}");
+        assert!(asks_about(&h, "Taken"));
+        answer(&mut h, "Save");
+        assert!(h.state().message.is_some());
+        h.state_mut().message = None;
+        assert!(h.state().macros.editor.is_some());
+        // Closing the editor later, on its own, no longer quits the app.
+        h.state_mut().macros.editor.as_mut().unwrap().close_requested = true;
+        h.run_steps(3);
+        h.get_by_label("Don't Save").click();
+        let sent = step_commands(&mut h);
+        assert!(h.state().macros.editor.is_none());
+        assert!(!sent.contains(&egui::ViewportCommand::Close), "the app keeps running: {sent:?}");
+        assert!(!h.state().allow_close);
+        // The next round starts with the same draft in the editor again.
+        edited_new_macro(&mut h);
+        h.state_mut().macros.editor.as_mut().unwrap().draft.name = "Taken".into();
+    }
+}
