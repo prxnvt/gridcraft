@@ -237,3 +237,66 @@ fn hostile_sources_round_trip_exactly() {
         assert_eq!(&x.text, src, "the source survives exactly");
     }
 }
+
+#[test]
+fn office_math_beside_text_or_other_math_is_not_an_equation() {
+    // Another writer's text box: no GridCraft source, and Office Math the reader converts, but
+    // sharing the box with ordinary text or with a second equation. Taking it as one equation
+    // would drop the rest, so it stays a text box (or the writer's fallback is read).
+    let saved = || {
+        let wb = book(vec![equation(1, "B2", "x^2", Color::Auto)]);
+        let parts = unzip(&write_xlsx(&wb).unwrap());
+        let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+        let mut d = drawing(&parts);
+        while let Some(a) = d.find(" descr=\"gridcraft:latex:") {
+            let b = d[a + 8..].find('"').unwrap() + a + 9;
+            d.replace_range(a..b, "");
+        }
+        (parts, name, d)
+    };
+    let read = |mut parts: BTreeMap<String, Vec<u8>>, name: String, d: String| {
+        parts.insert(name, d.into_bytes());
+        shapes(&read_xlsx(&rezip(&parts)).unwrap().0)
+    };
+    let math_para = |d: &str| {
+        let a = d.find("<a:p><a:pPr algn=\"ctr\"/><a14:m>").unwrap();
+        let b = d[a..].find("</a:p>").unwrap() + a + "</a:p>".len();
+        d[a..b].to_string()
+    };
+
+    // 1. In the a14 choice, a text run before the maths: the fallback is read instead.
+    let (parts, name, mut d) = saved();
+    let at = d.find("<a14:m>").unwrap();
+    d.insert_str(at, "<a:r><a:rPr lang=\"en-US\"/><a:t>Solve: </a:t></a:r>");
+    let fb = d.find("<mc:Fallback>").unwrap();
+    let t = d[fb..].find("<a:t>x^2</a:t>").unwrap() + fb;
+    d.replace_range(t..t + "<a:t>x^2</a:t>".len(), "<a:t>Solve: x squared</a:t>");
+    let s = read(parts, name, d);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].kind, ShapeKind::TextBox, "{:?}", s[0].text);
+    assert_eq!(s[0].text, "Solve: x squared", "the writer's fallback keeps the text");
+
+    // 2. A plain text box (no alternate content) with the same paragraph keeps its text.
+    let (parts, name, d) = saved();
+    let (c0, c1) = (d.find("<mc:Choice").unwrap(), d.find("</mc:Choice>").unwrap());
+    let choice = &d[c0..c1];
+    let sp = choice[choice.find("<xdr:sp ").unwrap()..].to_string();
+    let sp = sp.replacen("<a14:m>", "<a:r><a:rPr lang=\"en-US\"/><a:t>Solve: </a:t></a:r><a14:m>", 1);
+    let (a0, a1) = (d.find("<mc:AlternateContent").unwrap(), d.find("</mc:AlternateContent>").unwrap() + "</mc:AlternateContent>".len());
+    let mut d2 = d.clone();
+    d2.replace_range(a0..a1, &sp);
+    let s = read(parts, name, d2);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].kind, ShapeKind::TextBox, "{:?}", s[0].text);
+    assert!(s[0].text.contains("Solve:"), "the text is kept: {:?}", s[0].text);
+
+    // 3. Two equations in one box: not read as the first one alone.
+    let (parts, name, d) = saved();
+    let para = math_para(&d);
+    let at = d.find(&para).unwrap() + para.len();
+    let mut d3 = d.clone();
+    d3.insert_str(at, &para);
+    let s = read(parts, name, d3);
+    assert_eq!(s.len(), 1);
+    assert_ne!(s[0].kind, ShapeKind::Equation, "two equations are not one");
+}

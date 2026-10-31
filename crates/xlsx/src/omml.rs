@@ -40,6 +40,39 @@ pub fn find_math(e: &El, depth: usize) -> Option<&El> {
     e.children.iter().find_map(|c| find_math(c, depth + 1))
 }
 
+/// The LaTeX of a DrawingML text body (`a:txBody`) that holds one equation and nothing else: no
+/// text in its runs or fields, and no second `m:oMath`/`m:oMathPara`. A body that mixes text and
+/// maths, or holds several equations, is `None`, so the caller keeps it as a text box (or reads
+/// the writer's fallback) instead of dropping the rest.
+pub fn equation_source(tb: &El) -> Option<String> {
+    let has_text = tb
+        .kids("p")
+        .any(|p| p.children.iter().any(|c| matches!(c.name.as_str(), "r" | "fld") && c.child("t").is_some_and(|t| !t.text.trim().is_empty())));
+    if has_text || count_math(tb, 0) != 1 {
+        return None;
+    }
+    find_math(tb, 0).and_then(to_latex)
+}
+
+/// How many `m:oMath`/`m:oMathPara` elements are under `e` (not counting those inside one), to
+/// the same bounded depth as [`find_math`], stopping at two.
+fn count_math(e: &El, depth: usize) -> usize {
+    if depth > 8 {
+        return 0;
+    }
+    if e.name == "oMathPara" || e.name == "oMath" {
+        return 1;
+    }
+    let mut n = 0;
+    for c in &e.children {
+        n += count_math(c, depth + 1);
+        if n > 1 {
+            break;
+        }
+    }
+    n
+}
+
 /// Children in order, skipping property elements.
 fn seq(e: &El, out: &mut String, depth: usize) -> Option<()> {
     if depth > MAX_DEPTH {

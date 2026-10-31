@@ -141,14 +141,11 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                 "AlternateContent" => o
                     .child("Choice")
                     .filter(|c| {
-                        // Office Math is taken only when it converts: otherwise the fallback
-                        // (a picture or text from the writer) keeps the equation visible.
+                        // Office Math is taken only when the box holds one equation that
+                        // converts: otherwise the fallback (a picture or text from the writer)
+                        // keeps everything visible.
                         c.child("graphicFrame").is_some()
-                            || c.child("sp")
-                                .and_then(|sp| sp.child("txBody"))
-                                .and_then(|tb| crate::omml::find_math(tb, 0))
-                                .and_then(crate::omml::to_latex)
-                                .is_some()
+                            || c.child("sp").and_then(|sp| sp.child("txBody")).and_then(crate::omml::equation_source).is_some()
                     })
                     .or_else(|| o.child("Fallback"))
                     .map(|c| c.children.iter().collect())
@@ -238,7 +235,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let descr = obj.path(&["nvSpPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("");
     let source = match descr.strip_prefix(LATEX_DESCR) {
         Some(src) if !src.trim().is_empty() => Some(src.to_string()),
-        _ => obj.child("txBody").and_then(|tb| crate::omml::find_math(tb, 0)).and_then(crate::omml::to_latex),
+        _ => obj.child("txBody").and_then(crate::omml::equation_source),
     };
     if let Some(text) = source {
         let ink = obj.child("txBody").and_then(|tb| first_run_color(tb, 0)).unwrap_or_default();
