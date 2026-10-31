@@ -439,3 +439,42 @@ fn quit_with_the_macro_editor_open_goes_on_once_the_editor_has_closed() {
     assert!(sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
     assert_eq!(desk.app.session.documents().len(), 1, "the workbook was not closed on its own");
 }
+
+#[test]
+fn quit_takes_over_a_workbook_close_waiting_on_the_macro_editor() {
+    let mut desk = Desk::new(false);
+    let w1 = desk.window_of(0);
+    desk.app.open_dialog("macroEditor", json!({}));
+    desk.frames(3);
+    if let Some(ed) = desk.app.macros.editor.as_mut() {
+        ed.draft.steps.push(gridcraft_engine::model::Step::command("cell.set", json!({"cell": "A1", "input": "7"})));
+        ed.dirty = true;
+    }
+    desk.frames(2);
+    // Book2 has unsaved changes; Book1, with the editor, is saved.
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.app.run("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    desk.frames(3);
+    let w2 = desk.window_of(1);
+    desk.app.enter_window(w1);
+    desk.frames(2);
+    // File › Close on Book1 waits on the editor's question; then Quit takes over.
+    let r = desk.app.run("file.close", json!({})).unwrap();
+    assert_eq!(r["closed"], false);
+    desk.frames(3);
+    desk.frame_with(|app, ctx| app.request_quit(ctx));
+    // Don't Save (the question's answer closes the editor without saving).
+    if let Some(ed) = desk.app.macros.editor.as_mut() {
+        ed.ask_close = false;
+        ed.dirty = false;
+        ed.close_requested = true;
+    }
+    desk.frames(3);
+    assert!(desk.app.macros.editor.is_none());
+    // The quit asks about Book2 in its window, as the quit's question, not as a File › Close.
+    assert_eq!(desk.app.session.active_window(), Some(w2));
+    let d = desk.app.dialog.as_ref().expect("Book2 is asked about");
+    assert_eq!(d.name(), "saveChanges");
+    assert_eq!(d.values.get("quit"), Some(&json!(true)), "{:?}", d.values);
+    assert_eq!(desk.app.session.documents().len(), 2, "nothing closed before the answer");
+}

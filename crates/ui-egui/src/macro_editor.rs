@@ -932,6 +932,9 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
             restore_home(app, &ed.refs);
         }
         if ed.quit {
+            // A quit takes over a workbook close waiting on the editor: it asks about every
+            // unsaved workbook itself, and the close replayed after it would act on whichever
+            // workbook the quit is asking about.
             if app.native_windows {
                 // Each workbook window is a native window whose close button closes only it:
                 // the quit goes on directly.
@@ -939,8 +942,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-        }
-        if let Some((id, params)) = ed.then_close.take() {
+        } else if let Some((id, params)) = ed.then_close.take() {
             app.run_or_alert(&id, params);
         }
     }
