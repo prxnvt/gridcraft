@@ -300,3 +300,27 @@ fn on_a_right_to_left_sheet_the_mirrored_handles_resize() {
     assert!((after.left() - (before.left() - 20.0)).abs() < 1.0 && (after.right() - before.right()).abs() < 1.0, "{before:?} {after:?}");
     assert!((after.bottom() - (before.bottom() + 16.0)).abs() < 1.0 && (after.top() - before.top()).abs() < 1.0, "{before:?} {after:?}");
 }
+
+#[test]
+fn a_handle_under_the_headers_does_not_take_the_press() {
+    let (mut h, o) = fixture();
+    h.state_mut().run("object.move", json!({"kind": "shape", "id": o.shape.id, "at": "A1", "dx": 0, "dy": 0})).unwrap();
+    h.run_steps(2);
+    let before = rect(&h, o.shape);
+    click(&mut h, before.center());
+    assert_eq!(h.state().selected_object, Some(o.shape));
+    let cells = h.state().grid.cells_rect.unwrap();
+    assert_eq!(before.left_top(), cells.left_top(), "the shape's top-left handle sits on the header corner");
+    // Within the top-left handle's reach, but over the column header: the press is the header's.
+    let grab = Handle::TopLeft.pos(before) + vec2(4.0, -4.0);
+    assert!(grab.y < cells.top());
+    drag(&mut h, grab, grab + vec2(30.0, 40.0));
+    assert_eq!(rect(&h, o.shape), before, "the shape is neither moved nor resized");
+    assert_eq!(h.state().selected_object, None, "the press went to the column header");
+    // Within the left handle's reach, but over the row header.
+    let grab = Handle::Left.pos(before) + vec2(-4.0, 0.0);
+    assert!(grab.x < cells.left());
+    h.state_mut().selected_object = Some(o.shape);
+    drag(&mut h, grab, grab + vec2(40.0, 0.0));
+    assert_eq!(rect(&h, o.shape), before, "the shape is neither moved nor resized");
+}

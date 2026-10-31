@@ -124,10 +124,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         // A drag is recognised only after the pointer has moved, so grab the object where the press began.
         let at = if primary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos };
         // The selected object's handles reach a little outside it, so they win over hit-testing.
-        let on_handle = app.selected_object.and_then(|o| {
-            let r = crate::chartview::object_rect(geo, sh, o)?;
-            at.and_then(|p| crate::objects::handle_at(r, p)).map(|_| (o, r))
-        });
+        let on_handle = at.and_then(|p| crate::chartview::selected_handle(app, geo, sh, p)).map(|(o, r, _)| (o, r));
         if let Some(p) = at
             && let Some((obj, rect)) = on_handle.or_else(|| crate::chartview::hit(app, geo, sh, p))
         {

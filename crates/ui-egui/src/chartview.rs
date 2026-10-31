@@ -505,6 +505,19 @@ pub fn object_rect(geo: &Geo, sh: &Sheet, o: ObjRef) -> Option<Rect> {
     sh.object_anchor(o).map(|a| anchor_rect(geo, sh, &a))
 }
 
+/// The resize handle of the selected object under `p`, with the object and its rect. Handles
+/// reach a little outside their object, so they win over [`hit`], but like it only over the cell
+/// area: a handle that lies under the headers, the formula bar or a scroll bar leaves the press
+/// to them. Nothing while objects are hidden.
+pub fn selected_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect, crate::objects::Handle)> {
+    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
+    let o = app.selected_object?;
+    let r = object_rect(geo, sh, o)?;
+    crate::objects::handle_at(r, p).map(|h| (o, r, h))
+}
+
 /// The topmost object under `p` and its rect: slicers paint on top, so they are hit first, then
 /// charts, pictures and shapes, each from the top of its stack. Nothing is hit outside the cell
 /// area or while objects are hidden.

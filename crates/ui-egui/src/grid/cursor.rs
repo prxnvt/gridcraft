@@ -78,11 +78,7 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     let on_cur_border = on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
     // The selected object's handles resize it; any object's body moves it.
     let idle = app.grid.drag == Drag::None && app.editor.is_none();
-    let object_handle = if idle && in_cells {
-        app.selected_object.and_then(|o| crate::chartview::object_rect(geo, sh, o)).and_then(|r| crate::objects::handle_at(r, p))
-    } else {
-        None
-    };
+    let object_handle = if idle { crate::chartview::selected_handle(app, geo, sh, p).map(|(.., h)| h) } else { None };
     let on_object = idle && crate::chartview::hit(app, geo, sh, p).is_some();
     if let Some(h) = object_handle {
         ctx.set_cursor_icon(h.cursor(geo.rtl));
