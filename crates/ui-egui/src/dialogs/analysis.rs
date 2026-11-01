@@ -367,8 +367,11 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                     ] {
                         d.values.insert(k.into(), v);
                     }
+                    // The options go back to their defaults too.
                     clear_solver_options(d);
-                    d.values.remove("modelNote");
+                    for key in ["optionsBackup", "modelNote"] {
+                        d.values.remove(key);
+                    }
                 }
                 Err(e) => {
                     d.values.insert("modelNote".into(), json!(crate::clean_error(&e)));
