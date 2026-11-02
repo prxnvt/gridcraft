@@ -17,8 +17,8 @@ impl SheetApp {
     }
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
-        // Closing the workbook would lose the Python editor's unsaved code: refused, from the
-        // interface (which shows the reason) and from a programmatic call.
+        // Closing the workbook would lose the Python editor's unsaved code. The interface asks
+        // first (see `run_or_alert`); a programmatic call is refused.
         if (id == "file.close" && crate::python_window::blocks_close(self))
             || (id == "window.close" && crate::python_window::blocks_window_close(self, &params))
         {
@@ -107,6 +107,14 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        // File › Close (or Ctrl+W) with unsaved code in the Python editor: the editor asks first.
+        if id == "file.close" && crate::python_window::blocks_close(self) {
+            return crate::python_window::ask(self, crate::python_window::Pending::CloseWorkbook(params));
+        }
+        // The close button of the workbook's last window (a native window) asks the same way.
+        if id == "window.close" && crate::python_window::blocks_window_close(self, &params) {
+            return crate::python_window::ask(self, crate::python_window::Pending::CloseWindow(params));
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
