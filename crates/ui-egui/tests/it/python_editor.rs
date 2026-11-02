@@ -510,13 +510,14 @@ fn closing_or_leaving_the_workbook_asks_about_unsaved_code() {
     assert!(win(&h).is_none());
     assert_eq!(h.state().session.documents().len(), 1);
     // With changes, Discard goes on to close the workbook (which asks about its own changes).
+    let current = h.state().session.active().unwrap().uid;
     ui(&mut h, json!({"on": true})).unwrap();
     type_text(&mut h, "b");
     h.state_mut().run_or_alert("file.close", json!({}));
     h.run_steps(3);
     click(&mut h, DISCARD);
     assert!(win(&h).is_none());
-    assert!(h.state().session.documents().iter().all(|d| d.uid != first));
+    assert!(h.state().session.documents().iter().all(|d| d.uid != current), "the workbook the code was for is closed");
 }
 
 #[test]
