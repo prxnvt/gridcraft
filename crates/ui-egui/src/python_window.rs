@@ -561,10 +561,13 @@ pub fn ask(app: &mut SheetApp, p: Pending) {
     bring_forward(app);
 }
 
-/// Whether closing the active workbook would lose the editor's unsaved code.
-pub fn blocks_close(app: &SheetApp) -> bool {
+/// Whether `file.close` with `params` would close the active workbook and so lose the editor's
+/// unsaved code. With another window on the workbook, `file.close` closes only the active window
+/// (unless `document` is set), and the editor stays with its workbook.
+pub fn blocks_close(app: &SheetApp, params: &Json) -> bool {
     let active = app.session.active().map(|d| d.uid);
-    app.py_window.as_ref().is_some_and(|w| w.dirty() && Some(w.doc) == active)
+    let Some(w) = app.py_window.as_ref().filter(|w| w.dirty() && Some(w.doc) == active) else { return false };
+    params.get("document").and_then(Json::as_bool) == Some(true) || app.session.windows().iter().filter(|x| x.doc_uid == w.doc).count() <= 1
 }
 
 /// Whether the editor has unsaved changes.

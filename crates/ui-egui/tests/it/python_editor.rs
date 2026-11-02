@@ -520,6 +520,27 @@ fn closing_or_leaving_the_workbook_asks_about_unsaved_code() {
 }
 
 #[test]
+fn closing_one_of_a_workbooks_windows_keeps_the_editors_code_without_asking() {
+    let mut h = harness(blank());
+    ui(&mut h, json!({"on": true})).unwrap();
+    type_text(&mut h, "a = 1");
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.windows().len(), 2);
+    // File › Close closes only the active window: nothing is asked, and the code stays.
+    h.state_mut().run_or_alert("file.close", json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().session.windows().len(), 1, "one window closed");
+    assert_eq!(win(&h).map(|w| (w.text, w.pending)), Some(("a = 1".to_string(), None)));
+    // The same programmatically; closing the workbook itself is still refused.
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(3);
+    assert!(h.state_mut().run("file.close", json!({"document": true})).unwrap_err().contains("Python editor"));
+    assert_eq!(h.state_mut().run("file.close", json!({})).unwrap()["document"], false);
+    assert_eq!(win(&h).map(|w| w.text), Some("a = 1".to_string()), "the code is kept");
+}
+
+#[test]
 fn quitting_with_unsaved_code_asks_first() {
     let mut h = harness(blank());
     ui(&mut h, json!({"on": true})).unwrap();
