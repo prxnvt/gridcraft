@@ -157,6 +157,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This version of GridCraft stores Python code but does not run it." => "Ця версія GridCraft зберігає код Python, але не виконує його.",
         "Insert\nPython" => "Вставити\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Вставити Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Редактор Python",
+        "Edit in Python Editor" => "Редагувати в редакторі Python",
+        "Unsaved changes" => "Незбережені зміни",
+        "The code for {cell} has unsaved changes." => "Код для {cell} має незбережені зміни.",
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "Клітинка {cell} змінилася, поки була відкрита в редакторі Python, тому код не застосовано. Скопіюйте код або закрийте редактор і знову відкрийте його для клітинки."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} застосовує код. Esc закриває редактор.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Незбережений код редактора Python скопійовано в буфер обміну.",
+        "Apply" => "Застосувати",
+        "Discard" => "Відхилити",
         "Evaluate Formula" => "Обчислити формулу",
         "Watch Window" => "Окно контрольних значень",
         "Calculation\nOptions" => "Параметри\nобчислень",
