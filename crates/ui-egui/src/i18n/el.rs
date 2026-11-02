@@ -157,6 +157,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit in Python Editor" => "Επεξεργασία στο πρόγραμμα επεξεργασίας Python",
         "Unsaved changes" => "Μη αποθηκευμένες αλλαγές",
         "The code for {cell} has unsaved changes." => "Ο κώδικας για το {cell} έχει μη αποθηκευμένες αλλαγές.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Ο κώδικας για το {cell} στο {workbook} έχει μη αποθηκευμένες αλλαγές.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Ο κώδικας δεν μπορεί να γίνει μεγαλύτερος: ένα κελί Python χωρά {max} χαρακτήρες, μετρημένους ως τύπος PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "Το κελί {cell} άλλαξε ενώ ήταν ανοιχτό στο πρόγραμμα επεξεργασίας Python. Αντιγράψτε τον κώδικα ή κλείστε το πρόγραμμα επεξεργασίας και ανοίξτε το ξανά στο κελί."
+        }
         "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
             "Το κελί {cell} άλλαξε ενώ ήταν ανοιχτό στο πρόγραμμα επεξεργασίας Python, επομένως ο κώδικας δεν εφαρμόστηκε. Αντιγράψτε τον κώδικα ή κλείστε το πρόγραμμα επεξεργασίας και ανοίξτε το ξανά στο κελί."
         }

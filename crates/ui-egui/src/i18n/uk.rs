@@ -161,6 +161,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit in Python Editor" => "Редагувати в редакторі Python",
         "Unsaved changes" => "Незбережені зміни",
         "The code for {cell} has unsaved changes." => "Код для {cell} має незбережені зміни.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Код для {cell} у книзі {workbook} має незбережені зміни.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Код не може бути довшим: клітинка Python вміщує {max} символів у вигляді формули PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "Клітинка {cell} змінилася, поки була відкрита в редакторі Python. Скопіюйте код або закрийте редактор і знову відкрийте його для клітинки."
+        }
         "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
             "Клітинка {cell} змінилася, поки була відкрита в редакторі Python, тому код не застосовано. Скопіюйте код або закрийте редактор і знову відкрийте його для клітинки."
         }

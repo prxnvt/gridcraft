@@ -170,6 +170,15 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Edit in Python Editor", "Python エディターで編集"),
     ("Unsaved changes", "未保存の変更"),
     ("The code for {cell} has unsaved changes.", "{cell} のコードに未保存の変更があります。"),
+    ("The code for {cell} in {workbook} has unsaved changes.", "{cell} ({workbook}) のコードに未保存の変更があります。"),
+    (
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula.",
+        "コードをこれ以上長くできません。Python セルに入るのは PY 数式として数えて {max} 文字までです。",
+    ),
+    (
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell.",
+        "{cell} は Python エディターで開いている間に変更されました。コードをコピーするか、エディターを閉じてセルでもう一度開いてください。",
+    ),
     (
         "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell.",
         "{cell} は Python エディターで開いている間に変更されました。そのため、コードは適用されませんでした。コードをコピーするか、エディターを閉じてセルでもう一度開いてください。",

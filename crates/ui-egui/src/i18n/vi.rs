@@ -167,6 +167,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit in Python Editor" => "Sửa trong Trình soạn thảo Python",
         "Unsaved changes" => "Thay đổi chưa lưu",
         "The code for {cell} has unsaved changes." => "Mã cho {cell} có thay đổi chưa lưu.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Mã cho {cell} trong {workbook} có thay đổi chưa lưu.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Mã không thể dài hơn: một ô Python chứa {max} ký tự, tính theo công thức PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} đã thay đổi trong khi đang mở trong Trình soạn thảo Python. Hãy sao chép mã, hoặc đóng trình soạn thảo rồi mở lại trên ô."
+        }
         "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
             "{cell} đã thay đổi trong khi đang mở trong Trình soạn thảo Python, vì vậy mã chưa được áp dụng. Hãy sao chép mã, hoặc đóng trình soạn thảo rồi mở lại trên ô."
         }

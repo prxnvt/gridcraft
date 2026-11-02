@@ -1,33 +1,35 @@
-//! The Python editor: a resizable window for writing a Python cell's code, with Python colours.
-//! It opens from the formula bar's editor button (shown in Python mode and on a
+//! The Python editor: a resizable window for writing a Python cell's code, with line numbers and
+//! Python colours. It opens from the formula bar's editor button (shown in Python mode and on a
 //! selected Python cell), from "Edit in Python Editor" in a Python cell's menu, and from
 //! `ui.pythonEditor`.
 //!
 //! The window keeps its own copy of the code. Enter and Tab work as in the formula bar's Python
 //! mode; Ctrl+Enter (Cmd+Enter on macOS) or Apply puts the code in the cell through `python.set`,
 //! and the window stays open; Esc or Close closes it. There is one editor at a time, and it belongs
-//! to one cell of one workbook. Nothing loses its code without an answer: closing it or opening it
-//! on another cell first asks whether to apply or discard unsaved changes, in the window, and
-//! closing its workbook or quitting is refused until they are applied or discarded. Programmatic
-//! calls never ask: they refuse while there are unsaved changes, unless told to discard them
-//! (`force`).
+//! to one cell of one workbook. Nothing loses its code without an answer: closing it, opening it
+//! on another cell, closing its workbook, switching to another workbook or quitting first asks
+//! whether to apply or discard unsaved changes, in the window. Programmatic calls never ask: they
+//! refuse while there are unsaved changes, unless told to discard them (`force`).
 //!
 //! Apply writes only to the cell the window opened on: when the cell no longer holds what it held
 //! when the window opened it or last applied (a row or column inserted before it moved another
-//! cell to its address, its code changed from elsewhere, or its sheet moved, was renamed or was
-//! deleted), Apply is refused and the code stays in the window, rather than replacing another
-//! cell's content. Code longer than a cell holds is refused by `python.set` on Apply, with its
-//! message, and stays in the window.
+//! cell to its address, or its code changed from elsewhere), Apply is refused and the code stays in
+//! the window, rather than replacing another cell's content.
+//!
+//! The code can't grow past what a cell holds (`PyCode::fits`, the limit `python.set` checks):
+//! typing or pasting past it is refused, with a message, as it happens.
 //!
 //! With a native window per workbook window (`SheetApp::native_windows`), every native window draws
 //! the app in turn, each with its own workbook active. The editor is drawn only in its own
-//! workbook's windows, so drawing another workbook's window doesn't close it.
+//! workbook's window (the one it opened in, or that workbook's most recent one), so drawing another
+//! workbook's window neither closes it nor counts as a switch to that workbook; a question it asks,
+//! or an opening on another workbook's cell, brings its window forward.
 
 use std::sync::Arc;
 
 use egui::{Align, Id, Layout, Rect, RichText, Ui, pos2, vec2};
 use gridcraft_engine::core::{CellRef, RangeRef, Value, quote_sheet, split_sheet};
-use gridcraft_engine::model::python::normalize_code;
+use gridcraft_engine::model::python::{MAX_FORMULA_CHARS, normalize_code};
 use gridcraft_engine::model::{CellPicture, PyCode, Sheet};
 use serde_json::{Value as Json, json};
 
@@ -44,8 +46,14 @@ pub const EDIT_IN_EDITOR: &str = "Edit in Python Editor";
 pub const UNSAVED: &str = "Unsaved changes";
 /// The question asked before unsaved code would be lost.
 pub const ASK: &str = "The code for {cell} has unsaved changes.";
-/// Apply refused: the cell no longer holds what it held when the window opened it or last applied
-/// (another cell moved to its address, or its code changed elsewhere).
+/// The same, once another workbook is active.
+pub const ASK_IN: &str = "The code for {cell} in {workbook} has unsaved changes.";
+/// Typing or pasting past the limit.
+pub const TOO_LONG: &str = "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula.";
+/// The cell no longer holds what it held when the window opened it or last applied (another cell
+/// moved to its address, or its code changed elsewhere) while the window has unsaved changes.
+pub const CHANGED: &str = "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell.";
+/// Apply refused for the same reason.
 pub const STALE: &str = "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell.";
 /// The keys, under the code.
 pub const HINT: &str = "{apply} applies the code. Esc closes the editor.";
@@ -81,6 +89,17 @@ pub enum Pending {
     /// The editor was asked for another cell (or with other code, from the formula bar): it opens
     /// there.
     Open { target: Target, from_bar: bool },
+    /// Another workbook is active: the window closes, or Cancel goes back to its workbook.
+    Switched,
+    /// File › Close on the window's workbook: the workbook closes (with `file.close` and these
+    /// params, which ask about the workbook's own changes).
+    CloseWorkbook(Json),
+    /// The close button of the last window on the window's workbook: the window closes (with
+    /// `window.close` and these params, which ask about the workbook's own changes).
+    CloseWindow(Json),
+    /// Quitting (the app window's close button, Quit or ⌘Q, the Dock or the system): the quit goes
+    /// on, asking about each unsaved workbook.
+    Quit,
 }
 
 /// An answer to [`Pending`].
@@ -94,6 +113,8 @@ pub enum Answer {
 /// A message under the code.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Notice {
+    /// An edit was refused: the code would not fit in a cell.
+    TooLong,
     /// `python.set` refused the code; its message.
     Refused(String),
     /// Apply was refused: the cell no longer holds what it held (see [`Held`]).
@@ -129,9 +150,16 @@ impl Held {
 #[derive(Clone, Debug)]
 pub struct PyWindow {
     pub doc: u64,
+    /// The engine window it opened in, one of its workbook's: with native windows, it is drawn
+    /// there (or, once that window closes, in its workbook's most recent one).
+    pub window: Option<u64>,
     pub sheet: usize,
-    /// The sheet's name: Apply is refused once the sheet at `sheet` has another name.
+    /// The sheet's name, as it was when the window last saw its sheet.
     pub sheet_name: String,
+    /// The sheet's identity ([`gridcraft_engine::model::SheetUid`]): the window follows its sheet
+    /// by it when sheets move or are renamed, and never takes another sheet for it, even one of
+    /// the same name in the same place.
+    sheet_uid: u64,
     /// This opening of the window: the code field's id, so its caret, focus and undo history stay
     /// with it when its sheet moves or is renamed, and a new opening starts afresh.
     serial: u64,
@@ -149,6 +177,10 @@ pub struct PyWindow {
     pub focus: bool,
     /// Put the caret here (a char index) on the next frame.
     pub caret: Option<usize>,
+    /// The code's length counted as a PY formula, worked out when the code changes.
+    count: Option<usize>,
+    /// The line-number gutter's width, last frame.
+    pub gutter: f32,
     /// The window on screen, last frame.
     pub rect: Option<Rect>,
 }
@@ -170,7 +202,25 @@ impl PyWindow {
 
     fn set_text(&mut self, text: String) {
         self.text = text;
+        self.count = None;
     }
+}
+
+/// Whether `code` fits in a cell, as `python.set` checks it. The work is bounded by the limit,
+/// not by the length of `code`.
+pub fn fits(code: &str) -> bool {
+    code.chars().nth(MAX_FORMULA_CHARS).is_none() && PyCode::new(code).fits()
+}
+
+/// `code`'s length counted as a PY formula, `PY("…",0)` (the measure of [`PyCode::fits`]).
+pub fn formula_len(code: &str) -> usize {
+    PyCode::new(code).to_file_formula().chars().count()
+}
+
+/// Whether the editor takes an edit from `old` to `new`: the new code fits in a cell, or (for code
+/// that came in longer than the limit) the edit doesn't make it longer.
+pub fn accept_code(new: &str, old: &str) -> bool {
+    fits(new) || (new.len() <= old.len() && formula_len(new) <= formula_len(old))
 }
 
 /// The window, for egui (its position and size are kept under this id).
@@ -209,20 +259,30 @@ fn held(app: &SheetApp, t: Target) -> Option<Held> {
     d.wb.sheet(t.sheet).map(|sh| Held::of(sh, t.cell))
 }
 
+/// The window's own sheet, while it is at the window's place under the window's name (`sync`
+/// keeps both up to date).
+fn own_sheet<'a>(app: &'a SheetApp, w: &PyWindow) -> Option<&'a Sheet> {
+    let d = app.session.documents().iter().find(|d| d.uid == w.doc)?;
+    d.wb.sheet(w.sheet).filter(|sh| sh.uid.get() == w.sheet_uid && sh.name == w.sheet_name)
+}
+
 /// The window's cell's code and return type, while its sheet is there (see `sync`).
 fn window_cell(app: &SheetApp, w: &PyWindow) -> Option<(String, bool)> {
-    let d = app.session.documents().iter().find(|d| d.uid == w.doc)?;
-    d.wb.sheet(w.sheet).filter(|sh| sh.name == w.sheet_name)?;
+    own_sheet(app, w)?;
     Some(cell_code(app, w.target()))
 }
 
-/// Whether the window's cell, while its workbook is open, no longer holds what it held when the
-/// window opened it or last applied: another cell moved to its address, its content changed, or
-/// its sheet moved, was renamed or was deleted (the sheet in its place has another name).
+/// Whether the window's cell no longer holds what it held when the window opened it or last
+/// applied: another cell moved to its address, or its content changed. Also when another sheet is
+/// at the window's place under its name: its sheet was deleted and another put there (by a macro,
+/// say) before the window saw it, and that sheet's cells are not the window's.
 fn stale(app: &SheetApp, w: &PyWindow) -> bool {
     let d = app.session.documents().iter().find(|d| d.uid == w.doc);
-    let sheet = d.and_then(|d| d.wb.sheet(w.sheet)).filter(|sh| sh.name == w.sheet_name);
-    d.is_some() && sheet.is_none_or(|sh| Held::of(sh, w.cell) != w.held)
+    match d.and_then(|d| d.wb.sheet(w.sheet)).filter(|sh| sh.name == w.sheet_name) {
+        Some(sh) if sh.uid.get() == w.sheet_uid => Held::of(sh, w.cell) != w.held,
+        Some(_) => true,
+        None => false,
+    }
 }
 
 /// Whether the code of `t` is out of view: a Hidden cell, or the cell whose result spills over
@@ -232,15 +292,33 @@ fn target_hidden(app: &SheetApp, t: Target) -> bool {
     d.and_then(|d| d.wb.sheet(t.sheet).map(|sh| gridcraft_engine::display::formula_hidden(&d.wb, sh, t.cell))).unwrap_or(false)
 }
 
-/// Whether the window's code is out of view now: its cell is Hidden, or inside the spill of a
-/// Hidden cell, on a protected sheet. With unsaved code the window stays on a sheet that moved or
-/// was renamed, so the sheet at its place and the sheet of its name are both checked. `sync` closes
-/// the window by this rule on the next frame; `state` checks it when called, since a control batch
-/// can protect the sheet before that frame.
-fn code_hidden(app: &SheetApp, w: &PyWindow) -> bool {
+/// The sheet the window follows, with its name: its own sheet, by identity, wherever it moved and
+/// whatever it is called now. A deleted sheet is not followed to the sheet that took its place,
+/// even one of the same name: the window keeps its code, and Apply is refused for want of the
+/// sheet. An undo of the deletion brings the sheet back, identity and all.
+fn followed(app: &SheetApp, w: &PyWindow) -> Option<(usize, String)> {
+    let d = app.session.documents().iter().find(|d| d.uid == w.doc)?;
+    d.wb.sheets.iter().position(|sh| sh.uid.get() == w.sheet_uid).and_then(|i| d.wb.sheet(i).map(|sh| (i, sh.name.clone())))
+}
+
+/// Whether the code the window took from its cell is hidden on any protected sheet of its workbook:
+/// a sheet whose cell at the window's address is out of view ([`target_hidden`]) and holds that
+/// code. This doesn't depend on which sheet the window follows: once its sheet is deleted it
+/// follows none, and a copy of that sheet protected with the cell Hidden never keeps the code in
+/// view.
+fn saved_code_hidden(app: &SheetApp, w: &PyWindow) -> bool {
     let Some(d) = app.session.documents().iter().find(|d| d.uid == w.doc) else { return false };
-    let sheets = [Some(w.sheet), d.wb.sheet_index(&w.sheet_name)];
-    sheets.into_iter().flatten().any(|sheet| target_hidden(app, Target { sheet, ..w.target() }))
+    let holds = |sh: &Sheet| sh.cell(w.cell).and_then(|c| c.py.as_ref()).is_some_and(|p| p.code == w.saved);
+    d.wb.sheets.iter().any(|sh| holds(sh) && gridcraft_engine::display::formula_hidden(&d.wb, sh, w.cell))
+}
+
+/// Whether the window's code is out of view now: its cell, on the sheet it follows, is Hidden or
+/// inside the spill of a Hidden cell on a protected sheet, or the code it took from its cell is
+/// hidden on another sheet ([`saved_code_hidden`]). `sync` closes the window by this rule on the
+/// next frame; `state` checks it when called, since a control batch can protect the sheet before
+/// that frame.
+fn code_hidden(app: &SheetApp, w: &PyWindow) -> bool {
+    followed(app, w).is_some_and(|(sheet, _)| target_hidden(app, Target { sheet, ..w.target() })) || saved_code_hidden(app, w)
 }
 
 /// The message for a cell whose code is hidden.
@@ -280,13 +358,18 @@ pub fn target(app: &SheetApp, sheet: usize, cell: CellRef) -> Result<Target, Str
 fn open_fresh(app: &mut SheetApp, t: Target, text: Option<(String, usize)>) {
     let (code, _) = cell_code(app, t);
     let doc = app.session.documents().iter().find(|d| d.uid == t.doc);
-    let sheet_name = doc.and_then(|d| d.wb.sheet(t.sheet)).map(|s| s.name.clone());
+    let sheet = doc.and_then(|d| d.wb.sheet(t.sheet));
+    let (sheet_name, sheet_uid) = (sheet.map(|s| s.name.clone()), sheet.map_or(0, |s| s.uid.get()));
     let (text, caret) = text.unwrap_or_else(|| (code.clone(), 0));
     let held = held(app, t).unwrap_or_default();
+    let active = app.session.active_window();
+    let window = active.filter(|w| app.session.window(*w).is_some_and(|x| x.doc_uid == t.doc)).or_else(|| app.session.doc_window(t.doc));
     app.py_window = Some(PyWindow {
         doc: t.doc,
+        window,
         sheet: t.sheet,
         sheet_name: sheet_name.unwrap_or_default(),
+        sheet_uid,
         serial: OPENINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         cell: t.cell,
         text,
@@ -296,14 +379,36 @@ fn open_fresh(app: &mut SheetApp, t: Target, text: Option<(String, usize)>) {
         pending: None,
         focus: true,
         caret: Some(caret),
+        count: None,
+        gutter: 0.0,
         rect: None,
     });
+    bring_forward(app);
+}
+
+/// The engine window the editor is drawn in: the one it opened in while that window shows its
+/// workbook, else its workbook's most recent window. `None` once its workbook is closed.
+fn home(app: &SheetApp, w: &PyWindow) -> Option<u64> {
+    w.window.filter(|id| app.session.window(*id).is_some_and(|x| x.doc_uid == w.doc)).or_else(|| app.session.doc_window(w.doc))
 }
 
 /// Whether the window being drawn is the editor's: always with a single app window; with native
-/// windows, only a window of its own workbook.
+/// windows, only its home window ([`home`]).
 fn drawn_here(app: &SheetApp) -> bool {
-    !app.native_windows || app.py_window.as_ref().is_some_and(|w| app.session.active().map(|d| d.uid) == Some(w.doc))
+    !app.native_windows || app.py_window.as_ref().is_some_and(|w| home(app, w).is_some() && home(app, w) == app.session.active_window())
+}
+
+/// With native windows, makes the editor's window the active one, so it comes forward (as a
+/// command that activates a window does) and shows what the editor asks or opened.
+fn bring_forward(app: &mut SheetApp) {
+    if !app.native_windows {
+        return;
+    }
+    if let Some(h) = app.py_window.as_ref().and_then(|w| home(app, w))
+        && app.session.active_window() != Some(h)
+    {
+        app.session.activate_window(h);
+    }
 }
 
 /// The message for unsaved changes that a programmatic call would discard.
@@ -330,6 +435,7 @@ pub fn request_open(app: &mut SheetApp, t: Target, text: Option<(String, usize)>
     if conflict && !force {
         if ask {
             w.pending = Some(Pending::Open { target: t, from_bar: text.is_some() });
+            bring_forward(app);
             return Ok(());
         }
         return Err(unsaved_error(w));
@@ -436,6 +542,7 @@ pub fn request_close(app: &mut SheetApp, ask: bool, force: bool) -> Result<(), S
     if w.dirty() && !force {
         if ask {
             w.pending = Some(Pending::Close);
+            bring_forward(app);
             return Ok(());
         }
         return Err(unsaved_error(w));
@@ -444,10 +551,23 @@ pub fn request_close(app: &mut SheetApp, ask: bool, force: bool) -> Result<(), S
     Ok(())
 }
 
-/// Whether closing the active workbook would lose the editor's unsaved code.
-pub fn blocks_close(app: &SheetApp) -> bool {
+/// Asks about unsaved changes before `p`.
+pub fn ask(app: &mut SheetApp, p: Pending) {
+    if let Some(w) = app.py_window.as_mut() {
+        w.pending = Some(p);
+    }
+    // The File view covers the sheet and the window: close it so the question is in sight.
+    app.backstage = None;
+    bring_forward(app);
+}
+
+/// Whether `file.close` with `params` would close the active workbook and so lose the editor's
+/// unsaved code. With another window on the workbook, `file.close` closes only the active window
+/// (unless `document` is set), and the editor stays with its workbook.
+pub fn blocks_close(app: &SheetApp, params: &Json) -> bool {
     let active = app.session.active().map(|d| d.uid);
-    app.py_window.as_ref().is_some_and(|w| w.dirty() && Some(w.doc) == active)
+    let Some(w) = app.py_window.as_ref().filter(|w| w.dirty() && Some(w.doc) == active) else { return false };
+    params.get("document").and_then(Json::as_bool) == Some(true) || app.session.windows().iter().filter(|x| x.doc_uid == w.doc).count() <= 1
 }
 
 /// Whether the editor has unsaved changes.
@@ -465,18 +585,16 @@ pub fn blocks_window_close(app: &SheetApp, params: &Json) -> bool {
     doc == Some(w.doc) && app.session.windows().iter().filter(|x| x.doc_uid == w.doc).count() == 1
 }
 
-/// Stops a quit from the interface (the app window's close button, Quit or ⌘Q) while the editor
-/// has unsaved changes: its workbook's window comes forward with a message, so the code can be
-/// applied or discarded first. Returns whether it stopped the quit.
-pub fn stop_quit(app: &mut SheetApp) -> bool {
-    let Some((doc, address)) = app.py_window.as_ref().filter(|w| w.dirty()).map(|w| (w.doc, w.address())) else { return false };
+/// Asks about the editor's unsaved code before quitting, in its workbook's window, which comes
+/// forward. Answering it goes on with the quit ([`answer`]). Returns whether it asks.
+pub fn ask_before_quit(app: &mut SheetApp) -> bool {
+    let Some(doc) = app.py_window.as_ref().filter(|w| w.dirty()).map(|w| w.doc) else { return false };
     if let Some(window) = app.session.doc_window(doc) {
         app.enter_window(window);
     }
     // Its native window is restored and shown too, when it is minimized or the app is hidden.
     app.bring_forward = true;
-    let text = format!("The Python editor has unsaved changes to {address}. Apply or discard them, then quit again.");
-    app.message = Some(("GridCraft".into(), text));
+    ask(app, Pending::Quit);
     true
 }
 
@@ -492,11 +610,14 @@ pub fn quit_refused(app: &SheetApp) -> Option<String> {
 
 /// Puts the code in its cell through `python.set`, in the window's workbook (active or not). On a
 /// refusal the code stays as typed and the command's message shows under it. A cell that no longer
-/// holds what it held when the window opened it or last applied is refused before `python.set`:
-/// the code would replace another cell's content. Returns whether the code went in.
+/// holds what it held when the window opened it or last applied, or whose sheet is gone, is
+/// refused before `python.set`: the code would replace another cell's content. Returns whether the
+/// code went in.
 pub fn apply(app: &mut SheetApp) -> bool {
     let Some(w) = app.py_window.as_ref() else { return false };
-    if stale(app, w) {
+    // Only into its own sheet: `python.set` finds the sheet by name, and a sheet deleted and
+    // another of its name added (anywhere) would take the code.
+    if stale(app, w) || own_sheet(app, w).is_none() {
         if let Some(w) = app.py_window.as_mut() {
             w.notice = Some(Notice::Stale);
             w.focus = true;
@@ -537,25 +658,28 @@ pub fn apply(app: &mut SheetApp) -> bool {
 }
 
 /// Acts on the answer to the window's question.
-pub fn answer(app: &mut SheetApp, a: Answer) {
+pub fn answer(app: &mut SheetApp, ctx: &egui::Context, a: Answer) {
     let Some(p) = app.py_window.as_ref().and_then(|w| w.pending.clone()) else { return };
-    if a == Answer::Cancel {
+    // Cancel, or an Apply that was refused: the question goes and the code is kept. After a switch
+    // to another workbook the window goes back to the code's workbook; with the other one still
+    // active the next frame would ask again, and the refusal under the code would never show.
+    let refused = a == Answer::Apply && !apply(app);
+    if a == Answer::Cancel || refused {
         if let Some(w) = app.py_window.as_mut() {
             w.pending = None;
             w.focus = true;
         }
-        return;
-    }
-    if a == Answer::Apply && !apply(app) {
-        // The refusal shows under the code, which is kept.
-        if let Some(w) = app.py_window.as_mut() {
-            w.pending = None;
+        if p == Pending::Switched
+            && let Some(i) = app.py_window.as_ref().and_then(|w| doc_index(app, w.doc))
+        {
+            app.session.set_active(i);
         }
         return;
     }
+    let doc = app.py_window.as_ref().map(|w| w.doc);
     app.py_window = None;
     match p {
-        Pending::Close => {}
+        Pending::Close | Pending::Switched => {}
         // The code there was hidden while the question was open: nothing to show.
         Pending::Open { target, .. } if target_hidden(app, target) => app.message = Some(("GridCraft".into(), hidden_error(target.cell))),
         Pending::Open { target, from_bar } => {
@@ -565,6 +689,20 @@ pub fn answer(app: &mut SheetApp, a: Answer) {
                 end_bar_edit(app, target);
             }
         }
+        Pending::CloseWorkbook(params) => {
+            if app.session.active().map(|d| d.uid) == doc {
+                app.run_or_alert("file.close", params);
+            }
+        }
+        // Only while the window is still there, on the code's workbook.
+        Pending::CloseWindow(params) => {
+            let window = gridcraft_engine::Target::from_json(&params).and_then(|t| app.session.target_window(t)).ok();
+            if window.and_then(|x| app.session.window(x)).map(|x| x.doc_uid) == doc {
+                app.run_or_alert("window.close", params);
+            }
+        }
+        // The quit goes on: each unsaved workbook is asked about next, as Quit does.
+        Pending::Quit => app.request_quit(ctx),
     }
 }
 
@@ -615,8 +753,13 @@ pub fn state(app: &SheetApp) -> Json {
     let pending = w.pending.as_ref().map(|p| match p {
         Pending::Close => "close",
         Pending::Open { .. } => "open",
+        Pending::Switched => "switched",
+        Pending::CloseWorkbook(_) => "closeWorkbook",
+        Pending::CloseWindow(_) => "closeWindow",
+        Pending::Quit => "quit",
     });
     let notice = w.notice.as_ref().map(|n| match n {
+        Notice::TooLong => TOO_LONG.replace("{max}", &MAX_FORMULA_CHARS.to_string()),
         Notice::Refused(m) => m.clone(),
         Notice::Stale => STALE.replace("{cell}", &w.address()),
     });
@@ -633,8 +776,8 @@ pub fn state(app: &SheetApp) -> Json {
     })
 }
 
-/// Closes the window without asking, as when its workbook closed some other way or its code became
-/// hidden: its unsaved code goes to the clipboard, with a notice, so it is not lost silently.
+/// Closes the window without asking, as when its workbook closed or its code became hidden: its
+/// unsaved code goes to the clipboard, with a notice, so it is not lost silently.
 fn close_keeping_code(app: &mut SheetApp, ctx: &egui::Context) {
     if let Some(w) = app.py_window.take()
         && w.dirty()
@@ -644,21 +787,19 @@ fn close_keeping_code(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
-/// Keeps the window with its cell: takes in a change of the cell's code when it has no changes of
-/// its own, and closes when it has none and its sheet moved, was renamed or was deleted, or another
-/// workbook is active (with changes it stays, and Apply is refused or goes to its own workbook).
-/// When its workbook closes some other way, or its cell's code becomes hidden on a protected sheet,
-/// it closes and its unsaved code goes to the clipboard.
+/// Keeps the window with its cell: follows its sheet when sheets move or are renamed, takes in a
+/// change of the cell's code when it has no changes of its own, closes when its workbook closes or
+/// another is active (asking first when it has changes), and closes when its cell's code becomes
+/// hidden on a protected sheet (its unsaved code goes to the clipboard).
 fn sync(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(w) = app.py_window.as_ref() else { return };
-    let Some(d) = app.session.documents().iter().find(|d| d.uid == w.doc) else {
-        // Its workbook closed without asking (closing it is refused while the editor has unsaved
-        // code): the code is not lost silently.
+    if !app.session.documents().iter().any(|d| d.uid == w.doc) {
+        // Its workbook closed without asking (the interface asks first, and programmatic calls
+        // are refused): the code is not lost silently.
         close_keeping_code(app, ctx);
         return;
-    };
-    // The cell, while its sheet is at its place under its name (see `stale`).
-    let at = d.wb.sheet(w.sheet).is_some_and(|sh| sh.name == w.sheet_name).then(|| w.target());
+    }
+    let found = followed(app, w);
     // Its sheet was protected with the cell Hidden: the window stops showing the code at once.
     // Applying is not offered (the sheet is protected), and asking would keep the code on screen.
     if code_hidden(app, w) {
@@ -666,11 +807,13 @@ fn sync(app: &mut SheetApp, ctx: &egui::Context) {
         return;
     }
     let active = app.session.active().map(|d| d.uid);
+    let at = found.as_ref().map(|(sheet, _)| Target { sheet: *sheet, ..w.target() });
     let code = at.map(|t| cell_code(app, t).0);
     let now = at.and_then(|t| held(app, t));
     let Some(w) = app.py_window.as_mut() else { return };
-    match code {
-        Some(code) => {
+    match (found, code) {
+        (Some((sheet, name)), Some(code)) => {
+            (w.sheet, w.sheet_name) = (sheet, name);
             if code != w.saved && (!w.dirty() || normalize_code(&w.text) == code) {
                 // Nothing of the window's own to keep: it shows the cell's code as it is now.
                 //
@@ -692,17 +835,21 @@ fn sync(app: &mut SheetApp, ctx: &egui::Context) {
                 w.saved = code;
             }
         }
-        // Its sheet moved, was renamed or was deleted: with nothing to keep, the window goes with it.
-        None if !w.dirty() => {
+        // Its sheet was deleted: with nothing to keep, the window goes with it.
+        _ if !w.dirty() => {
             app.py_window = None;
             return;
         }
-        None => {}
+        _ => {}
     }
-    // Another workbook is active: without changes the window closes; with changes it stays, and
-    // Apply still writes to its own workbook.
-    if active != Some(w.doc) && !w.dirty() {
-        app.py_window = None;
+    if active != Some(w.doc) {
+        if !w.dirty() {
+            app.py_window = None;
+        } else if !matches!(w.pending, Some(Pending::Switched | Pending::Quit)) {
+            w.pending = Some(Pending::Switched);
+        }
+    } else if w.pending == Some(Pending::Switched) {
+        w.pending = None;
     }
 }
 
@@ -717,7 +864,7 @@ pub fn before_ui(app: &mut SheetApp, ctx: &egui::Context) {
         && app.backstage.is_none()
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
-        answer(app, Answer::Cancel);
+        answer(app, ctx, Answer::Cancel);
     }
 }
 
@@ -727,7 +874,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         // Another native window is being drawn, with its own workbook active: the editor isn't
         // drawn there, and that workbook being active is no switch. It still closes when its
         // workbook is gone (its unsaved code goes to the clipboard).
-        let gone = app.py_window.as_ref().is_some_and(|w| app.session.doc_window(w.doc).is_none());
+        let gone = app.py_window.as_ref().is_some_and(|w| home(app, w).is_none());
         if gone {
             close_keeping_code(app, ctx);
         }
@@ -832,16 +979,20 @@ fn footer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     if w.pending.is_some() {
         return question(app, ui, t);
     }
+    let moved = stale(app, w);
     let Some(w) = app.py_window.as_mut() else { return };
     let message = match &w.notice {
+        Some(Notice::TooLong) => Some(lang.tr(TOO_LONG).replace("{max}", &MAX_FORMULA_CHARS.to_string())),
         Some(Notice::Refused(m)) => Some(m.clone()),
         Some(Notice::Stale) => Some(lang.tr(STALE).replace("{cell}", &w.address())),
+        None if w.dirty() && moved => Some(lang.tr(CHANGED).replace("{cell}", &w.address())),
         None => None,
     };
     if let Some(m) = message {
         ui.add(egui::Label::new(RichText::new(m).font(theme::ui_font(12.0)).color(t.danger)).wrap());
         ui.add_space(4.0);
     }
+    let count = *w.count.get_or_insert_with(|| formula_len(&w.text));
     let keys = if ui.ctx().os() == egui::os::OperatingSystem::Mac { "Cmd+Enter" } else { "Ctrl+Enter" };
     let hint = lang.tr(HINT).replace("{apply}", keys);
     let mut apply_now = false;
@@ -853,6 +1004,8 @@ fn footer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
         if ui.button(lang.tr(APPLY)).clicked() {
             apply_now = true;
         }
+        let color = if count > MAX_FORMULA_CHARS { t.danger } else { t.text_dim };
+        ui.label(RichText::new(format!("{count} / {MAX_FORMULA_CHARS}")).font(theme::ui_font(11.5)).color(color));
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.add(egui::Label::new(RichText::new(hint).font(theme::ui_font(11.5)).color(t.text_dim)).truncate());
         });
@@ -874,7 +1027,13 @@ fn footer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
 fn question(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let lang = app.ui.language;
     let Some(w) = app.py_window.as_ref() else { return };
-    let text = lang.tr(ASK).replace("{cell}", &w.address());
+    let switched = w.pending == Some(Pending::Switched);
+    let text = if switched {
+        let title = app.session.documents().iter().find(|d| d.uid == w.doc).map(|d| d.display_title()).unwrap_or_default();
+        lang.tr(ASK_IN).replace("{cell}", &w.address()).replace("{workbook}", &title)
+    } else {
+        lang.tr(ASK).replace("{cell}", &w.address())
+    };
     ui.add(egui::Label::new(RichText::new(text).font(theme::ui_font(12.5)).color(t.text)).wrap());
     ui.add_space(4.0);
     let mut picked = None;
@@ -892,11 +1051,12 @@ fn question(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
         }
     });
     if let Some(a) = picked {
-        answer(app, a);
+        let ctx = ui.ctx().clone();
+        answer(app, &ctx, a);
     }
 }
 
-/// The code, in the code editor.
+/// The code, with line numbers, in the code editor.
 fn code(app: &mut SheetApp, ui: &mut Ui) {
     let blocked = app.dialog.is_some() || app.message.is_some();
     let name = app.ui.language.tr(TITLE).to_string();
@@ -915,21 +1075,30 @@ fn code(app: &mut SheetApp, ui: &mut Ui) {
         caret = w.caret.take();
     }
     let stop = |ev: &egui::Event| editor_key(ev).is_some();
+    let accept = |new: &str, old: &str| accept_code(new, old);
     let size = ui.available_size();
     let options = FieldOptions {
         width: size.x,
         max_height: size.y,
         fill: true,
+        gutter: true,
         interactive,
         stop: &stop,
+        accept: Some(&accept),
         keep_escape: true,
         caret,
         name: &name,
         ..FieldOptions::new(Lang::Python)
     };
     let out = code_editor::code_field(ui, id, &mut w.text, &options);
-    if out.response.changed() {
+    w.gutter = out.gutter;
+    if out.refused {
+        w.notice = Some(Notice::TooLong);
+    } else if out.response.changed() {
         w.notice = None;
+    }
+    if out.refused || out.response.changed() {
+        w.count = None;
     }
     match out.stop.as_ref().and_then(editor_key) {
         Some(Key::Apply) => {
@@ -1000,7 +1169,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quit_stopped_by_unsaved_code_restores_the_editors_window() {
+    fn a_quit_held_by_unsaved_code_restores_the_editors_window() {
         let (mut app, _) = two_books_with_a_draft_in_the_first();
         app.editor = None;
         command(&mut app, &serde_json::json!({"on": true})).unwrap();
@@ -1008,7 +1177,28 @@ mod tests {
             w.set_text("y = 2".into());
         }
         assert!(is_dirty(&app));
-        assert!(stop_quit(&mut app));
+        assert!(ask_before_quit(&mut app));
+        assert_eq!(app.py_window.as_ref().and_then(|w| w.pending.clone()), Some(Pending::Quit));
         assert!(app.bring_forward, "a minimized window or a hidden app is restored, not only focused");
+    }
+
+    #[test]
+    fn the_limit_is_the_one_python_set_checks_and_long_code_can_still_shrink() {
+        // The longest run of one letter that fits: its formula is the limit's length.
+        let n = (0..=MAX_FORMULA_CHARS).rev().find(|n| fits(&"x".repeat(*n))).unwrap_or(0);
+        let at = "x".repeat(n);
+        assert!(n > 8_000 && formula_len(&at) <= MAX_FORMULA_CHARS);
+        assert!(!fits(&format!("{at}y")));
+        assert!(accept_code(&at, ""));
+        assert!(!accept_code(&format!("{at}y"), &at), "one more character is refused");
+        // A quote counts twice in the formula.
+        let quotes = "\"".repeat(MAX_FORMULA_CHARS / 2);
+        assert!(!fits(&quotes));
+        // Code that came in past the limit can be shortened, not lengthened.
+        let over = format!("{at}yy");
+        assert!(accept_code(&format!("{at}y"), &over));
+        assert!(!accept_code(&format!("{at}yyy"), &over));
+        // A huge paste is refused without building its formula.
+        assert!(!accept_code(&"z".repeat(50_000_000), ""));
     }
 }
