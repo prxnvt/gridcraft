@@ -350,15 +350,16 @@ pub fn request_open(app: &mut SheetApp, t: Target, text: Option<(String, usize)>
 /// The formula bar's Python edit of `t`, when its code differs from the cell's: its text and caret.
 fn bar_code(app: &SheetApp, t: Target) -> Option<(String, usize)> {
     let ed = app.editor.as_ref().filter(|e| e.python)?;
-    let here = app.session.active().map(|d| d.uid) == Some(t.doc) && ed.sheet == t.sheet && ed.cell == t.cell;
+    let here = ed.doc == t.doc && app.session.active().map(|d| d.uid) == Some(t.doc) && ed.sheet == t.sheet && ed.cell == t.cell;
     let (code, _) = cell_code(app, t);
     (here && normalize_code(&ed.text) != code).then(|| (ed.text.clone(), ed.caret))
 }
 
-/// Ends the formula bar's Python edit of `t`: its code went to the window.
+/// Ends the formula bar's Python edit of `t`: its code went to the window. A draft of another
+/// workbook at the same sheet and cell is left alone.
 fn end_bar_edit(app: &mut SheetApp, t: Target) {
     let here = app.session.active().map(|d| d.uid) == Some(t.doc);
-    if here && app.editor.as_ref().is_some_and(|e| e.python && e.sheet == t.sheet && e.cell == t.cell) {
+    if here && app.editor.as_ref().is_some_and(|e| e.python && e.doc == t.doc && e.sheet == t.sheet && e.cell == t.cell) {
         app.cancel_edit();
     }
 }
@@ -459,6 +460,8 @@ pub fn stop_quit(app: &mut SheetApp) -> bool {
     if let Some(window) = app.session.doc_window(doc) {
         app.enter_window(window);
     }
+    // Its native window is restored and shown too, when it is minimized or the app is hidden.
+    app.bring_forward = true;
     let text = format!("The Python editor has unsaved changes to {address}. Apply or discard them, then quit again.");
     app.message = Some(("GridCraft".into(), text));
     true
@@ -923,5 +926,53 @@ fn code(app: &mut SheetApp, ui: &mut Ui) {
             let _ = request_close(app, true, false);
         }
         None => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two workbooks, the second active, and a formula-bar Python draft of the first one's A1.
+    fn two_books_with_a_draft_in_the_first() -> (SheetApp, Target) {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        let uids: Vec<u64> = app.session.documents().iter().map(|d| d.uid).collect();
+        assert_eq!(app.session.active().map(|d| d.uid), uids.get(1).copied(), "the second workbook is active");
+        let cell = CellRef::new(0, 0);
+        app.editor = Some(crate::editor::EditState::python(uids[0], 0, cell, "x = 1".into()));
+        (app, Target { doc: uids[1], sheet: 0, cell })
+    }
+
+    #[test]
+    fn the_formula_bar_hands_over_only_a_draft_of_the_targets_workbook() {
+        let (mut app, t) = two_books_with_a_draft_in_the_first();
+        // The editor opens on the active workbook's A1: the other workbook's draft at the same
+        // sheet and cell is neither taken as its code nor cancelled.
+        assert_eq!(bar_code(&app, t), None);
+        end_bar_edit(&mut app, t);
+        assert!(app.editor.as_ref().is_some_and(|e| e.text == "x = 1"), "the other workbook's draft stays");
+        // A draft of the target's own workbook is handed over.
+        if let Some(ed) = app.editor.as_mut() {
+            ed.doc = t.doc;
+        }
+        assert_eq!(bar_code(&app, t).map(|(code, _)| code), Some("x = 1".to_string()));
+        end_bar_edit(&mut app, t);
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn a_quit_stopped_by_unsaved_code_restores_the_editors_window() {
+        let (mut app, _) = two_books_with_a_draft_in_the_first();
+        app.editor = None;
+        command(&mut app, &serde_json::json!({"on": true})).unwrap();
+        if let Some(w) = app.py_window.as_mut() {
+            w.set_text("y = 2".into());
+        }
+        assert!(is_dirty(&app));
+        assert!(stop_quit(&mut app));
+        assert!(app.bring_forward, "a minimized window or a hidden app is restored, not only focused");
     }
 }
