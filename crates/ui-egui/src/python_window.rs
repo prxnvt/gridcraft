@@ -347,19 +347,32 @@ pub fn request_open(app: &mut SheetApp, t: Target, text: Option<(String, usize)>
     Ok(())
 }
 
-/// The formula bar's Python edit of `t`, when its code differs from the cell's: its text and caret.
-fn bar_code(app: &SheetApp, t: Target) -> Option<(String, usize)> {
-    let ed = app.editor.as_ref().filter(|e| e.python)?;
-    let here = ed.doc == t.doc && app.session.active().map(|d| d.uid) == Some(t.doc) && ed.sheet == t.sheet && ed.cell == t.cell;
-    let (code, _) = cell_code(app, t);
-    (here && normalize_code(&ed.text) != code).then(|| (ed.text.clone(), ed.caret))
+/// The formula bar's Python draft of `t`, when it belongs to the active window: a draft of another
+/// workbook, or of another window of the same workbook, at the same sheet and cell is not `t`'s
+/// (the next frame commits it in its own window).
+fn bar_draft(app: &SheetApp, t: Target) -> Option<&crate::editor::EditState> {
+    let active = app.session.active().map(|d| d.uid) == Some(t.doc);
+    app.editor.as_ref().filter(|e| {
+        active
+            && e.python
+            && e.doc == t.doc
+            && e.window.is_none_or(|w| app.session.active_window() == Some(w))
+            && e.sheet == t.sheet
+            && e.cell == t.cell
+    })
 }
 
-/// Ends the formula bar's Python edit of `t`: its code went to the window. A draft of another
-/// workbook at the same sheet and cell is left alone.
+/// The formula bar's Python edit of `t`, when its code differs from the cell's: its text and caret.
+fn bar_code(app: &SheetApp, t: Target) -> Option<(String, usize)> {
+    let ed = bar_draft(app, t)?;
+    let (code, _) = cell_code(app, t);
+    (normalize_code(&ed.text) != code).then(|| (ed.text.clone(), ed.caret))
+}
+
+/// Ends the formula bar's Python edit of `t`: its code went to the window. A draft that isn't
+/// `t`'s ([`bar_draft`]) is left alone.
 fn end_bar_edit(app: &mut SheetApp, t: Target) {
-    let here = app.session.active().map(|d| d.uid) == Some(t.doc);
-    if here && app.editor.as_ref().is_some_and(|e| e.python && e.doc == t.doc && e.sheet == t.sheet && e.cell == t.cell) {
+    if bar_draft(app, t).is_some() {
         app.cancel_edit();
     }
 }
@@ -959,6 +972,29 @@ mod tests {
             ed.doc = t.doc;
         }
         assert_eq!(bar_code(&app, t).map(|(code, _)| code), Some("x = 1".to_string()));
+        end_bar_edit(&mut app, t);
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn the_formula_bar_hands_over_only_a_draft_of_the_active_window() {
+        let (mut app, t) = two_books_with_a_draft_in_the_first();
+        // A second window on the active workbook; the draft belongs to its first window.
+        let first = app.session.active_window();
+        app.session.execute("view.newWindow", serde_json::json!({})).unwrap();
+        assert_ne!(app.session.active_window(), first);
+        if let Some(ed) = app.editor.as_mut() {
+            ed.doc = t.doc;
+            ed.window = first;
+        }
+        assert_eq!(bar_code(&app, t), None);
+        end_bar_edit(&mut app, t);
+        assert!(app.editor.is_some(), "the other window's draft stays, to be committed there");
+        // The same draft in the active window is handed over.
+        if let Some(ed) = app.editor.as_mut() {
+            ed.window = app.session.active_window();
+        }
+        assert!(bar_code(&app, t).is_some());
         end_bar_edit(&mut app, t);
         assert!(app.editor.is_none());
     }
