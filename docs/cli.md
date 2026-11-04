@@ -59,6 +59,21 @@ gridcraft-cli run --in book.xlsx \
 
 Command ids and parameters: `gridcraft-cli commands`.
 
+## `sandbox-check`
+
+```text
+gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
+```
+
+Whether this system confines programs ([sandbox.md](sandbox.md)). Without a program it starts a
+confined copy of itself that tries what the sandbox must deny and prints one line per attempt
+(`denied: …`, `allowed: …`, `works: …`, `broken: …`). With a program it runs that program confined,
+with the given read and executable paths and the system's shared libraries, and passes its output
+through untouched; its own lines then go to standard error. `--read`, `--exec` and the program
+are absolute paths. Exit status: 0 when every attempt is as required (or the program succeeded), 1 otherwise,
+2 when GridCraft has no sandbox for this kind of system (a launch refused on a supported system,
+such as a Linux kernel without Landlock, is 1).
+
 ## `check`
 
 ```sh
