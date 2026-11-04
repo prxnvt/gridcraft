@@ -12,6 +12,14 @@ use crate::theme::{self, Tokens};
 
 /// Lines the formula bar (and the in-cell editor) grows to before it scrolls.
 pub const MAX_LINES: usize = 5;
+/// The most lines a drag of the bar's bottom edge can give it (the window caps it at half its
+/// height first).
+pub const MAX_DRAG_LINES: usize = 100;
+/// How far the bar's bottom edge reaches up into the bar as a resize handle (its bottom margin).
+const HANDLE: f32 = 4.0;
+/// What an expanded bar leaves below it: the status bar (26) and sheet tabs (32), and the
+/// worksheet's column headings and two rows, so the grid never disappears in a short window.
+const KEEP_BELOW: f32 = 26.0 + 32.0 + crate::grid::COL_HEADER_H + 2.0 * gridcraft_engine::model::DEFAULT_ROW_HEIGHT;
 /// The bar's height at one line.
 const ONE_LINE: f32 = 30.0;
 /// What the bar adds around the field's rows: the panel's margins (3 + 3), the field's (3 + 3)
@@ -40,11 +48,22 @@ pub struct BarLayout {
     pub visible_lines: usize,
     /// The caret while editing in the bar.
     pub caret: Option<Rect>,
+    /// The bottom edge that resizes the bar.
+    pub handle: Rect,
 }
 
 impl Default for BarLayout {
     fn default() -> Self {
-        BarLayout { name_box: Rect::NOTHING, buttons: Rect::NOTHING, field: Rect::NOTHING, height: 0.0, lines: 1, visible_lines: 1, caret: None }
+        BarLayout {
+            name_box: Rect::NOTHING,
+            buttons: Rect::NOTHING,
+            field: Rect::NOTHING,
+            height: 0.0,
+            lines: 1,
+            visible_lines: 1,
+            caret: None,
+            handle: Rect::NOTHING,
+        }
     }
 }
 
@@ -73,13 +92,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let font = theme::ui_font(13.0);
     let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
     let last = BarLayout::get(ui.ctx());
-    // Height follows the content's line count (last frame's), 1 to MAX_LINES; the chevron pins it
-    // at MAX_LINES. It eases only when that target changes.
-    let lines = if app.ui.formula_bar_expanded { MAX_LINES } else { last.lines.clamp(1, MAX_LINES) };
+    // Height follows the content's line count (last frame's), 1 to MAX_LINES; expanded (the
+    // chevron), it is the height the bottom edge was dragged to. It eases only when that target
+    // changes.
+    let most = max_lines(ui.ctx().content_rect().height(), ui.available_rect_before_wrap().height(), row_h);
+    let lines = if app.ui.formula_bar_expanded { app.ui.formula_bar_lines.clamp(1, most) } else { last.lines.clamp(1, MAX_LINES) };
     let target = one_line(row_h) + (lines - 1) as f32 * row_h;
     let h = ui.ctx().animate_value_with_time(egui::Id::unique("formula_bar.height"), target, EASE_SECONDS);
     let mut layout = BarLayout { height: h, ..Default::default() };
-    egui::Panel::top("formula_bar")
+    let panel = egui::Panel::top("formula_bar")
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 8, right: 8, top: 3, bottom: 3 }))
         .show(ui, |ui| {
@@ -156,7 +177,60 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 }
             });
         });
+    layout.handle = resize_handle(app, ui, panel.response.rect, row_h, most);
     ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(), layout));
+}
+
+/// The most lines the bar takes in a window `window_h` tall with `room` left under the ribbon:
+/// half the window, as in Excel (never fewer than the chevron's [`MAX_LINES`]), and no more than
+/// leaves [`KEEP_BELOW`] for the status bar, sheet tabs and a few rows of the grid.
+fn max_lines(window_h: f32, room: f32, row_h: f32) -> usize {
+    let lines_in = |h: f32| {
+        let fit = ((h - one_line(row_h)) / row_h).floor();
+        if fit.is_finite() && fit > 0.0 { fit as usize + 1 } else { 1 }
+    };
+    lines_in(window_h * 0.5).clamp(MAX_LINES, MAX_DRAG_LINES).min(lines_in(room - KEEP_BELOW))
+}
+
+/// The lines a bar whose top is at `top` shows with its bottom edge dragged to `y`, in whole lines.
+fn dragged_lines(y: f32, top: f32, row_h: f32, most: usize) -> usize {
+    let extra = ((y - top - one_line(row_h)) / row_h).round();
+    if extra.is_finite() && extra > 0.0 { (extra as usize + 1).min(most) } else { 1 }
+}
+
+/// The bar's bottom edge: dragging it sets the bar's height in whole lines, as in Excel. The bar
+/// follows the pointer; the release runs `view.expandFormulaBar` with the lines, so one drag is
+/// one step (one line collapses the bar).
+fn resize_handle(app: &mut SheetApp, ui: &mut egui::Ui, bar: Rect, row_h: f32, most: usize) -> Rect {
+    let handle = Rect::from_x_y_ranges(bar.x_range(), (bar.bottom() - HANDLE)..=bar.bottom());
+    let resp = ui.interact(handle, egui::Id::unique("formula_bar.resize"), Sense::drag());
+    let name = app.ui.language.tr("Resize formula bar");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    // The state before the drag: the preview changes it, the release puts it back for the command.
+    let before = resp.id.with("before");
+    if resp.drag_started() {
+        let state = (app.ui.formula_bar_expanded, app.ui.formula_bar_lines);
+        ui.ctx().data_mut(|d| d.insert_temp(before, state));
+    }
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.drag_stopped()) {
+        let lines = dragged_lines(p.y, bar.top(), row_h, most);
+        if resp.drag_stopped() {
+            if let Some((expanded, kept)) = ui.ctx().data_mut(|d| d.remove_temp::<(bool, usize)>(before)) {
+                (app.ui.formula_bar_expanded, app.ui.formula_bar_lines) = (expanded, kept);
+            }
+            app.run_or_alert("view.expandFormulaBar", json!({"lines": lines}));
+        } else {
+            app.ui.formula_bar_expanded = lines > 1;
+            if lines > 1 {
+                app.ui.formula_bar_lines = lines;
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+    handle
 }
 
 /// Resolve ownership on every frame; never cache a spill range in presentation state.
@@ -722,7 +796,9 @@ fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, e
 /// The formula bar in Python mode: the code editor (monospace, Python colours). Its keys are
 /// applied in input order with the typing: Enter starts a new line with the indentation, Tab and
 /// Shift+Tab indent, Ctrl+Enter (Cmd+Enter on macOS) commits through `python.set`, Esc cancels and
-/// Ctrl+Alt+Shift+P leaves Python mode.
+/// Ctrl+Alt+Shift+P leaves Python mode. Right after a click on the sheet inserted an `xl("…")`
+/// reference, the arrow keys move the pointed cell and Shift+arrows extend it, as in formula point
+/// mode; typing or moving the caret ends the pointing.
 fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32, max_height: f32) -> EditorInfo {
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
     // A message box (the code was refused) or a dialog over the edit has the keyboard; the
@@ -737,10 +813,14 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
         if std::mem::take(&mut ed.request_focus) || ui.memory(|m| m.focused()).is_none() {
             ui.memory_mut(|m| m.request_focus(id));
         }
+        if ed.point_at_caret() && ui.memory(|m| m.has_focus(id)) {
+            python_point_keys(app, ui, &mut ed);
+        }
         if std::mem::take(&mut ed.sync_caret) {
             caret = Some(ed.caret);
         }
     }
+    let before = ed.point.is_some().then(|| ed.text.clone());
     let name = app.ui.language.tr("Formula Bar").to_string();
     let stop = |ev: &egui::Event| python_key(ev).is_some();
     let options = FieldOptions {
@@ -757,6 +837,10 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
     if !blocked && caret.is_none() {
         (ed.caret, ed.anchor) = out.selection;
     }
+    // Typing, or moving the caret off the pointed reference, ends the pointing.
+    if before.is_some_and(|before| before != ed.text) || (ed.point.is_some() && caret.is_none() && !ed.point_at_caret()) {
+        ed.end_pointing();
+    }
     let info = EditorInfo { lines: out.lines, caret: out.caret };
     app.editor = Some(ed);
     match out.stop.as_ref().and_then(python_key) {
@@ -768,6 +852,37 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
         None => {}
     }
     info
+}
+
+/// The arrow keys while a Python mode edit points at a cell: as in formula point mode, they move
+/// the pointed cell (Ctrl+arrow to the edge of the data) and with Shift extend the pointed range,
+/// instead of moving the caret in the code.
+fn python_point_keys(app: &mut SheetApp, ui: &mut egui::Ui, ed: &mut crate::editor::EditState) {
+    let step = |key: Key| match key {
+        Key::ArrowUp => Some((-1, 0)),
+        Key::ArrowDown => Some((1, 0)),
+        Key::ArrowLeft => Some((0, -1)),
+        Key::ArrowRight => Some((0, 1)),
+        _ => None,
+    };
+    // In input order; Alt+arrow, and Ctrl+arrow where Ctrl isn't the command key, stay with the code.
+    let mut moves = Vec::new();
+    ui.input_mut(|i| {
+        i.events.retain(|ev| match ev {
+            egui::Event::Key { key, pressed: true, modifiers: m, .. } if !m.alt && (m.command || !m.ctrl) => match step(*key) {
+                Some((dr, dc)) => {
+                    moves.push((dr, dc, m.shift, m.command));
+                    false
+                }
+                None => true,
+            },
+            _ => true,
+        });
+    });
+    let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
+    for (dr, dc, extend, jump) in moves {
+        crate::grid::point_move(app, ed, dr, if rtl { -dc } else { dc }, extend, jump);
+    }
 }
 
 fn cycle_anchor(ed: &mut crate::editor::EditState) {
