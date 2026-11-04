@@ -2,6 +2,7 @@ use super::editor::popup_dismissed;
 use super::geo::Geo;
 use super::tables::filter_table_range;
 use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
+use gridcraft_engine::core::{CellError, CellRef, Value};
 
 /// Draws the filter-header popup: sort, search/select-all, apply/clear, a lazily installed table autofilter, new-open search focus and dismissal.
 pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
@@ -128,7 +129,14 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let resp = egui::Area::new(egui::Id::unique("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
+            // On a Python cell: its return type and Convert to Normal Cell.
+            if crate::python_card::menu_items(app, ui) {
+                close = true;
+            }
             let insert_copied = insert_copied_item(app);
+            // On a cell with a link Excel offers to edit, open or remove it (#2120).
+            let link =
+                app.session.active().and_then(|d| d.wb.active().and_then(|sh| sh.hyperlinks.get(&d.selection.active)).map(|l| l.target.clone()));
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
                 ("Copy", "edit.copy"),
@@ -154,6 +162,14 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             if let Some(item) = insert_copied {
                 items.insert(6, item);
             }
+            if link.is_some()
+                && let Some(i) = items.iter().position(|(_, id)| *id == "ui:insertLink")
+            {
+                items.splice(
+                    i..=i,
+                    [("Edit Hyperlink…", "ui:insertLink"), ("Open Hyperlink", "ui:openLink"), ("Remove Hyperlink", "edit.clearHyperlinks")],
+                );
+            }
             if show_details_offered(app)
                 && let Some(i) = items.iter().position(|(_, id)| *id == "data.sortDescending")
             {
@@ -178,6 +194,11 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:newNote" => app.open_dialog("comment", json!({"threaded": false})),
                         "ui:defineName" => app.open_dialog("defineName", json!({})),
                         "ui:insertLink" => app.open_dialog("insertLink", json!({})),
+                        "ui:openLink" => {
+                            if let Some(target) = &link {
+                                super::interact::follow_link(app, target);
+                            }
+                        }
                         "ui:pickList" => app.open_dialog("pickList", json!({})),
                         "ui:filterValue" => {
                             if let Some(d) = app.session.active() {
@@ -411,16 +432,34 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The warning button beside an active cell holding a number stored as text, as in Excel: its
-/// menu names the problem and offers Convert to Number for the selection (#1994).
+/// What the warning button beside the active cell is about.
+#[derive(Clone, Copy, PartialEq)]
+enum CellProblem {
+    NumberAsText,
+    /// A Python cell that shows an error (`#BLOCKED!` for code this version doesn't run).
+    Python(CellError),
+}
+
+fn cell_problem(sh: &Sheet, c: CellRef) -> Option<CellProblem> {
+    let cell = sh.cell(c)?;
+    if cell.py.is_some() {
+        return match cell.value {
+            Value::Error(e) => Some(CellProblem::Python(e)),
+            _ => None,
+        };
+    }
+    gridcraft_engine::cmd::formulas::number_stored_as_text(cell).map(|_| CellProblem::NumberAsText)
+}
+
+/// The warning button beside the active cell, as in Excel, for a number stored as text (its menu
+/// names the problem and offers Convert to Number for the selection, #1994) and for a Python cell
+/// that shows an error (it says why, and its menu opens the cell's card).
 pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
     if app.editor.is_some() || app.dialog.is_some() || sh.show_formulas || app.grid.drag != Drag::None {
         return;
     }
     let Some(active) = app.session.active().map(|d| d.selection.active) else { return };
-    if sh.cell(active).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_none() {
-        return;
-    }
+    let Some(problem) = cell_problem(sh, active) else { return };
     let cell = geo.cell_rect(sh, active);
     let size = vec2(18.0, 18.0);
     // Left of the cell, or right of it when that would cover the row headings.
@@ -430,7 +469,14 @@ pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, 
         return;
     }
     let lang = crate::i18n::current(ui.ctx());
-    let resp = ui.interact(tag, egui::Id::unique("gridcraft.error_check_tag"), Sense::click()).on_hover_text(lang.tr("Number Stored as Text"));
+    let (title, hint) = match problem {
+        CellProblem::NumberAsText => (lang.tr("Number Stored as Text").to_string(), lang.tr("Number Stored as Text").to_string()),
+        // Only #BLOCKED! comes from this version not running the code; another error (a file's
+        // cached #PYTHON!) is named without that reason.
+        CellProblem::Python(CellError::Blocked) => (CellError::Blocked.as_str().to_string(), lang.tr(crate::python_card::NOT_RUN).to_string()),
+        CellProblem::Python(e) => (e.as_str().to_string(), e.as_str().to_string()),
+    };
+    let resp = ui.interact(tag, egui::Id::unique("gridcraft.error_check_tag"), Sense::click()).on_hover_text(hint.as_str());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, lang.tr("Error checking options")));
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
@@ -446,11 +492,27 @@ pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, 
     ));
     p.text(c, egui::Align2::CENTER_CENTER, "!", egui::FontId::proportional(10.0), t.warning_ink);
     egui::Popup::menu(&resp).show(|ui| {
-        ui.label(egui::RichText::new(lang.tr("Number Stored as Text")).strong());
-        ui.separator();
-        if ui.button(lang.tr("Convert to Number")).clicked() {
-            app.run_or_alert("formulas.convertToNumber", json!({}));
-            ui.close();
+        ui.label(egui::RichText::new(title.as_str()).strong());
+        match problem {
+            CellProblem::NumberAsText => {
+                ui.separator();
+                if ui.button(lang.tr("Convert to Number")).clicked() {
+                    app.run_or_alert("formulas.convertToNumber", json!({}));
+                    ui.close();
+                }
+            }
+            CellProblem::Python(e) => {
+                if e == CellError::Blocked {
+                    ui.label(hint.as_str());
+                }
+                ui.separator();
+                if ui.button(lang.tr("Show Card")).clicked() {
+                    if let Err(e) = crate::python_card::open(app) {
+                        app.message = Some(("GridCraft".into(), e));
+                    }
+                    ui.close();
+                }
+            }
         }
     });
 }

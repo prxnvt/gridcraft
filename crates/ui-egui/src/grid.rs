@@ -22,6 +22,8 @@ type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 /// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
 
+mod active_row;
+pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
 mod editor;
@@ -101,6 +103,10 @@ pub enum Drag {
     Select,
     Rows(u32),
     Cols(u32),
+    /// Point mode over the row headers: the formula's reference runs from this row to the pointer.
+    PointRows(u32),
+    /// Point mode over the column headers: the formula's reference runs from this column to the pointer.
+    PointCols(u32),
     /// Reordering one contiguous whole-column selection by its header.
     MoveCols {
         source: RangeRef,
@@ -245,6 +251,8 @@ pub struct GridState {
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
     pub context_menu: Option<Pos2>,
+    /// The Python cell whose card is open (its cached result's type and preview).
+    pub py_card: Option<crate::python_card::Card>,
     /// The frame a right-click opened `context_menu` in: that click's own press doesn't close it.
     pub context_menu_frame: u64,
     /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.

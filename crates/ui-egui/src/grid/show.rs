@@ -20,7 +20,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let available = ui.available_rect_before_wrap();
     // A right-to-left sheet has its vertical scrollbar on the left.
     let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
-    let bar = 14.0_f32.min(available.width());
+    let bar = vertical_bar_width(app, available);
     let rect = if rtl {
         Rect::from_min_max(pos2(available.left() + bar, available.top()), available.max)
     } else {
@@ -213,6 +213,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     update_clipboard_repaint(app, ui, now);
 }
 
+/// The vertical scroll bar's width: none when the workbook hides it (File › Options ›
+/// Display options for this workbook), and the grid takes its room.
+fn vertical_bar_width(app: &SheetApp, available: Rect) -> f32 {
+    if app.session.active().is_none_or(|d| d.wb.view.show_vertical_scroll) { 14.0_f32.min(available.width()) } else { 0.0 }
+}
+
 fn vertical_scroll_track(available: Rect, grid: Rect, rtl: bool) -> (f32, f32) {
     if rtl { (available.left(), grid.left()) } else { (grid.right(), available.right()) }
 }
@@ -322,7 +328,7 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
 }
 
 fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
-    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
+    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu, app.grid.py_card);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
         app.grid.touch_pan = false;
@@ -349,6 +355,7 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     fill_options_tag(app, ui, geo, sh);
     object_menu(app, ui);
     error_check_tag(app, ui, geo, sh);
+    crate::python_card::show(app, ui, geo, sh, previous_popups.4 == app.grid.py_card);
 }
 
 fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoom: u16, now: f64) {
@@ -404,7 +411,19 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(QuadrantPaint { painter: &p, geo, workbook: wb, sheet_index: si, sheet: sh, rows: *rows, cols: *cols, cf, tokens: t });
+        let active_row = app.ui.highlight_active_row.then_some(sel.active.row);
+        paint_quadrant(QuadrantPaint {
+            painter: &p,
+            geo,
+            workbook: wb,
+            sheet_index: si,
+            sheet: sh,
+            rows: *rows,
+            cols: *cols,
+            cf,
+            tokens: t,
+            active_row,
+        });
         paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
     }
     // Freeze lines.
@@ -420,6 +439,10 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a
 /// ScrollArea containing all million rows. Keep the scroll extent stable during a drag.
 fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &Geo, track_x: (f32, f32), limit: f32, t: &Tokens) {
+    // A workbook that hides its vertical scroll bar leaves it no width.
+    if track_x.1 <= track_x.0 {
+        return;
+    }
     let track = Rect::from_min_max(pos2(track_x.0, geo.cells.top() + geo.frozen_h), pos2(track_x.1, geo.cells.bottom()));
     if track.height() <= 0.0 || track.width() <= 0.0 {
         return;

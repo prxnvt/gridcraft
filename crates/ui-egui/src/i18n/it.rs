@@ -155,6 +155,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "Individua errore",
         "Circular References" => "Riferimenti circolari",
         "Python Mode" => "Modalità Python",
+        "Python Object" => "Oggetto Python",
+        "Excel Value" => "Valore di Excel",
+        "Convert to Normal Cell" => "Converti in cella normale",
+        "Show Card" => "Mostra scheda",
+        "This version of GridCraft stores Python code but does not run it." => {
+            "Questa versione di GridCraft salva il codice Python ma non lo esegue."
+        }
+        "Insert\nPython" => "Inserisci\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Inserisci Python (Ctrl+Alt+Shift+P)",
         "Evaluate Formula" => "Valuta formula",
         "Watch Window" => "Finestra controlli",
         "Calculation\nOptions" => "Opzioni di\ncalcolo",
@@ -410,6 +419,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|Save" => "Salvataggio",
         "Options|Editing" => "Modifica",
         "Show formula bar" => "Mostra barra della formula",
+        "Highlight the active cell's row" => "Evidenzia la riga della cella attiva",
         "Enable AutoComplete for cell values" => "Abilita Completamento automatico per i valori delle celle",
         "Save .xlsx workbooks automatically after every change" => "Salva automaticamente le cartelle di lavoro .xlsx dopo ogni modifica",
         "Workbook calculation" => "Calcolo della cartella di lavoro",
