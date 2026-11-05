@@ -348,6 +348,8 @@ pub(super) struct DocRun {
     /// While the list of cells isn't kept ([`DocRun::tracked`] is false): the workbook holds Python
     /// code. Kept from what each change touched, so a workbook without any is never scanned twice.
     pub holds_code: bool,
+    /// What the code imports that this Python doesn't have.
+    pub packages: super::packages::PackageCheck,
 }
 
 impl DocRun {

@@ -16,6 +16,7 @@
 
 mod environment;
 mod inputs;
+mod packages;
 mod plan;
 mod runner;
 
@@ -33,6 +34,7 @@ pub use gridcraft_python::describe::{
 };
 pub use gridcraft_python::diagnostics::{Action, CATALOG, Diagnostic, Kind, Scope, Severity};
 pub use gridcraft_python::interp::{MIN_VERSION, Version};
+pub use gridcraft_python::lint::{Finding, install_name, lint, missing_modules};
 pub use gridcraft_python::run::MAX_TIMEOUT;
 pub use gridcraft_python::sandbox_support;
 use serde_json::{Value as Json, json};
@@ -185,6 +187,8 @@ pub struct PythonStats {
     pub areas_hashed: u64,
     /// Clients created.
     pub clients: u64,
+    /// Pieces of code read for the imports they need.
+    pub code_reads: u64,
 }
 
 static STATE_BUSY: LazyLock<Diagnostic> = LazyLock::new(|| Diagnostic::new("state.busy", "", None));
@@ -344,7 +348,9 @@ impl Session {
             }
             return out;
         }
-        out.extend(self.python.env.report.diagnostic.iter().map(|x| entry(x, None)));
+        // That pandas is missing is said once, about the workbook, when it has something to say it about.
+        out.extend(self.python.env.report.diagnostic.iter().filter(|x| x.kind.id != "packages.noPandas").map(|x| entry(x, None)));
+        out.extend(self.python_workbook_diagnostics());
         let Some(r) = self.python.docs.get(&d.uid) else { return out };
         for e in &r.entries {
             if let Some(x) = self.python_diagnostic(e.sheet, e.at).filter(|x| x.kind.scope != Scope::Environment) {
@@ -352,6 +358,35 @@ impl Session {
             }
         }
         out
+    }
+
+    /// What is worth saying about the active workbook's code as a whole, once the package list is
+    /// known: `packages.missing` for each module it imports that this Python doesn't have, with the
+    /// module as the detail and the first cell that imports it, and `packages.noPandas`. An empty
+    /// list isn't known, so it reports nothing.
+    pub fn python_workbook_diagnostics(&self) -> Vec<PythonDiagnosticEntry> {
+        let Some(r) = self.active().and_then(|d| self.python.docs.get(&d.uid)).filter(|r| r.tracked && !r.entries.is_empty()) else {
+            return Vec::new();
+        };
+        let packages = &self.python.env.report.packages;
+        if packages.is_empty() {
+            return Vec::new();
+        }
+        let mut out: Vec<PythonDiagnosticEntry> = r
+            .packages
+            .missing
+            .iter()
+            .map(|m| PythonDiagnosticEntry { diagnostic: Diagnostic::new("packages.missing", m.module.clone(), None), cell: Some((m.sheet, m.cell)) })
+            .collect();
+        if !packages.iter().any(|(name, _)| name.eq_ignore_ascii_case("pandas")) {
+            out.push(PythonDiagnosticEntry { diagnostic: Diagnostic::new("packages.noPandas", "", None), cell: None });
+        }
+        out
+    }
+
+    /// Moves on when the package list may have changed, for what is worked out from it.
+    pub fn python_packages_generation(&self) -> u64 {
+        self.python.env.generation
     }
 
     /// Can Python cells run here, and in what. The check takes seconds and runs in the background:
@@ -478,7 +513,7 @@ impl Session {
     fn python_refresh(&mut self) -> bool {
         let enabled = self.python.enabled();
         let gate = self.python.env.gate();
-        let Runtime { docs: runs, stats, .. } = &mut self.python;
+        let Runtime { docs: runs, stats, env, .. } = &mut self.python;
         let docs = &mut self.docs;
         runs.retain(|uid, _| docs.iter().any(|d| d.uid == *uid));
         let mut changed = false;
@@ -490,6 +525,7 @@ impl Session {
             } else {
                 r.stay_off(d)
             };
+            r.check_packages(&d.wb, env.generation, &env.report.packages, stats);
         }
         changed
     }
@@ -736,6 +772,9 @@ pub(crate) fn diagnostic_entry_json(wb: &Workbook, e: &PythonDiagnosticEntry) ->
     let cell = e.cell.and_then(|(sheet, at)| wb.sheet(sheet).map(|sh| format!("{}!{}", gridcraft_core::quote_sheet(&sh.name), at.a1())));
     if let Some(o) = row.as_object_mut() {
         o.insert("cell".into(), json!(cell));
+        if e.diagnostic.kind.id == "packages.missing" {
+            o.insert("install".into(), json!(install_name(&e.diagnostic.detail)));
+        }
     }
     row
 }
