@@ -764,7 +764,10 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     let value: Value = match (ov, extra) {
         (Some(t), _) => Value::text(t.as_str()),
         (None, Some(v)) => v.clone(),
-        _ => cell.map(|x| x.value.scalar()).unwrap_or(Value::Empty),
+        // A Python cell waiting for its new result still has the last one: the file keeps that.
+        _ => {
+            cell.map(|x| x.py.as_ref().filter(|p| p.busy).and_then(|p| p.result_value()).unwrap_or_else(|| x.value.scalar())).unwrap_or(Value::Empty)
+        }
     };
     let value = match value {
         Value::Array(a) => a.get(0, 0).cloned().unwrap_or(Value::Empty),

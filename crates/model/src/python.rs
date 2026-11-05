@@ -32,6 +32,10 @@ pub struct PyCode {
     /// The cell's inputs changed while calculation was manual: its value is out of date until
     /// the workbook is calculated.
     pub stale: bool,
+    /// The cell is waiting to run or running: it shows `#BUSY!` while its kept result, and what that
+    /// result spilled, stay until the new one arrives. A state of this session, never saved.
+    #[serde(skip)]
+    pub busy: bool,
 }
 
 /// A Python result kept on the cell.
