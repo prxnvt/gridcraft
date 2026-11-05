@@ -97,6 +97,13 @@ fn prefs_enabled() -> bool {
 }
 
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
+/// `X,Y` for `--window-pos`.
+fn parse_window_pos(v: &str) -> Option<[f32; 2]> {
+    let (x, y) = v.split_once(',')?;
+    let (x, y): (f32, f32) = (x.trim().parse().ok()?, y.trim().parse().ok()?);
+    (x.is_finite() && y.is_finite()).then_some([x, y])
+}
+
 fn log_dir() -> Option<std::path::PathBuf> {
     Some(config_dir()?.join("logs"))
 }
@@ -281,10 +288,19 @@ fn main() -> eframe::Result<()> {
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut control_token: Option<String> = std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok();
     let mut sample: Option<String> = None;
+    let mut window_pos: Option<[f32; 2]> = None;
     let mut files: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            // For test runs: where the window opens, in points from the main display's top left.
+            "--window-pos" => {
+                i += 1;
+                window_pos = args.get(i).and_then(|v| parse_window_pos(v));
+                if window_pos.is_none() {
+                    eprintln!("--window-pos takes X,Y");
+                }
+            }
             "--control" => {
                 i += 1;
                 control_port = args.get(i).and_then(|p| p.parse().ok());
@@ -344,6 +360,9 @@ fn main() -> eframe::Result<()> {
         .with_min_inner_size([640.0, 420.0])
         .with_app_id("ai.storyteller.gridcraft")
         .with_drag_and_drop(true);
+    if let Some(at) = window_pos {
+        viewport = viewport.with_position(at);
+    }
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
