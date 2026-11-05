@@ -257,7 +257,8 @@ one `Client`, made when first needed and dropped with the workbook, which stops 
   reference the change reaches is read again, and an area several cells read is read once.
 - **Busy and stale.** `PyCode::busy` (never saved) makes a due cell show `#BUSY!` through any
   recalculation while its kept result, and what that result spilled, stay; a save writes the kept
-  result. Under manual calculation (`python.calculation`, or the workbook's own manual mode) due
+  result. `PyCode::failed` (never saved) keeps the error of a run that left no result, for the same
+  wait. Under manual calculation (`python.calculation`, or the workbook's own manual mode) due
   cells are marked stale instead, and keep their value until `python.run` or `python.runAll`.
 - **Inputs** (`python/inputs.rs`). Each literal `xl("…")` is resolved by the parent as a formula's
   reference would be (`calc::evaluate_reference`): cells, ranges, a spill, other sheets, names and
@@ -269,7 +270,9 @@ one `Client`, made when first needed and dropped with the workbook, which stops 
   doesn't run again until its code or inputs change or someone asks. After more than three lost
   workers in one go the cells still waiting are left stale. A result that changes what an earlier cell
   reads sends that cell back to run, for eight passes at most; past that those cells stay as they are,
-  marked stale, so cells that feed each other end. A worker that doesn't start is tried three more
+  marked stale, so cells that feed each other end. On such a pass a cell shows `#BUSY!` only when its
+  turn comes, and until then reads as what it last gave, so a formula over a later cell gives the
+  earlier one its result rather than `#BUSY!`. A worker that doesn't start is tried three more
   times, as a thread starting another process can leak a descriptor that makes the launcher refuse.
 - **What is said.** `Session::python_diagnostic` gives one diagnostic per cell, from the catalog in
   `gridcraft_python::diagnostics`; `python.diagnostics` lists them. Each workbook keeps its last 200

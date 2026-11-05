@@ -201,6 +201,7 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
         Some(o) => {
             py.output = o.output.clone();
             py.stale = o.stale;
+            py.failed = o.failed;
             None
         }
         None => Some(gridcraft_model::python::BLOCKED),

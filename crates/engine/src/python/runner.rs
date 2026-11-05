@@ -235,9 +235,13 @@ pub(super) fn write_cell(d: &mut DocState, sheet: usize, at: CellRef, write: Wri
         py.busy = false;
         py.stale = false;
         match write {
-            Write::Result(out) => py.output = Some(out),
+            Write::Result(out) => {
+                py.output = Some(out);
+                py.failed = None;
+            }
             Write::Error(e) => {
                 py.output = None;
+                py.failed = Some(e);
                 cell.value = Value::Error(e);
             }
         }
@@ -304,6 +308,12 @@ impl DocRun {
         }
         let inputs = reader.inputs(&lits);
         drop(reader);
+        // Its inputs are read: now it says it is running.
+        if let Some(e) = self.entries.get_mut(index)
+            && std::mem::take(&mut e.quiet)
+        {
+            self.sync_flags(d);
+        }
         match inputs {
             Err(problem) => self.settle_problem(d, index, fp, problem, cx, stats),
             Ok(inputs) => {
@@ -366,6 +376,7 @@ impl DocRun {
             }
             e.state = CellState::Clean;
             e.unsettled = false;
+            e.quiet = false;
             e.fp = fp;
             e.ran = Some(fp);
             e.in_worker = in_worker;
@@ -553,6 +564,7 @@ impl DocRun {
             e.ran = None;
             e.state = CellState::Queued;
             e.unsettled = false;
+            e.quiet = false;
         }
         self.cursor = 0;
         if let Some(f) = self.inflight.as_mut() {
@@ -573,6 +585,7 @@ impl DocRun {
         for (i, e) in self.entries.iter_mut().enumerate().skip(index) {
             e.ran = None;
             e.unsettled = false;
+            e.quiet = false;
             if i == index || !cx.manual {
                 e.state = CellState::Queued;
             } else if e.state != CellState::Queued {

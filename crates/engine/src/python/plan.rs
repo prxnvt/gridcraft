@@ -80,6 +80,10 @@ pub(super) struct Entry {
     pub state: CellState,
     /// A later cell's result changed what this cell read, and the passes ran out.
     pub unsettled: bool,
+    /// It waits to run again because of a later cell's result, and shows `#BUSY!` only when its turn
+    /// comes. Were it to show that at once, a formula that reads it would give `#BUSY!` to the cell
+    /// that runs first, and that cell would never see its result.
+    pub quiet: bool,
     /// The current worker has run this cell's code, so its variables are there.
     pub in_worker: bool,
     /// The cell's flags as written: (busy, stale).
@@ -101,6 +105,7 @@ impl Entry {
             ran: None,
             state: CellState::Clean,
             unsettled: false,
+            quiet: false,
             in_worker: false,
             shown: (py.busy, py.stale),
             diag: None,
@@ -112,6 +117,7 @@ impl Entry {
         self.ran = from.ran;
         self.state = from.state;
         self.unsettled = from.unsettled;
+        self.quiet = from.quiet;
         self.in_worker = from.in_worker;
         self.diag = from.diag;
     }
@@ -147,7 +153,7 @@ impl Entry {
 
     /// `#SPILL!` comes and goes with what is in the way, without the cell running.
     fn sync_spill(&mut self, sh: &Sheet, cell: &Cell, py: &PyCode) {
-        let spill = py.output.is_some() && cell.value == Value::Error(CellError::Spill);
+        let spill = cell.value == Value::Error(CellError::Spill) && py.output.as_ref().is_some_and(|o| matches!(o.value, Value::Array(_)));
         let says = self.diag.as_ref().is_some_and(|d| d.kind.id == "result.spill");
         if spill && !says {
             self.diag = Some(Diagnostic::new("result.spill", spill_detail(sh, self.at, py), None));
@@ -517,10 +523,12 @@ impl DocRun {
             self.demote_queued();
         }
         let mut first = self.first_due(seq_first);
+        let mut quiet = false;
         if let (Source::Result(k), Some(f), false) = (source, first, cx.manual)
             && f <= k
         {
             first = self.pass_or_settle(f, k);
+            quiet = first.is_some_and(|f| f <= k);
         }
         for e in &mut self.entries {
             if e.state == CellState::Stale && e.ran == Some(e.fp) {
@@ -528,7 +536,7 @@ impl DocRun {
             }
         }
         if let Some(f) = first {
-            self.mark_due(f, cx);
+            self.mark_due(f, cx, quiet);
         }
         self.recount();
         self.sync_flags(d)
@@ -560,13 +568,14 @@ impl DocRun {
         self.first_due(None).filter(|f| *f > done)
     }
 
-    fn mark_due(&mut self, first: usize, cx: Cx) {
+    fn mark_due(&mut self, first: usize, cx: Cx, quiet: bool) {
         let target = if cx.manual || cx.gate == Gate::No { CellState::Stale } else { CellState::Queued };
         for e in self.entries.iter_mut().skip(first) {
             // A cell someone asked to run stays queued under manual calculation.
             if e.state != CellState::Queued {
                 e.state = target;
                 e.unsettled = false;
+                e.quiet = quiet && target == CellState::Queued;
             }
         }
         self.cursor = self.cursor.min(first);
@@ -582,6 +591,7 @@ impl DocRun {
             if e.state == CellState::Queued && running != Some(i) {
                 e.state = CellState::Stale;
                 e.ran = None;
+                e.quiet = false;
             }
         }
         self.recount();
@@ -597,7 +607,7 @@ impl DocRun {
             .entries
             .iter_mut()
             .filter_map(|e| {
-                let want = (e.state == CellState::Queued, e.state == CellState::Stale || e.unsettled);
+                let want = (e.state == CellState::Queued && !e.quiet, e.state == CellState::Stale || e.unsettled);
                 (e.shown != want).then(|| {
                     e.shown = want;
                     (e.sheet, e.at, want)
@@ -713,8 +723,8 @@ impl Place<'_> {
 }
 
 /// Writes a cell's flags: (busy, stale). A cell without a kept result shows `#BUSY!` while it is
-/// busy, and `#BLOCKED!` when that ends without one. No undo step, and what reads the cells is
-/// recalculated.
+/// busy, and when that ends without one, the error of its last run, or `#BLOCKED!` if it hasn't run.
+/// No undo step, and what reads the cells is recalculated.
 pub(super) fn write_flags(d: &mut DocState, writes: &[(usize, CellRef, (bool, bool))]) {
     let done = crate::cmd::commit(d, |cx| {
         for (sheet, at, (busy, stale)) in writes {
@@ -727,7 +737,7 @@ pub(super) fn write_flags(d: &mut DocState, writes: &[(usize, CellRef, (bool, bo
                 if *busy {
                     cell.value = Value::Error(CellError::Busy);
                 } else if cell.value == Value::Error(CellError::Busy) {
-                    cell.value = Value::Error(CellError::Blocked);
+                    cell.value = Value::Error(py.failed.unwrap_or(CellError::Blocked));
                 }
             }
             cx.touch(*sheet, *at);

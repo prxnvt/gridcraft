@@ -36,6 +36,10 @@ pub struct PyCode {
     /// result spilled, stay until the new one arrives. A state of this session, never saved.
     #[serde(skip)]
     pub busy: bool,
+    /// The error its last run ended with, when that run left no result: what it reads as, and shows
+    /// again, while it waits for another run. A state of this session, never saved.
+    #[serde(skip)]
+    pub failed: Option<CellError>,
 }
 
 /// A Python result kept on the cell.

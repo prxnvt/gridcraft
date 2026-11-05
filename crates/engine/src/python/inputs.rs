@@ -165,13 +165,16 @@ pub(super) fn code_hash(code: &str, object: bool) -> u64 {
     h.finish()
 }
 
-/// What a cell holds as an input: its value, or the result it keeps while it waits for a new one.
-fn input_value(cell: &Cell) -> Value {
+/// What a cell holds as an input: its value, or while it waits for a new result what the one it
+/// keeps shows, so that what reads it doesn't see a change when the wait ends with the same result.
+fn input_value(sh: &Sheet, c: CellRef, cell: &Cell) -> Value {
     match cell.py.as_deref() {
         Some(p) if p.busy => match p.result_value() {
-            Some(Value::Array(a)) => a.data.first().cloned().unwrap_or_default(),
+            Some(Value::Array(a)) if a.data.len() == 1 || sh.spill_ranges.contains_key(&c) => a.data.first().cloned().unwrap_or_default(),
+            // Something is in its way.
+            Some(Value::Array(_)) => Value::Error(CellError::Spill),
             Some(v) => v,
-            None => Value::Error(CellError::Busy),
+            None => Value::Error(p.failed.unwrap_or(CellError::Busy)),
         },
         _ => cell.value.clone(),
     }
@@ -181,16 +184,19 @@ fn shows_own_value(cell: &Cell) -> bool {
     !cell.value.is_empty() || cell.formula.is_some()
 }
 
-/// The values in `r` with their positions: stored cells first, then spilled values no cell hides.
-/// The work follows what is stored, not the size of `r`.
+/// The values in `r` that aren't empty, with their positions: stored cells first, then spilled values
+/// no cell hides. The work follows what is stored, not the size of `r`.
 fn for_each_value(sh: &Sheet, r: RangeRef, f: &mut dyn FnMut(CellRef, Value)) {
     for (c, cell) in sh.cells.iter_range(r) {
         if shows_own_value(cell) {
-            f(c, input_value(cell));
+            let v = input_value(sh, c, cell);
+            if !v.is_empty() {
+                f(c, v);
+            }
         }
     }
     for (c, v) in sh.spill.range(r.start..=r.end) {
-        if r.contains(*c) && sh.cell(*c).is_none_or(|cell| !shows_own_value(cell)) {
+        if r.contains(*c) && !v.is_empty() && sh.cell(*c).is_none_or(|cell| !shows_own_value(cell)) {
             f(*c, v.clone());
         }
     }
@@ -296,7 +302,7 @@ impl<'a> Reader<'a> {
 
 fn read_one(sh: &Sheet, c: CellRef) -> Value {
     match sh.cell(c).filter(|cell| shows_own_value(cell)) {
-        Some(cell) => input_value(cell),
+        Some(cell) => input_value(sh, c, cell),
         None => sh.spill.get(&c).cloned().unwrap_or_default(),
     }
 }

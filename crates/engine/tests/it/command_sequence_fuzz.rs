@@ -904,8 +904,9 @@ fn python_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
     }
 }
 
-/// The fake worker's answer: it follows the code alone, so that a cell that reads other Python cells
-/// settles and the same code always gives the same result, as the undo checks need.
+/// The fake worker's answer: it follows the code alone, without what its references spell (moving
+/// cells rewrites those and runs nothing), so that a cell that reads other Python cells settles and
+/// the same code always gives the same result, as the undo checks need.
 fn fake_answer(code: &str, inputs: &BTreeMap<String, Input>) -> Result<Output, PyError> {
     if code.starts_with("[[") {
         let data = vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()];
@@ -917,10 +918,11 @@ fn fake_answer(code: &str, inputs: &BTreeMap<String, Input>) -> Result<Output, P
     if code.is_empty() {
         return Ok(Output::Value(Value::Empty));
     }
-    if code.len().is_multiple_of(7) {
+    if code.chars().filter(|c| *c == '\n').count() == 2 {
         return Ok(Output::Object { type_name: "dict".into(), preview: "{}".into() });
     }
-    Ok(Output::Value(Value::Number((code.len() + inputs.len()) as f64)))
+    let spelled: usize = gridcraft_engine::model::python::xl_calls(code).iter().filter_map(|c| c.span.as_ref()).map(|s| s.len()).sum();
+    Ok(Output::Value(Value::Number((code.len().saturating_sub(spelled) + inputs.len()) as f64)))
 }
 
 fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {

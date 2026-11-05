@@ -1053,6 +1053,82 @@ fn a_cell_reading_a_later_cell_settles_and_cells_feeding_each_other_stop() {
 }
 
 #[test]
+fn a_cell_reading_a_later_blocked_result_settles() {
+    // While the later cell waits it reads as what it will show again, #SPILL!, not as its first value.
+    let (mut s, h) = session();
+    set(&mut s, "A3", "in the way");
+    py(&mut s, "A1", "say xl(\"A2\")");
+    py(&mut s, "A2", "spill 2 1");
+    settle(&mut s);
+    assert_eq!(v(&s, "A2"), Value::Error(CellError::Spill));
+    assert_eq!(v(&s, "A1"), Value::Error(CellError::Spill));
+    assert_eq!(diagnostic(&s, "A1"), None, "it isn't left stale");
+    assert!(runs(&h).len() <= 6, "{:?}", runs(&h));
+}
+
+#[test]
+fn a_cell_reading_a_later_failing_or_empty_cell_settles_soon() {
+    // While the later cell waits it reads as what its last run left, so nothing changes when the
+    // wait ends the same way: the first cell runs twice, not until the passes run out.
+    for later in ["fail", "none"] {
+        let (mut s, h) = session();
+        py(&mut s, "A1", "say xl(\"A2\")");
+        py(&mut s, "A2", later);
+        settle(&mut s);
+        assert_eq!(diagnostic(&s, "A1"), None, "{later}");
+        assert!(runs(&h).len() <= 6, "{later}: {:?}", runs(&h));
+        // An edit that sends them round again changes nothing either.
+        let before = runs(&h).len();
+        s.execute("python.runAll", json!({})).unwrap();
+        settle(&mut s);
+        assert_eq!(runs(&h).len(), before + 2, "{later}");
+    }
+}
+
+#[test]
+fn a_cell_reading_a_formula_over_a_later_cell_gets_its_result() {
+    // No cycle: A1 reads C1, which reads A2, which runs after A1. A1 ran first on #BUSY!, runs again
+    // once A2 has its result, and A2 going round again must not take that from it.
+    let (mut s, h) = session();
+    set(&mut s, "C1", "=A2");
+    py(&mut s, "A1", "say xl(\"C1\")");
+    py(&mut s, "A2", "ret 5");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), NUM(5.0), "the result, not the wait");
+    assert_eq!(diagnostic(&s, "A1"), None);
+    assert!(runs(&h).len() <= 6, "{:?}", runs(&h));
+}
+
+#[test]
+fn a_cell_reading_a_formula_over_itself_settles_when_its_result_does() {
+    let (mut s, h) = session();
+    set(&mut s, "C1", "=A1+1");
+    py(&mut s, "A1", "ret 3 xl(\"C1\")");
+    settle(&mut s);
+    assert_eq!((v(&s, "A1"), v(&s, "C1")), (NUM(3.0), NUM(4.0)));
+    assert_eq!(diagnostic(&s, "A1"), None);
+    assert!(runs(&h).len() <= 3, "{:?}", runs(&h));
+}
+
+#[test]
+fn a_waiting_cell_that_had_failed_shows_its_error_again_when_stopped() {
+    let (mut s, h) = session();
+    py(&mut s, "A1", "hang");
+    py(&mut s, "A2", "fail");
+    s.python_poll(Duration::ZERO);
+    read_requests(&h, 1);
+    s.execute("python.stop", json!({})).unwrap();
+    s.execute("python.run", json!({"cell": "A2"})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "A2"), Value::Error(CellError::Python));
+    s.execute("python.runAll", json!({})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Error(CellError::Busy));
+    s.python_poll(Duration::ZERO);
+    s.execute("python.stop", json!({})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Error(CellError::Python), "not #BLOCKED!: it has run");
+}
+
+#[test]
 fn an_edit_while_a_cell_runs_discards_what_it_ran_on() {
     let (mut s, h) = session();
     set(&mut s, "A1", "1");
