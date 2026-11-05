@@ -593,6 +593,33 @@ pub fn status_item(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
+/// What `ui.inspect` says about Python.
+pub fn inspect(app: &SheetApp) -> Json {
+    let report = app.session.python_report();
+    let pane = app.grid.pane.as_deref();
+    let d = reason(app);
+    let running = app.session.python_running().map(|r| json!({"sheet": r.sheet, "cell": r.cell.a1(), "ms": r.elapsed.as_secs_f64() * 1000.0}));
+    json!({
+        "state": state(app),
+        "reason": d.as_ref().map(|d| d.kind.id),
+        "enabled": app.ui.python.enabled,
+        "workbookEnabled": app.session.python_workbook_enabled(),
+        "hasCells": app.session.python_has_cells(),
+        "enableBar": bar_shows(app),
+        "calculation": app.session.python_calculation(),
+        "interpreter": report.interpreter.as_ref().map(|i| i.path.display().to_string()),
+        "running": running,
+        "optionsPage": app.backstage.as_ref().is_some_and(|b| b.page == crate::backstage::Page::Options && b.options_tab == crate::backstage::OptionsTab::Python),
+        "panes": {
+            "environment": pane == Some(ENVIRONMENT),
+            "packages": pane == Some(PACKAGES),
+            "problems": pane == Some(PROBLEMS),
+            "runLog": pane == Some(RUN_LOG),
+            "permissions": pane == Some(PERMISSIONS),
+        },
+    })
+}
+
 /// What confines the worker on this system, for one kind of thing it can't do.
 pub fn enforcer(what: Guard) -> &'static str {
     let linux = cfg!(target_os = "linux");

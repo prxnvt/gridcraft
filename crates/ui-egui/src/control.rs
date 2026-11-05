@@ -153,6 +153,7 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "editor": app.editor.as_ref().map(|e| editor_json(app, e)),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
         "pythonEditor": crate::python_window::state(app),
+        "python": crate::python_ui::inspect(app),
         "backstage": app.backstage.as_ref().map(|b| b.page.id()),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
         "selectedObject": app.selected_object,
