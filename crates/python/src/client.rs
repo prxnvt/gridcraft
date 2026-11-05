@@ -135,8 +135,14 @@ impl Client {
 
     /// Runs `code` with the `xl()` inputs, in the globals the earlier runs left.
     pub fn submit_run(&mut self, code: &str, inputs: std::collections::BTreeMap<String, Input>) -> Result<u64, Busy> {
+        self.submit_cell(code, inputs, false)
+    }
+
+    /// [`Client::submit_run`] for a cell with its return type: with `object`, a result with no
+    /// single-cell form comes back as a Python object rather than cells to spill.
+    pub fn submit_cell(&mut self, code: &str, inputs: std::collections::BTreeMap<String, Input>, object: bool) -> Result<u64, Busy> {
         let id = self.take_id()?;
-        self.send(Request::Run { id, code: code.to_string(), inputs });
+        self.send(Request::Run { id, code: code.to_string(), inputs, object });
         Ok(id)
     }
 

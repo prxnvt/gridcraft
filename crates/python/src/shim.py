@@ -159,9 +159,21 @@ def _gridcraft_worker():
 
     state = {"inputs": None}
 
+    def table(rows, headers):
+        # A range is a pandas DataFrame, as in Excel; `headers=True` makes its first row the column
+        # names. Without pandas it stays a list of rows.
+        try:
+            import pandas
+        except Exception:
+            return rows
+        if headers and rows:
+            return pandas.DataFrame(rows[1:], columns=rows[0])
+        return pandas.DataFrame(rows)
+
     def xl(reference, headers=False):
-        """xl(reference): the value of a cell, or a range as a list of rows. The reference must be
-        written as text in the cell's code, such as xl("A1:B5")."""
+        """xl(reference, headers=False): the value of a cell, or a range as a pandas DataFrame (a
+        list of rows when pandas isn't installed). With headers=True the first row names the
+        columns. The reference must be written as text in the cell's code, such as xl("A1:B5")."""
         inputs = state["inputs"]
         if inputs is None:
             raise RuntimeError("xl() only works while a cell runs")
@@ -172,10 +184,58 @@ def _gridcraft_worker():
             raise ValueError(
                 'xl("%s"): only references written as text in this cell\'s code can be read' % cut_chars(reference, 100)
             )
-        return to_py(entry.get("value"))
+        value = to_py(entry.get("value"))
+        return table(value, headers) if isinstance(value, list) else value
 
     # Results: Python to wire values.
     NOT_SCALAR = object()
+
+    def item(x):
+        # A numpy scalar as the Python value it holds.
+        get = getattr(x, "item", None)
+        if get is not None and getattr(x, "shape", None) == ():
+            try:
+                return get()
+            except Exception:
+                return x
+        return x
+
+    def blank(x):
+        # pandas's missing values are empty cells.
+        x = item(x)
+        if type(x).__name__ in ("NaTType", "NAType"):
+            return None
+        try:
+            return None if x != x else x
+        except Exception:
+            return x
+
+    def default_index(index):
+        return type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1
+
+    def rows_of(v):
+        """A pandas or numpy result as rows, or None for anything else. A table's column names are
+        its first row, and its row labels its first column unless they are just 0, 1, 2..."""
+        module = (type(v).__module__ or "").split(".")[0]
+        name = type(v).__name__
+        if module == "pandas" and name == "DataFrame":
+            if v.shape[0] * v.shape[1] > MAX_ARRAY_CELLS:
+                raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
+            labels = not default_index(v.index)
+            rows = [([v.index.name if v.index.name is not None else ""] if labels else []) + [item(c) for c in v.columns]]
+            for label, row in zip(v.index, v.itertuples(index=False, name=None)):
+                rows.append(([item(label)] if labels else []) + [blank(x) for x in row])
+            return rows
+        if module == "pandas" and name == "Series":
+            if len(v) > MAX_ARRAY_CELLS:
+                raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
+            labels = not default_index(v.index)
+            return [([item(label)] if labels else []) + [blank(x)] for label, x in zip(v.index, v.tolist())]
+        if module == "numpy" and name == "ndarray" and v.ndim in (1, 2):
+            if v.size > MAX_ARRAY_CELLS:
+                raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
+            return [[x] for x in v.tolist()] if v.ndim == 1 else v.tolist()
+        return None
 
     def number(x):
         try:
@@ -185,6 +245,7 @@ def _gridcraft_worker():
         return f if math.isfinite(f) else {"error": "#NUM!"}
 
     def scalar(v):
+        v = item(v)
         if v is None:
             return None
         if isinstance(v, bool):
@@ -228,10 +289,18 @@ def _gridcraft_worker():
             data.extend({"error": "#N/A"} for _ in range(cols - len(r)))
         return {"array": {"rows": len(rows), "cols": cols, "data": data}}
 
-    def output(v):
+    def as_object(v):
+        return {"object": {"typeName": type_name(v), "preview": cut_chars(safe_repr(v), MAX_PREVIEW_CHARS)}}
+
+    def output(v, want_object):
         s = scalar(v)
         if s is not NOT_SCALAR:
             return s
+        if want_object:
+            return as_object(v)
+        rows = rows_of(v)
+        if rows is not None:
+            return grid(rows) if rows else {"error": "#CALC!"}
         if isinstance(v, (list, tuple)):
             if not v:
                 return {"error": "#CALC!"}
@@ -241,7 +310,7 @@ def _gridcraft_worker():
             if len(v) > MAX_ARRAY_CELLS:
                 raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
             return grid([[x] for x in v])
-        return {"object": {"typeName": type_name(v), "preview": cut_chars(safe_repr(v), MAX_PREVIEW_CHARS)}}
+        return as_object(v)
 
     # Printed output, kept up to the cap.
     class Capture(io.TextIOBase):
@@ -398,7 +467,7 @@ def _gridcraft_worker():
             finally:
                 sys.stdout = saved
                 state["inputs"] = None
-            msg = {"type": "done", "id": rid, "ok": True, "value": output(value)}
+            msg = {"type": "done", "id": rid, "ok": True, "value": output(value, req.get("output") == "object")}
             if capture.text():
                 msg["stdout"] = capture.text()
             return msg

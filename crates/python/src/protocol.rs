@@ -2,7 +2,8 @@
 //!
 //! The parent writes [`Request`] lines to the worker's standard input:
 //!
-//! - `{"type":"run","id":N,"code":"…","inputs":{"A1:B2":{"value":V}}}` runs one cell's code.
+//! - `{"type":"run","id":N,"code":"…","inputs":{"A1:B2":{"value":V}},"output":"object"}` runs one
+//!   cell's code. `output` is there when the cell's return type is a Python object.
 //!   `inputs` maps each literal `xl()` reference text in the code to its value, resolved by the
 //!   parent before the request; there are no callbacks. An entry may carry `"headers":true`,
 //!   which the worker accepts and does not use.
@@ -73,8 +74,9 @@ impl Input {
 /// Parent to worker.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
-    /// Run one cell's code in the shared globals.
-    Run { id: u64, code: String, inputs: BTreeMap<String, Input> },
+    /// Run one cell's code in the shared globals. With `object`, a result with no single-cell form
+    /// comes back as a Python object, not as cells to spill.
+    Run { id: u64, code: String, inputs: BTreeMap<String, Input>, object: bool },
     /// Clear the shared globals.
     Reset { id: u64 },
 }
@@ -104,7 +106,7 @@ impl Request {
         match raw.kind {
             RequestKind::Run => {
                 let inputs = raw.inputs.unwrap_or_default().into_iter().map(|(k, v)| (k, Input { value: v.value.0, headers: v.headers })).collect();
-                Ok(Request::Run { id: raw.id, code: raw.code.unwrap_or_default(), inputs })
+                Ok(Request::Run { id: raw.id, code: raw.code.unwrap_or_default(), inputs, object: raw.output.as_deref() == Some("object") })
             }
             RequestKind::Reset => Ok(Request::Reset { id: raw.id }),
         }
@@ -275,6 +277,7 @@ struct RawRequest {
     id: u64,
     code: Option<String>,
     inputs: Option<BTreeMap<String, RawInput>>,
+    output: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -596,11 +599,14 @@ impl Serialize for WireRequest<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut m = s.serialize_map(None)?;
         match self.0 {
-            Request::Run { id, code, inputs } => {
+            Request::Run { id, code, inputs, object } => {
                 m.serialize_entry("type", "run")?;
                 m.serialize_entry("id", id)?;
                 m.serialize_entry("code", code)?;
                 m.serialize_entry("inputs", &WireInputs(inputs))?;
+                if *object {
+                    m.serialize_entry("output", "object")?;
+                }
             }
             Request::Reset { id } => {
                 m.serialize_entry("type", "reset")?;

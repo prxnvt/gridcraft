@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use gridcraft_core::{Array, CellError, Value};
 use gridcraft_python::interp::{self, Detection, SearchEnv};
 use gridcraft_python::process::ProcessTransport;
-use gridcraft_python::{Client, Input, Limits, Outcome, Output, PyError, SelfTest, Transport};
+use gridcraft_python::{Client, Input, Limits, Outcome, Output, PyError, RunResult, SelfTest, Transport};
 
 fn python() -> Option<PathBuf> {
     let env = SearchEnv::from_process();
@@ -84,7 +84,12 @@ fn values_errors_globals_and_reset() {
     assert_eq!(
         run(&mut c, "a = 1\nb = a + undefined_name\nb"),
         Outcome::PythonError {
-            error: PyError { message: "NameError: name 'undefined_name' is not defined".into(), line: Some(2), kind: Some("python.name".into()), subject: Some("undefined_name".into()) },
+            error: PyError {
+                message: "NameError: name 'undefined_name' is not defined".into(),
+                line: Some(2),
+                kind: Some("python.name".into()),
+                subject: Some("undefined_name".into())
+            },
             stdout: String::new()
         }
     );
@@ -305,4 +310,59 @@ fn errors_say_what_kind_they_are() {
         kind(&mut c, "try:\n    raise PermissionError(1, 'no') # socket\nexcept OSError as e:\n    raise ValueError('wrapped') from e"),
         (k("denied.network"), None)
     );
+}
+
+/// A folder with a stand-in for pandas: what `xl()` gives it is the test, not pandas itself.
+fn fake_pandas(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("gridcraft-fake-pandas-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("pandas")).unwrap();
+    std::fs::write(
+        dir.join("pandas/__init__.py"),
+        "class DataFrame:\n    def __init__(self, rows, columns=None):\n        self.rows = rows\n        self.columns = columns\n",
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn a_range_is_a_dataframe_when_pandas_is_there() {
+    let Some(p) = python() else { return };
+    let site = fake_pandas("frame");
+    let transport = ProcessTransport::new(p).with_site_dirs(vec![site.clone()]);
+    let mut c = Client::new(Box::new(transport), Limits::default());
+    let range = Value::Array(std::sync::Arc::new(Array { rows: 2, cols: 1, data: vec![Value::text("name"), Value::Number(5.0)] }));
+    let inputs = || BTreeMap::from([("A1:A2".to_string(), Input::new(range.clone()))]);
+    let run_xl = |c: &mut Client, code: &str| match c.run(code, inputs()).unwrap() {
+        Outcome::Ok { output: Output::Value(v), .. } => v,
+        other => panic!("{code}: {other:?}"),
+    };
+    assert_eq!(run_xl(&mut c, "type(xl('A1:A2')).__name__"), Value::text("DataFrame"));
+    assert_eq!(run_xl(&mut c, "xl('A1:A2').rows[1][0]"), Value::Number(5.0));
+    assert_eq!(run_xl(&mut c, "xl('A1:A2', headers=True).columns[0]"), Value::text("name"));
+    assert_eq!(run_xl(&mut c, "xl('A1:A2', headers=True).rows[0][0]"), Value::Number(5.0));
+    std::fs::remove_dir_all(site).unwrap();
+}
+
+/// A list spills, unless the cell's return type is a Python object.
+#[test]
+fn the_return_type_decides_between_cells_and_an_object() {
+    let Some(p) = python() else { return };
+    let mut c = client(p);
+    let id = c.submit_cell("[1, 2]", BTreeMap::new(), false).unwrap();
+    let Some(RunResult { outcome: Outcome::Ok { output: Output::Value(Value::Array(a)), .. }, .. }) = c.wait().filter(|r| r.id == id) else {
+        panic!("cells")
+    };
+    assert_eq!((a.rows, a.cols), (2, 1));
+    let id = c.submit_cell("[1, 2]", BTreeMap::new(), true).unwrap();
+    let Some(RunResult { outcome: Outcome::Ok { output: Output::Object { type_name, preview }, .. }, .. }) = c.wait().filter(|r| r.id == id) else {
+        panic!("object")
+    };
+    assert_eq!((type_name.as_str(), preview.as_str()), ("list", "[1, 2]"));
+    // A number stays a number either way.
+    let id = c.submit_cell("3", BTreeMap::new(), true).unwrap();
+    let Some(RunResult { outcome: Outcome::Ok { output: Output::Value(Value::Number(n)), .. }, .. }) = c.wait().filter(|r| r.id == id) else {
+        panic!("number")
+    };
+    assert_eq!(n, 3.0);
 }

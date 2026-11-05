@@ -158,6 +158,12 @@ impl ProcessTransport {
         }
     }
 
+    /// The folders of installed packages the worker is given.
+    pub fn with_site_dirs(mut self, site_dirs: Vec<PathBuf>) -> ProcessTransport {
+        self.site_dirs = site_dirs;
+        self
+    }
+
     /// Every launch goes through `wrap` before it runs.
     pub fn with_wrap(mut self, wrap: Wrap) -> ProcessTransport {
         self.wrap = Some(wrap);
