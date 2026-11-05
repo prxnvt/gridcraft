@@ -136,6 +136,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | What landed |
 |---|---|
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |
+| 2026-11-02 | Convert to Normal Cell (`python.clear`), on a Python cell's card and cell menu: the code goes and the cell and its spill keep what they show as plain values (a Python-only error such as `#BLOCKED!` leaves its cell empty), with formats kept, readers recalculated and one undo step; refused on cells without code and on locked cells of a protected sheet |
+| 2026-11-02 | Python cells in the interface: PY tags on Python cells and a card with the cached result or why the cell shows `#BLOCKED!`; Ctrl+Alt+Shift+M and the cell menu switch between Python Object and Excel Value (`python.output`); Formulas › Insert Python opens Python mode. The code still doesn't run |
 | 2026-11-02 | Dialogs take ranges by selection on the grid: reference boxes (RefEdit) with a collapse button that shrinks the dialog while the person selects, in Goal Seek, Solver (including the Model Range of Load/Save) and Data Analysis; while collapsed, the arrow keys move the selection and Shift+arrow extends it, and F4 cycles a reference's anchors |
 | 2026-11-02 | Python mode in the formula bar: Ctrl+Alt+Shift+P, `=PY` then Tab, or editing a Python cell edits its code in the formula bar, with Enter for a new line, Tab to indent and Ctrl+Enter to commit through `python.set`. The code still doesn't run |
 | 2026-11-02 | Python cells as data: `python.set` stores code in a cell, Python cells copy, move, fill and undo like formulas, and `.xlsx` reads and writes Python cells as [MS-XLSX] specifies (`_xlfn._xlws.PY(index,0 or 1)`, the code in the workbook's Python part) with cached values and spills, so such workbooks open with their results; nothing runs Python (new code shows `#BLOCKED!`), and opening a file limits code size, result size and spill ranges |
@@ -259,6 +261,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
+| 2026-11-02 | minor | Progress log: Convert to Normal Cell |
+| 2026-11-02 | minor | Progress log: Python cells in the interface |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |
 | 2026-11-02 | minor | Progress log: Python cells as data |

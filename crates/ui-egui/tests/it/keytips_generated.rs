@@ -1911,6 +1911,14 @@ fn keytip_mxp_() {
 }
 
 #[test]
+fn keytip_my_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "MY", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "MY must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
 fn keytip_ab_() {
     let mut h = harness(blank());
     sequence(&mut h, "AB", false);
@@ -3089,7 +3097,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 413;
+    const EXPECTED: usize = 414;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 
