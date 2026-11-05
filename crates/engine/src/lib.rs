@@ -43,7 +43,10 @@ pub use gridcraft_formula as formula;
 pub use gridcraft_math as math;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
-pub use python::{PythonCalculation, PythonCapability, PythonDiagnosticEntry, PythonEnvironment, PythonRun, PythonState, python_order};
+pub use python::{
+    FoundPython, PythonCalculation, PythonCapability, PythonDiagnosticEntry, PythonEnvironment, PythonRun, PythonRunning, PythonSearch, PythonState,
+    python_order, search_pythons,
+};
 pub use selection::Selection;
 pub use windows::{Target, TargetGuard, WindowState, WindowView};
 

@@ -1415,3 +1415,109 @@ fn calculate_now_runs_python_cells_that_wait() {
     settle(&mut s);
     assert_eq!(runs(&h).len(), before);
 }
+
+/// The running cell is what the status bar names, and it goes when the cell stops.
+#[test]
+fn the_running_cell_is_reported_with_how_long_it_has_run() {
+    let (mut s, h) = session();
+    assert_eq!(s.python_running(), None);
+    py(&mut s, "B2", "hang");
+    s.python_poll(Duration::ZERO);
+    read_requests(&h, 1);
+    let running = s.python_running().unwrap();
+    assert_eq!((running.sheet.as_str(), running.cell), ("Sheet1", c("B2")));
+    assert_eq!(s.python_state(), PythonState::Running);
+    s.execute("python.stop", json!({})).unwrap();
+    assert_eq!(s.python_running(), None);
+    assert_eq!(s.python_state(), PythonState::Ready);
+    assert_eq!(s.python_state(), s.python_environment().state);
+}
+
+/// The log can be emptied, by a command that is safe with no params and on an empty log.
+#[test]
+fn the_run_log_clears_and_the_cells_keep_what_they_show() {
+    let (mut s, _) = session();
+    assert_eq!(s.execute("python.clearRunLog", json!({})).unwrap()["cleared"], 0);
+    py(&mut s, "A1", "ret 5");
+    settle(&mut s);
+    assert_eq!(s.python_run_log().count(), 1);
+    assert_eq!(s.execute("python.clearRunLog", json!({})).unwrap()["cleared"], 1);
+    assert_eq!(s.python_run_log().count(), 0);
+    assert_eq!(v(&s, "A1"), NUM(5.0));
+    assert_eq!(s.execute("python.clearRunLog", json!({})).unwrap()["cleared"], 0);
+}
+
+fn off_session() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.set_python_capability(PythonCapability::default());
+    s
+}
+
+/// With Python off the workbook's code is still known, from what each edit touched.
+#[test]
+fn whether_a_workbook_holds_code_follows_every_way_code_comes_and_goes() {
+    let mut s = off_session();
+    s.python_poll(Duration::ZERO);
+    assert!(!s.python_has_cells());
+    set(&mut s, "A1", "1");
+    assert!(!s.python_has_cells(), "a plain value isn't code");
+    py(&mut s, "B1", "ret 1");
+    assert!(s.python_has_cells());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(!s.python_has_cells(), "undo takes it away");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(s.python_has_cells(), "redo brings it back");
+    s.execute("python.clear", json!({"cell": "B1"})).unwrap();
+    assert!(!s.python_has_cells(), "converted to a normal cell");
+    py(&mut s, "C3", "ret 1");
+    s.execute("home.insertSheet", json!({})).unwrap();
+    assert!(s.python_has_cells(), "another sheet being active changes nothing");
+    py(&mut s, "A1", "ret 2");
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": ""})).unwrap();
+    assert!(s.python_has_cells(), "the code on the other sheet is still there");
+    s.execute("home.deleteSheet", json!({"sheet": 1})).unwrap();
+    assert!(!s.python_has_cells(), "deleting its sheet takes the last of it");
+}
+
+/// Asked before the session has seen the workbook, it looks through it; once on, the list of cells
+/// answers.
+#[test]
+fn whether_a_workbook_holds_code_is_known_before_and_while_python_runs() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("python.set", json!({"cell": "A1", "code": "ret 1"})).unwrap();
+    assert!(s.python_has_cells(), "a session with no capability looks");
+    let (mut on, _) = session();
+    assert!(!on.python_has_cells());
+    py(&mut on, "A1", "ret 1");
+    settle(&mut on);
+    assert!(on.python_has_cells());
+    on.execute("cell.set", json!({"cell": "A1", "input": ""})).unwrap();
+    settle(&mut on);
+    assert!(!on.python_has_cells());
+}
+
+/// A given report answers instead of a check: the interface's tests reach every state with it.
+#[test]
+fn a_given_report_answers_for_an_enabled_capability_only() {
+    let report = crate::python::PythonEnvironment { state: PythonState::NotSetUp, ..crate::python::PythonEnvironment::default() };
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.set_python_capability(PythonCapability { enabled: true, report: Some(report), ..PythonCapability::default() });
+    assert_eq!(s.python_state(), PythonState::NotSetUp);
+    assert!(!s.python_busy(), "nothing is being checked");
+    let report = crate::python::PythonEnvironment { state: PythonState::Ready, ..crate::python::PythonEnvironment::default() };
+    s.set_python_capability(PythonCapability { enabled: false, report: Some(report), ..PythonCapability::default() });
+    assert_eq!(s.python_state(), PythonState::Off);
+}
+
+/// A search that may not start anything finds paths and asks nothing.
+#[test]
+fn a_search_while_python_is_off_starts_nothing() {
+    for found in crate::python::search_pythons(false).found {
+        assert_eq!((found.version, found.kind), (None, None), "{}", found.path.display());
+        assert!(found.path.is_absolute());
+    }
+}

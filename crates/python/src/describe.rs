@@ -49,7 +49,7 @@ struct Info {
     sites: Vec<String>,
 }
 
-pub use crate::interpreter::{Interpreter, Kind};
+pub use crate::interpreter::{Interpreter, Kind, STARTER_PACKAGES, UV_INSTALL, pip_install_command, uv_install_commands, uv_setup_commands};
 
 /// Asks the interpreter at `path` what it is.
 pub fn describe(path: &Path, timeout: Duration) -> Result<Interpreter, ProbeError> {
@@ -197,47 +197,6 @@ fn outermost(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         }
     }
     out
-}
-
-/// Packages to suggest for a new environment: what Excel's Python makes available first, without
-/// plotting: Python cells don't draw plots, the data goes to a sheet and charts are built from it.
-pub const STARTER_PACKAGES: [&str; 3] = ["numpy", "pandas", "statsmodels"];
-/// Installs uv, for a person who doesn't have it.
-pub const UV_INSTALL: &str = "curl -LsSf https://astral.sh/uv/install.sh | sh";
-
-/// A path as text a shell reads back as one word.
-fn quoted(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    if !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || "/._-~".contains(c)) {
-        return text.into_owned();
-    }
-    format!("'{}'", text.replace('\'', "'\\''"))
-}
-
-/// The commands that make the suggested environment with uv and install `packages` in it. The
-/// search finds that environment first, so nothing else needs choosing.
-pub fn uv_setup_commands(packages: &[&str]) -> Vec<String> {
-    let env = format!("~/{}", crate::interp::RECOMMENDED_ENV);
-    let mut out = vec![format!("uv venv {env} --python 3.12")];
-    if !packages.is_empty() {
-        out.push(format!("uv pip install --python {env} {}", packages.join(" ")));
-    }
-    out
-}
-
-/// The commands that add `packages` for this interpreter, with uv: into it when it is an
-/// environment, otherwise into a new environment, since a Python outside one refuses them.
-pub fn uv_install_commands(interpreter: &Interpreter, packages: &[&str]) -> Vec<String> {
-    if interpreter.kind.is_environment() {
-        vec![format!("uv pip install --python {} {}", quoted(&interpreter.path), packages.join(" "))]
-    } else {
-        uv_setup_commands(packages)
-    }
-}
-
-/// The same with pip, for people who manage their Pythons another way.
-pub fn pip_install_command(interpreter: &Interpreter, packages: &[&str]) -> String {
-    format!("{} -m pip install {}", quoted(&interpreter.path), packages.join(" "))
 }
 
 #[cfg(test)]

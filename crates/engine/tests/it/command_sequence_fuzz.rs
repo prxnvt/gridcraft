@@ -82,6 +82,7 @@ const PYTHON_RUNS: &[&str] = &[
     "python.environment",
     "python.diagnostics",
     "python.runLog",
+    "python.clearRunLog",
     "python.refreshEnvironment",
 ];
 

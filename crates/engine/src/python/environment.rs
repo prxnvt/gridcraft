@@ -103,10 +103,11 @@ impl Environment {
     /// the check starts on its own thread. No Python starts without an enabled capability.
     pub fn restart(&mut self, capability: Option<&PythonCapability>) {
         self.pending = None;
-        self.seam = capability.is_some_and(|c| c.transport.is_some());
+        self.seam = capability.is_some_and(|c| c.transport.is_some() || c.report.is_some());
         self.report = match capability {
             None => PythonEnvironment::default(),
             Some(c) if !c.enabled => PythonEnvironment::state(PythonState::Off, "off.app", ""),
+            Some(PythonCapability { report: Some(report), .. }) => report.clone(),
             Some(_) if self.seam => PythonEnvironment {
                 state: PythonState::Ready,
                 diagnostic: None,

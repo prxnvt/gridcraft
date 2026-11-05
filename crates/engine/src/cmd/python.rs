@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "python.output",
             "Python Output",
-            [],
+            ["Python", "Code"],
             Some("Ctrl+Alt+Shift+M"),
             "{cell?, mode?: object|value} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` it switches to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs",
             has_doc,
@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             noundo "python.run",
             "Run Python Cell",
-            [],
+            ["Python", "Run"],
             None,
             "{cell?, sheet?} runs a Python cell (default: the active cell) now, whatever the calculation mode. Cells share variables, so the cells after it run too, or under manual calculation are marked stale. A cell that stopped the worker runs again only this way. Returns {cell, queued}. An error when Python doesn't run here, with the reason; it opens no dialog",
             has_doc,
@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             noundo "python.runAll",
             "Run All Python Cells",
-            [],
+            ["Python", "Run"],
             None,
             "runs every Python cell of the workbook in run order, whatever the calculation mode, in the variables Python has now. Returns {queued}. An error when Python doesn't run here, with the reason",
             has_doc,
@@ -64,7 +64,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             noundo "python.stop",
             "Stop Python",
-            [],
+            ["Python", "Run"],
             None,
             "stops the workbook's running cell by stopping its worker, which clears the variables: that cell shows #PYTHON! with the diagnostic state.stopped, and the cells waiting keep what they kept, marked stale. Returns {stopped}, false when nothing was running or waiting",
             has_doc,
@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             noundo "python.reset",
             "Reset Python",
-            [],
+            ["Python", "Run"],
             None,
             "starts the workbook's Python again with fresh variables and runs every cell, whatever the calculation mode. Returns {queued}. An error when Python doesn't run here, with the reason",
             has_doc,
@@ -82,7 +82,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             noundo "python.calculation",
             "Python Calculation",
-            [],
+            ["Python", "Run"],
             None,
             "{mode?: automatic|manual} sets when the workbook's Python cells run: as soon as they are due, or under manual, marked stale until python.run or python.runAll. The setting stays with the open workbook and isn't saved. Without `mode` it reports the current one. Returns {mode}",
             has_doc,
@@ -91,7 +91,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             noundo "python.refreshEnvironment",
             "Check Python Again",
-            [],
+            ["Python", "Environment"],
             None,
             "checks again whether Python can run here, in the background, when the app has turned Python on: python.environment gives the answer. It can't turn Python on or choose an interpreter. Returns the report as python.environment does",
             always,
@@ -123,6 +123,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "→ the workbook's last 200 Python runs, oldest first, as a list of {sheet, cell, ms, stdout, stdoutCut, diagnostic?}, with printed output cut to 64 KiB. Read-only",
             has_doc,
             run_log
+        ),
+        cmd!(
+            noundo "python.clearRunLog",
+            "Clear Python Run Log",
+            ["Python", "Diagnostics"],
+            None,
+            "forgets the workbook's Python runs. It changes nothing else: the cells keep what they show. Returns {cleared}, how many runs there were",
+            has_doc,
+            clear_run_log
         ),
     ]
 }
@@ -352,4 +361,8 @@ fn diagnostics(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn run_log(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(Json::Array(s.python_run_log().map(run_json).collect()))
+}
+
+fn clear_run_log(s: &mut Session, _: &Json) -> Result<Json> {
+    Ok(json!({"cleared": s.python_clear_run_log()}))
 }

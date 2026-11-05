@@ -28,8 +28,13 @@ use gridcraft_core::CellRef;
 use gridcraft_model::{CalcMode, Sheet, Workbook};
 pub use gridcraft_python::Limits;
 pub use gridcraft_python::Transport;
-pub use gridcraft_python::describe::{Interpreter, Kind as InterpreterKind};
-pub use gridcraft_python::diagnostics::{Action, Diagnostic, Kind, Scope, Severity};
+pub use gridcraft_python::describe::{
+    Interpreter, Kind as InterpreterKind, STARTER_PACKAGES, UV_INSTALL, pip_install_command, uv_install_commands, uv_setup_commands,
+};
+pub use gridcraft_python::diagnostics::{Action, CATALOG, Diagnostic, Kind, Scope, Severity};
+pub use gridcraft_python::interp::{MIN_VERSION, Version};
+pub use gridcraft_python::run::MAX_TIMEOUT;
+pub use gridcraft_python::sandbox_support;
 use serde_json::{Value as Json, json};
 
 use environment::Environment;
@@ -61,6 +66,9 @@ pub struct PythonCapability {
     /// Workers from this factory instead of a confined interpreter (tests).
     #[doc(hidden)]
     pub transport: Option<TransportFactory>,
+    /// This answer instead of a check of Python, for an enabled capability (tests).
+    #[doc(hidden)]
+    pub report: Option<PythonEnvironment>,
 }
 
 /// When a workbook's Python cells run.
@@ -99,6 +107,63 @@ impl PythonRun {
         diagnostic: Option<&'static str>,
     ) -> PythonRun {
         PythonRun { sheet: d.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default(), cell, duration, stdout, stdout_cut, diagnostic }
+    }
+}
+
+/// The cell a workbook's worker is running now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PythonRunning {
+    pub sheet: String,
+    pub cell: CellRef,
+    /// How long it has been running.
+    pub elapsed: Duration,
+}
+
+/// One Python the search found, for a person to choose from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoundPython {
+    pub path: PathBuf,
+    /// What it answered, when it was asked. `None` when it wasn't asked or didn't answer.
+    pub version: Option<Version>,
+    pub kind: Option<InterpreterKind>,
+}
+
+/// What [`search_pythons`] found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PythonSearch {
+    /// In the order the search tries them, so the first usable one is what Automatic takes.
+    pub found: Vec<FoundPython>,
+    /// Where uv is.
+    pub uv: Option<PathBuf>,
+}
+
+/// The most Pythons a search reports.
+const MAX_FOUND: usize = 16;
+
+/// Looks for the Pythons on this machine, which blocks, so the interface calls it on a thread of its
+/// own. With `ask` each one is started, with a deadline, to tell its version and where it came from:
+/// a fixed script runs, never workbook code. Without it nothing is started, and only the paths are
+/// known: the interface uses that while Python is off. The web build finds none.
+pub fn search_pythons(ask: bool) -> PythonSearch {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use gridcraft_python::interp::{self, SearchEnv};
+        let env = SearchEnv::from_process();
+        let uv = interp::find_uv(&env);
+        let found = interp::candidates(&env)
+            .into_iter()
+            .take(MAX_FOUND)
+            .map(|path| {
+                let told = if ask { gridcraft_python::describe::describe(&path, interp::PROBE_TIMEOUT).ok() } else { None };
+                FoundPython { version: told.as_ref().map(|i| i.version), kind: told.as_ref().map(|i| i.kind), path }
+            })
+            .collect();
+        PythonSearch { found, uv }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (ask, MAX_FOUND);
+        PythonSearch::default()
     }
 }
 
@@ -300,6 +365,40 @@ impl Session {
             report.state = PythonState::Running;
         }
         report
+    }
+
+    /// [`Session::python_environment`]'s state without its copy of the report, for what asks every
+    /// frame.
+    pub fn python_state(&self) -> PythonState {
+        if self.python.docs.values().any(|r| r.inflight.is_some()) { PythonState::Running } else { self.python.env.report.state }
+    }
+
+    /// The report as the last check left it, without a copy. Its `state` doesn't say whether a cell
+    /// is running: [`Session::python_state`] does.
+    pub fn python_report(&self) -> &PythonEnvironment {
+        &self.python.env.report
+    }
+
+    /// The cell the active workbook's worker is running, with how long it has run. Other workbooks'
+    /// cells aren't this workbook's to report.
+    pub fn python_running(&self) -> Option<PythonRunning> {
+        let d = self.active()?;
+        let r = self.python.docs.get(&d.uid)?;
+        let flight = r.inflight.as_ref()?;
+        let e = r.entries.get(flight.index)?;
+        Some(PythonRunning { sheet: d.wb.sheet(e.sheet)?.name.clone(), cell: e.at, elapsed: flight.started.elapsed() })
+    }
+
+    /// Whether the active workbook holds a Python cell. This is cheap once the session has seen the
+    /// workbook: what each change touched keeps the answer, so it can be asked every frame. Before
+    /// that it looks through the workbook, up to the first Python cell.
+    pub fn python_has_cells(&self) -> bool {
+        let Some(d) = self.active() else { return false };
+        match self.python.docs.get(&d.uid).filter(|r| r.seen.is_some()) {
+            Some(r) if r.tracked => !r.entries.is_empty(),
+            Some(r) => r.holds_code,
+            None => plan::holds_code(&d.wb),
+        }
     }
 
     /// The active workbook's last 200 runs, oldest first.
@@ -578,6 +677,16 @@ impl Session {
         } else {
             r.derive(d, cx, Source::Edit, None);
         }
+    }
+
+    /// `python.clearRunLog`: forgets the active workbook's runs. Returns how many there were.
+    pub(crate) fn python_clear_run_log(&mut self) -> usize {
+        let Some(uid) = self.active().map(|d| d.uid) else { return 0 };
+        self.python.docs.get_mut(&uid).map_or(0, |r| {
+            let n = r.log.len();
+            r.log.clear();
+            n
+        })
     }
 
     /// `python.refreshEnvironment`: checks Python again.

@@ -345,6 +345,9 @@ pub(super) struct DocRun {
     /// Which cells assign which names, for the `python.nameOrder` diagnostic.
     pub assigns: Option<HashMap<String, Vec<u32>>>,
     pub log: VecDeque<PythonRun>,
+    /// While the list of cells isn't kept ([`DocRun::tracked`] is false): the workbook holds Python
+    /// code. Kept from what each change touched, so a workbook without any is never scanned twice.
+    pub holds_code: bool,
 }
 
 impl DocRun {
@@ -641,6 +644,7 @@ impl DocRun {
             write_flags(d, &writes);
         }
         self.seen = Some(d.wb.clone());
+        self.holds_code = holds_code(&d.wb);
         !writes.is_empty()
     }
 
@@ -658,11 +662,15 @@ impl DocRun {
             return self.turn_off(d);
         }
         let new = d.wb.clone();
-        let Some(old) = self.seen.replace(new.clone()) else { return false };
+        let Some(old) = self.seen.replace(new.clone()) else {
+            self.holds_code = holds_code(&new);
+            return false;
+        };
         if Arc::ptr_eq(&old, &new) {
             return false;
         }
         let diff = Diff::between(&old, &new);
+        self.note_code(&old, &new, &diff);
         let mut writes = Vec::new();
         for (i, sh) in new.sheets.iter().enumerate() {
             let (cells, _) = diff.changed_cells(&old, i);
@@ -675,6 +683,38 @@ impl DocRun {
         self.seen = Some(d.wb.clone());
         true
     }
+}
+
+impl DocRun {
+    /// Brings [`DocRun::holds_code`] up to date from what changed. A cell that gained code settles
+    /// it; only a cell that lost its code, or a change too wide to list, looks through the workbook,
+    /// and that stops at the first Python cell.
+    fn note_code(&mut self, old: &Workbook, new: &Workbook, diff: &Diff) {
+        let mut look = !diff.same_layout;
+        let mut gained = false;
+        for (i, sh) in new.sheets.iter().enumerate() {
+            let Some(change) = diff.sheet(i) else { continue };
+            look |= change.whole;
+            let (cells, before) = diff.changed_cells(old, i);
+            for c in cells {
+                if python_of(sh.cell(*c)).is_some() {
+                    gained = true;
+                } else if before.is_some_and(|o| python_of(o.cell(*c)).is_some()) {
+                    look = true;
+                }
+            }
+        }
+        if look {
+            self.holds_code = holds_code(new);
+        } else if gained {
+            self.holds_code = true;
+        }
+    }
+}
+
+/// Whether any cell of the workbook holds Python code.
+pub(super) fn holds_code(wb: &Workbook) -> bool {
+    wb.sheets.iter().any(|sh| sh.cells.iter().any(|(_, c)| c.py.is_some()))
 }
 
 /// One cell's place in a rebuilt list.
