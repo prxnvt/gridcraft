@@ -1064,6 +1064,11 @@ fn a_cell_reading_a_later_blocked_result_settles() {
     assert_eq!(v(&s, "A1"), Value::Error(CellError::Spill));
     assert_eq!(diagnostic(&s, "A1"), None, "it isn't left stale");
     assert!(runs(&h).len() <= 6, "{:?}", runs(&h));
+    // Everything marked busy at once: each runs once, as nothing changes when the wait ends.
+    let before = runs(&h).len();
+    s.execute("python.runAll", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(runs(&h).len(), before + 2, "{:?}", runs(&h));
 }
 
 #[test]
