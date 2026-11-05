@@ -68,6 +68,17 @@ impl Launch {
     }
 }
 
+/// One process starts at a time. Where the system can't create a pipe and mark it close-on-exec in
+/// one step (macOS), a process started in that moment inherits the pipe, and the sandbox launcher
+/// refuses to run with a descriptor it inherited. Every process this crate starts goes through here:
+/// workers, version probes and the memory probe's `ps`, which runs twice a second per worker.
+static STARTING: Mutex<()> = Mutex::new(());
+
+fn start(cmd: &mut Command) -> std::io::Result<Child> {
+    let _one_at_a_time = STARTING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    cmd.spawn()
+}
+
 /// What a wrapper makes of a launch: the launch to run, and what must stay alive while it runs.
 pub struct Wrapped {
     pub launch: Launch,
@@ -181,7 +192,7 @@ impl Transport for ProcessTransport {
             Some(wrap) => wrap(plain)?,
             None => plain.into(),
         };
-        let mut child = launch.command().spawn().map_err(|e| format!("couldn't start {}: {e}", self.python.display()))?;
+        let mut child = start(&mut launch.command()).map_err(|e| format!("couldn't start {}: {e}", self.python.display()))?;
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             reap(child, dir);
             return Err("Python started without its pipes".into());
@@ -399,7 +410,7 @@ impl MemoryProbe for PsRss {
 /// What a command printed, when it finishes within `deadline` and prints at most `max` bytes.
 /// Otherwise it is killed and the answer is `None`.
 pub(crate) fn run_bounded(cmd: &mut Command, deadline: Duration, max: usize) -> Option<Vec<u8>> {
-    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut child = start(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())).ok()?;
     let stdout = child.stdout.take()?;
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let reader = std::thread::Builder::new().name("python-probe".into()).spawn(move || {
