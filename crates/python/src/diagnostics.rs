@@ -149,6 +149,7 @@ pub const CATALOG: &[Kind] = &[
     k("denied.process", Error, Cell, "Python cells can't start other programs or processes.", A::None),
     k("xl.notLiteral", Error, Cell, "xl() needs its reference written as text in the code, such as xl(\"A1:B5\").", A::None),
     k("xl.tooLarge", Error, Cell, "This range is too large to send to Python.", A::None),
+    k("xl.badReference", Error, Cell, "xl() names something that isn't a cell, range, table or defined name here.", A::None),
     k("limit.time", Error, Cell, "The code ran past the time limit. Python was restarted, so its variables were cleared.", A::RunAgain),
     k("limit.memory", Error, Cell, "The code went over the memory limit. Python was restarted, so its variables were cleared.", A::RunAgain),
     k(
@@ -166,6 +167,7 @@ pub const CATALOG: &[Kind] = &[
     k("result.number", Error, Cell, "The result isn't a number a cell can hold.", A::None),
     k("state.busy", Info, Cell, "This cell is running.", A::None),
     k("state.stale", Info, Cell, "What this cell reads has changed since it last ran.", A::RunAgain),
+    k("state.stopped", Info, Cell, "This cell was stopped before it finished.", A::RunAgain),
     // One place in the code, before it runs.
     k(
         "lint.xlNotLiteral",
@@ -216,7 +218,7 @@ const PYTHON_EXCEPTION: &Kind = &k("python.exception", Error, Cell, "The code ra
 
 /// Which kinds a worker may report for an error it raised: only the cell-level ones about code.
 /// Anything else it names (it is untrusted) reads as a plain error.
-const WORKER_KINDS: [&str; 8] = [
+const WORKER_KINDS: [&str; 9] = [
     "python.syntax",
     "python.exception",
     "python.name",
@@ -225,6 +227,7 @@ const WORKER_KINDS: [&str; 8] = [
     "denied.file",
     "denied.network",
     "denied.process",
+    "xl.notLiteral",
 ];
 
 /// The diagnostic for an error the code raised.
@@ -286,6 +289,7 @@ mod tests {
         let e = |kind: &str| PyError { message: "boom".into(), kind: Some(kind.into()), ..PyError::default() };
         assert_eq!(for_error(&e("denied.network")).kind.id, "denied.network");
         assert_eq!(for_error(&e("denied.process")).kind.id, "denied.process");
+        assert_eq!(for_error(&e("xl.notLiteral")).kind.id, "xl.notLiteral");
         // Code that names an environment state, or something made up, is only an error.
         for forged in ["blocked.sandboxCheck", "off.app", "made.up", ""] {
             assert_eq!(for_error(&e(forged)).kind.id, "python.exception", "{forged}");
