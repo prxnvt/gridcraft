@@ -1,6 +1,7 @@
 //! Python in cells: the worker that runs the user's own Python, and the client that drives it.
 //!
-//! - [`interp`] finds an interpreter (Python 3.11 or newer).
+//! - [`interp`] finds an interpreter (Python 3.11 or newer), uv's first.
+//! - `describe` works out what to start and what the sandbox must let it read.
 //! - `shim.py` is what that interpreter runs: it reads requests, keeps the globals the cells
 //!   share, gives each cell its `xl()` inputs and converts the result.
 //! - [`protocol`] is the JSON-lines protocol between them, with a cap on every field.
@@ -24,6 +25,8 @@ pub mod client;
 #[path = "client_web.rs"]
 pub mod client;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod describe;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fake;
 #[cfg(not(target_arch = "wasm32"))]
