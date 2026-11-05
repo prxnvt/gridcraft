@@ -47,8 +47,9 @@ pub fn exec(program: &Path, args: &[OsString]) -> Result<std::convert::Infallibl
 /// The profile: everything is denied except what the base system profile allows a process to
 /// start (`system.sb`: the system libraries, the dynamic loader's cache and a few system
 /// services), reading the policy's paths, executing its programs, reading file metadata (path
-/// resolution), reading system settings (`sysctl`) and writing `/dev/null`. There is no rule for
-/// starting processes, writing files or the network, so they stay denied.
+/// resolution), reading system settings (`sysctl`), writing `/dev/null`, and reading and writing
+/// its scratch folders. There is no rule for starting processes, writing other files or the
+/// network, so they stay denied.
 pub fn profile(policy: &Checked) -> Result<String> {
     let mut p = String::from("(version 1)\n(deny default)\n(import \"system.sb\")\n");
     p.push_str("(allow process-exec");
@@ -64,6 +65,9 @@ pub fn profile(policy: &Checked) -> Result<String> {
         p.push_str(&format!(" ({rule} {})", quoted(path)?));
     }
     p.push_str(")\n(allow file-read-metadata)\n(allow sysctl-read)\n(allow file-write-data (literal \"/dev/null\"))\n");
+    for path in &policy.scratch {
+        p.push_str(&format!("(allow file-read* file-write* (subpath {}))\n", quoted(path)?));
+    }
     Ok(p)
 }
 

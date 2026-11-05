@@ -54,7 +54,10 @@ fn what_a_policy_refuses() {
     assert!(check(many).contains("more than"));
     // The canary must stay outside every allowed path, or the check would read it.
     let around = canary.file().parent().unwrap().to_path_buf();
-    assert!(check(Policy::new().read(around)).contains("canary"));
+    assert!(check(Policy::new().read(&around)).contains("canary"));
+    assert!(check(Policy::new().scratch(&around)).contains("canary"));
+    // Nothing the program can write may be executed.
+    assert!(check(Policy::new().scratch(&dir)).contains("overlaps"), "the program is in the scratch folder");
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
@@ -84,7 +87,7 @@ fn the_launcher_reads_its_arguments_back() {
     // No canary, a program the policy doesn't execute, an unknown option, a missing program.
     assert!(bad_policy(Checked::from_args(&os(&["--exec", &p, "--", &p]))).contains("canary"));
     assert!(bad_policy(Checked::from_args(&os(&["--probe", &c, "--", &p]))).contains("not an executable path"));
-    assert!(bad_policy(Checked::from_args(&os(&["--write", &p, "--probe", &c, "--", &p]))).contains("unknown"));
+    assert!(bad_policy(Checked::from_args(&os(&["--network", &p, "--probe", &c, "--", &p]))).contains("unknown"));
     assert!(bad_policy(Checked::from_args(&os(&["--exec", &p, "--probe", &c, "--"]))).contains("no program"));
     assert!(bad_policy(Checked::from_args(&os(&["--exec", &p, "--probe", &c]))).contains("no program"));
     assert!(bad_policy(Checked::from_args(&os(&["--exec"]))).contains("needs a path"));
@@ -125,6 +128,13 @@ fn profile_strings_are_escaped() {
     let checked = Policy::new().read(&dir).checked(&exe, &dir.join("data.txt"), &canary).unwrap();
     let profile = crate::macos::profile(&checked).unwrap();
     assert!(profile.starts_with("(version 1)\n(deny default)\n"));
+    let scratch_dir = dir.join("scratch");
+    std::fs::create_dir_all(&scratch_dir).unwrap();
+    let outside = std::env::temp_dir().canonicalize().unwrap().join(format!("gridcraft-sandbox-profile-{}", std::process::id()));
+    std::fs::create_dir_all(&outside).unwrap();
+    let with_scratch = Policy::new().scratch(&outside).checked(&exe, &dir.join("data.txt"), &canary).unwrap();
+    assert!(crate::macos::profile(&with_scratch).unwrap().contains(&format!("(allow file-read* file-write* (subpath \"{}\"))", outside.display())));
+    std::fs::remove_dir_all(outside).unwrap();
     assert!(profile.contains(&format!("(subpath \"{}\")", dir.display())));
     for absent in ["process-fork", "network", "file-write*"] {
         assert!(!profile.contains(absent), "no rule allows {absent}");

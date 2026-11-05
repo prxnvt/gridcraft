@@ -15,6 +15,7 @@ pub const MAX_PATH_BYTES: usize = 4096;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Policy {
     read: Vec<PathBuf>,
+    scratch: Vec<PathBuf>,
     exec: Vec<PathBuf>,
 }
 
@@ -26,6 +27,13 @@ impl Policy {
     /// Lets the program read `path`: a file, or a directory and everything under it.
     pub fn read(mut self, path: impl Into<PathBuf>) -> Policy {
         self.read.push(path.into());
+        self
+    }
+
+    /// Lets the program read and write under the directory `path`: a throwaway folder of its own,
+    /// which the caller empties and removes. Nothing under it can be executed.
+    pub fn scratch(mut self, path: impl Into<PathBuf>) -> Policy {
+        self.scratch.push(path.into());
         self
     }
 
@@ -69,6 +77,7 @@ impl Policy {
     /// starts it), `program` executable, and the canary outside every allowed path.
     pub(crate) fn checked(&self, exe: &Path, program: &Path, canary: &Canary) -> Result<Checked> {
         let read = canonical_all(&self.read)?;
+        let scratch = canonical_all(&self.scratch)?;
         let mut exec = canonical_all(&self.exec)?;
         let program = canonical(program)?;
         for extra in [canonical(exe)?, program.clone()] {
@@ -80,11 +89,21 @@ impl Policy {
             return Err(SandboxError::BadPolicy(format!("more than {MAX_PATHS} executable paths")));
         }
         let probe = canonical(canary.file())?;
-        if read.iter().chain(&exec).any(|p| probe.starts_with(p)) {
-            return Err(SandboxError::BadPolicy(format!("the canary {} is inside an allowed path", probe.display())));
-        }
-        Ok(Checked { read, exec, program, args: Vec::new() })
+        check_paths(&read, &scratch, &exec, &probe)?;
+        Ok(Checked { read, scratch, exec, program, args: Vec::new() })
     }
+}
+
+/// The canary stays outside every allowed path, and nothing executable is under a folder the
+/// program can write.
+fn check_paths(read: &[PathBuf], scratch: &[PathBuf], exec: &[PathBuf], probe: &Path) -> Result<()> {
+    if read.iter().chain(scratch).chain(exec).any(|p| probe.starts_with(p)) {
+        return Err(SandboxError::BadPolicy(format!("the canary {} is inside an allowed path", probe.display())));
+    }
+    if let Some(e) = exec.iter().find(|e| scratch.iter().any(|s| e.starts_with(s) || s.starts_with(e))) {
+        return Err(SandboxError::BadPolicy(format!("the executable path {} overlaps a scratch folder", e.display())));
+    }
+    Ok(())
 }
 
 fn canonical_all(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
@@ -127,6 +146,7 @@ fn canonical(path: &Path) -> Result<PathBuf> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Checked {
     pub read: Vec<PathBuf>,
+    pub scratch: Vec<PathBuf>,
     pub exec: Vec<PathBuf>,
     program: PathBuf,
     args: Vec<OsString>,
@@ -141,11 +161,11 @@ impl Checked {
         &self.args
     }
 
-    /// The launcher's options for this policy (`--read`, `--exec`, `--probe`), without the
+    /// The launcher's options for this policy (`--read`, `--scratch`, `--exec`, `--probe`), without the
     /// program, which follows a `--`.
     pub fn to_args(&self, canary: &Path) -> Vec<OsString> {
         let mut out = Vec::new();
-        for (flag, paths) in [("--read", &self.read), ("--exec", &self.exec)] {
+        for (flag, paths) in [("--read", &self.read), ("--scratch", &self.scratch), ("--exec", &self.exec)] {
             for p in paths {
                 out.push(OsString::from(flag));
                 out.push(p.as_os_str().to_owned());
@@ -160,6 +180,7 @@ impl Checked {
     /// paths are checked again (the launcher trusts nothing), and the canary is required.
     pub fn from_args(args: &[OsString]) -> Result<(Checked, PathBuf)> {
         let mut read = Vec::new();
+        let mut scratch = Vec::new();
         let mut exec = Vec::new();
         let mut probe: Option<PathBuf> = None;
         let mut it = args.iter();
@@ -172,11 +193,12 @@ impl Checked {
             let path = canonical(Path::new(value))?;
             match flag.to_str() {
                 Some("--read") => read.push(path),
+                Some("--scratch") => scratch.push(path),
                 Some("--exec") => exec.push(path),
                 Some("--probe") if probe.is_none() => probe = Some(path),
                 _ => return Err(SandboxError::BadPolicy(format!("unknown launcher option {}", flag.to_string_lossy()))),
             }
-            if read.len() > MAX_PATHS || exec.len() > MAX_PATHS {
+            if read.len() > MAX_PATHS || scratch.len() > MAX_PATHS || exec.len() > MAX_PATHS {
                 return Err(SandboxError::BadPolicy(format!("more than {MAX_PATHS} paths")));
             }
         }
@@ -186,9 +208,7 @@ impl Checked {
             return Err(SandboxError::BadPolicy(format!("{} is not an executable path of the policy", program.display())));
         }
         let probe = probe.ok_or_else(|| SandboxError::BadPolicy("no canary (`--probe`)".into()))?;
-        if read.iter().chain(&exec).any(|p| probe.starts_with(p)) {
-            return Err(SandboxError::BadPolicy(format!("the canary {} is inside an allowed path", probe.display())));
-        }
-        Ok((Checked { read, exec, program, args: it.cloned().collect() }, probe))
+        check_paths(&read, &scratch, &exec, &probe)?;
+        Ok((Checked { read, scratch, exec, program, args: it.cloned().collect() }, probe))
     }
 }

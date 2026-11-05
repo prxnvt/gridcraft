@@ -190,6 +190,34 @@ fn a_confined_program_inherits_no_secrets() {
     assert!(out.contains("PATH=/usr/bin:/bin"), "{out}");
 }
 
+/// A scratch folder can be written and overwritten; a file next to it can't. (A shell's built-ins
+/// only: starting `mv` or `mkdir` is refused like any other program.)
+#[test]
+fn a_scratch_folder_can_be_written_and_nothing_else() {
+    if !confines() {
+        return;
+    }
+    let root = scratch("scratch");
+    let tmp = root.join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let inside = tmp.join("written.txt");
+    let beside = root.join("beside.txt");
+    let tmp_text = tmp.to_string_lossy().into_owned();
+    let script = format!("echo first > '{0}'; echo second > '{0}'; echo beside > '{1}'; echo done", inside.display(), beside.display());
+    // macOS's `/bin/sh` starts bash in its own place.
+    let mut args = vec!["sandbox-check", "--scratch", &tmp_text];
+    if cfg!(target_os = "macos") {
+        args.extend(["--exec", "/bin/bash"]);
+    }
+    args.extend(["--", "/bin/sh", "-c", &script]);
+    let o = cli(&args);
+    let out = text(&o);
+    assert!(out.contains("done"), "{out}");
+    assert_eq!(std::fs::read_to_string(&inside).unwrap(), "second\n", "{out}");
+    assert!(!beside.exists(), "written outside the scratch folder:\n{out}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A descriptor the parent leaves open (here fd 3, opened by a shell on a file outside any
 /// policy) would survive `exec` with access the sandbox doesn't revoke, so the launcher refuses
 /// before the program runs, on Linux as on macOS.

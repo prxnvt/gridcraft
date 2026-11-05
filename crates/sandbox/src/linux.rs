@@ -65,6 +65,12 @@ fn landlock(policy: &Checked) -> Result<()> {
         .add_rules(path_beneath_rules(&policy.read, read))
         .and_then(|r| r.add_rules(path_beneath_rules(&policy.exec, read | AccessFs::Execute)))
         .and_then(|r| r.add_rules(path_beneath_rules(["/dev/null"], AccessFs::ReadFile | AccessFs::WriteFile)))
+        .and_then(|r| {
+            let write = read | AccessFs::WriteFile | AccessFs::MakeReg | AccessFs::MakeDir | AccessFs::RemoveFile | AccessFs::RemoveDir;
+            r.add_rules(path_beneath_rules(&policy.scratch, write))
+        })
+        // Opening a file to overwrite it needs this right on kernels that have it.
+        .and_then(|r| r.set_compatibility(CompatLevel::BestEffort).add_rules(path_beneath_rules(&policy.scratch, AccessFs::Truncate)))
         .map_err(not_enforced)?;
     let status = ruleset.restrict_self().map_err(not_enforced)?;
     if !status.no_new_privs {
