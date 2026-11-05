@@ -77,7 +77,7 @@ when GridCraft has no sandbox for this kind of system.
 ## `sandbox-check`
 
 ```text
-gridcraft-cli sandbox-check [--read PATH]... [--scratch PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
+gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
 ```
 
 Whether this system confines programs ([sandbox.md](sandbox.md)). Without a program it starts a
