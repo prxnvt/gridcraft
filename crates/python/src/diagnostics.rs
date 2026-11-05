@@ -211,7 +211,7 @@ const PYTHON_EXCEPTION: &Kind = &k("python.exception", Error, Cell, "The code ra
 
 /// Which kinds a worker may report for an error it raised: only the cell-level ones about code.
 /// Anything else it names (it is untrusted) reads as a plain error.
-const WORKER_KINDS: [&str; 8] = [
+const WORKER_KINDS: [&str; 10] = [
     "python.syntax",
     "python.exception",
     "python.name",
@@ -220,6 +220,8 @@ const WORKER_KINDS: [&str; 8] = [
     "denied.file",
     "denied.network",
     "denied.process",
+    "plot.unsupported",
+    "xl.notLiteral",
 ];
 
 /// The diagnostic for an error the code raised.
@@ -284,6 +286,25 @@ mod tests {
         for forged in ["blocked.sandboxCheck", "off.app", "made.up", ""] {
             assert_eq!(for_error(&e(forged)).kind.id, "python.exception", "{forged}");
         }
+    }
+
+    #[test]
+    fn every_kind_the_worker_names_is_accepted_and_in_the_catalog() {
+        let shim = include_str!("shim.py");
+        let classify = &shim[shim.find("def classify").unwrap()..shim.find("def socket_errors").unwrap()];
+        let mut named: Vec<&str> = WORKER_KINDS.to_vec();
+        for piece in classify.split('"').skip(1).step_by(2).filter(|p| {
+            p.split_once('.').is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && p.chars().all(|c| c.is_ascii_alphabetic() || c == '.'))
+        }) {
+            named.push(piece);
+            assert!(WORKER_KINDS.contains(&piece), "{piece} is raised by the shim but not accepted");
+        }
+        for id in named {
+            assert!(kind(id).is_some(), "{id} isn't in the catalog");
+        }
+        assert!(WORKER_KINDS.contains(&"denied.process"), "denied_kind's answers are accepted too");
+        assert!(WORKER_KINDS.contains(&"denied.network"));
+        assert!(WORKER_KINDS.contains(&"denied.file"));
     }
 
     #[test]
