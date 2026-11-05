@@ -291,7 +291,9 @@ one `Client`, made when first needed and dropped with the workbook, which stops 
   doesn't run again until its code or inputs change or someone asks. After more than three lost
   workers in one go the cells still waiting are left stale. A result that changes what an earlier cell
   reads sends that cell back to run, for eight passes at most; past that those cells stay as they are,
-  marked stale, so cells that feed each other end. On such a pass a cell shows `#BUSY!` only when its
+  marked stale, so cells that feed each other end. A worker can also go between cells, and the client
+  replaces it as it sends without saying so, so `runner::submit` compares `Client::starts` around the
+  send and runs the cells before it first. On such a pass a cell shows `#BUSY!` only when its
   turn comes, and until then reads as what it last gave, so a formula over a later cell gives the
   earlier one its result rather than `#BUSY!`. A worker that doesn't start is tried three more
   times, as a thread starting another process can leak a descriptor that makes the launcher refuse.
@@ -347,7 +349,9 @@ a worker (time per request, extra time to start, memory, line cap), the typed ou
 with the cell error each one shows (`#CONNECT!` when the worker could not start), and the
 `Transport` trait through which workers start. `client::Client` runs one request at a time with an
 absolute deadline set by the parent, through a reader thread (lines capped in bytes, a bounded
-channel), a writer thread and a memory watcher (`/proc` on Linux, `ps` every 500 ms on macOS), and
+channel), a writer thread and a memory watcher (`/proc` on Linux, `ps` every 500 ms on macOS), with
+each reply also reporting the worker's peak (`getrusage`), so that a spike between two reads counts
+against the request that made it, and
 kills the worker at the deadline, over the memory limit, on a crash, and at a line over the cap,
 malformed JSON, a wrong id, an unsolicited line or a second reply; the next request starts a fresh
 worker. `fake::FakeTransport` stands in for the interpreter in tests on every system; the web
