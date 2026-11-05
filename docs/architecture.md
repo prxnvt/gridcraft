@@ -20,6 +20,7 @@ including tests, 2026-10-10.
 | L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings, protection |
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
+| L0 | `sandbox` | ~0.6k | Confined launcher for helper processes: Landlock and seccomp on Linux, `sandbox-exec` on macOS, refused elsewhere; checks the confinement before the program runs ([sandbox.md](sandbox.md)); used only by the apps |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
@@ -225,6 +226,19 @@ windows, where each window draws the app with its own workbook active, the edito
 its workbook's window (`PyWindow::window`), and a question or an opening brings that window
 forward.
 
+## Sandbox
+
+`crates/sandbox` runs a helper process confined. The parent spawns `launch_command`, which runs the
+application's own executable with `--sandbox-launch` and the `Policy` (read paths, executable
+paths) and a `Canary` path; both apps pass their arguments to `gridcraft_sandbox::handle_args`
+first thing in `main`. The launcher confines itself (Linux: Landlock, then two seccomp filters) or
+already runs confined (macOS: `sandbox-exec` with a deny-by-default profile built from the policy),
+then must be refused reading the canary, writing, a TCP connection and starting a process before
+it `exec`s the program; otherwise it exits with code 97 and the program never runs. Other systems
+report `Support::Unsupported`. The crate has no `unsafe` code (the system calls are behind the
+`landlock` and `seccompiler` crates) and nothing calls it in production yet.
+`gridcraft-cli sandbox-check` runs the same checks on a machine. Details: [sandbox.md](sandbox.md).
+
 ## Equations
 
 An equation is a shape (`ShapeKind::Equation`) whose `text` is its LaTeX source; it selects,
@@ -267,6 +281,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-11-02 | minor | `python.clear` (Convert to Normal Cell) and `cmd::python::clear_refusal` |
 | 2026-11-02 | minor | Python cells in the interface: `python_card.rs` (PY tags, the card, the return-type items) and `python.output` |
 | 2026-11-02 | minor | Python mode: `xl()` pointing through the shared point mode (`EditState::can_point`, `insert_ref`, `editor::python_xl`) |
+| 2026-11-04 | minor | The `sandbox` crate (L0) and its launcher entry in both apps |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
