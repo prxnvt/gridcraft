@@ -2,10 +2,12 @@
 //!
 //! Each worker gets a private directory (owner-only on Unix) holding a copy of the shim, written
 //! read-only from the copy compiled into the app, and an empty working directory. The interpreter
-//! starts as `<python> -I -S -E <shim>` (isolated mode, no `site`, no `PYTHON*` variables) with an
-//! empty environment apart from `OPENBLAS_NUM_THREADS=1`. [`Launch`] is the seam where a wrapper
-//! set with [`ProcessTransport::with_wrap`] can change the command.
+//! starts as `<python> -I -S -E <shim> <package folders...>` (isolated mode, no `site`, no
+//! `PYTHON*` variables) with an empty environment apart from `OPENBLAS_NUM_THREADS=1`. [`Launch`]
+//! is the seam where a wrapper set with [`ProcessTransport::with_wrap`] can change the command;
+//! [`sandboxed`] is the wrapper that cells run under.
 
+use std::any::Any;
 use std::ffi::OsString;
 use std::io::{Read, Write as _};
 use std::path::{Path, PathBuf};
@@ -14,6 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use gridcraft_sandbox::{Canary, Policy};
+
+use crate::describe::Interpreter;
 use crate::run::{MemoryProbe, Pipes, Transport};
 
 /// The shim's source, written to each worker's private directory.
@@ -35,18 +40,22 @@ pub struct Launch {
     /// The whole environment (nothing is inherited).
     pub env: Vec<(OsString, OsString)>,
     pub cwd: PathBuf,
+    /// The worker's private folder: the shim and `cwd` are inside it.
+    pub folder: PathBuf,
 }
 
 impl Launch {
-    /// The interpreter running `shim` in `cwd`.
-    pub fn python(python: &Path, shim: &Path, cwd: &Path) -> Launch {
+    /// The interpreter running `shim` in `cwd`, inside `folder`, given its package folders.
+    pub fn python(python: &Path, shim: &Path, cwd: &Path, folder: &Path, site_dirs: &[PathBuf]) -> Launch {
         let mut args: Vec<OsString> = PYTHON_FLAGS.iter().map(OsString::from).collect();
         args.push(shim.as_os_str().to_owned());
+        args.extend(site_dirs.iter().map(|d| d.as_os_str().to_owned()));
         Launch {
             program: python.to_path_buf(),
             args,
             env: WORKER_ENV.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))).collect(),
             cwd: cwd.to_path_buf(),
+            folder: folder.to_path_buf(),
         }
     }
 
@@ -59,12 +68,58 @@ impl Launch {
     }
 }
 
+/// What a wrapper makes of a launch: the launch to run, and what must stay alive while it runs.
+pub struct Wrapped {
+    pub launch: Launch,
+    pub guard: Option<Box<dyn Any + Send>>,
+}
+
+impl From<Launch> for Wrapped {
+    fn from(launch: Launch) -> Wrapped {
+        Wrapped { launch, guard: None }
+    }
+}
+
 /// Turns the plain launch into the one to run.
-pub type Wrap = Arc<dyn Fn(Launch) -> Result<Launch, String> + Send + Sync>;
+pub type Wrap = Arc<dyn Fn(Launch) -> Result<Wrapped, String> + Send + Sync>;
+
+/// The locale and time zone, which the launcher hands on to the program; the rest of the app's
+/// environment doesn't reach the launcher at all.
+const KEPT_ENV: [&str; 4] = ["LANG", "LC_ALL", "LC_CTYPE", "TZ"];
+
+/// The wrapper cells run under: the launch goes through the confined launcher, which may read the
+/// interpreter's files and the worker's own folder, and execute only the interpreter. `launcher` is
+/// the executable that starts it, by default this one; it must hand its arguments to
+/// `gridcraft_sandbox::handle_args` first.
+pub fn sandboxed(interpreter: &Interpreter, launcher: Option<PathBuf>) -> Wrap {
+    let read = interpreter.read_paths.clone();
+    Arc::new(move |launch: Launch| {
+        let exe = match &launcher {
+            Some(exe) => exe.clone(),
+            None => std::env::current_exe().map_err(|e| format!("couldn't find GridCraft's own program: {e}"))?,
+        };
+        let mut policy = Policy::new().with_system_libraries().read(&launch.folder).exec(&launch.program);
+        for path in &read {
+            policy = policy.read(path);
+        }
+        let canary = Canary::create().map_err(|e| e.to_string())?;
+        let cmd = gridcraft_sandbox::launch_command_with(&exe, &policy, &canary, &launch.program, &launch.args).map_err(|e| e.to_string())?;
+        let env = KEPT_ENV.iter().filter_map(|k| std::env::var_os(k).map(|v| (OsString::from(k), v))).chain(launch.env.iter().cloned()).collect();
+        let wrapped = Launch {
+            program: cmd.get_program().into(),
+            args: cmd.get_args().map(OsString::from).collect(),
+            env,
+            cwd: launch.cwd,
+            folder: launch.folder,
+        };
+        Ok(Wrapped { launch: wrapped, guard: Some(Box::new(canary)) })
+    })
+}
 
 /// Starts the interpreter at a path as the worker.
 pub struct ProcessTransport {
     python: PathBuf,
+    site_dirs: Vec<PathBuf>,
     wrap: Option<Wrap>,
     running: Option<Running>,
 }
@@ -73,12 +128,23 @@ struct Running {
     child: Child,
     dir: PrivateDir,
     stderr: Arc<Mutex<Vec<u8>>>,
+    _guard: Option<Box<dyn Any + Send>>,
 }
 
 impl ProcessTransport {
     /// `python` is an absolute path to an interpreter, as `interp::detect` found it.
     pub fn new(python: PathBuf) -> ProcessTransport {
-        ProcessTransport { python, wrap: None, running: None }
+        ProcessTransport { python, site_dirs: Vec::new(), wrap: None, running: None }
+    }
+
+    /// A described interpreter, confined: what cells run in.
+    pub fn confined(interpreter: &Interpreter, launcher: Option<PathBuf>) -> ProcessTransport {
+        ProcessTransport {
+            python: interpreter.run_as.clone(),
+            site_dirs: interpreter.site_dirs.clone(),
+            wrap: Some(sandboxed(interpreter, launcher)),
+            running: None,
+        }
     }
 
     /// Every launch goes through `wrap` before it runs.
@@ -104,10 +170,11 @@ impl Transport for ProcessTransport {
             return Err("the Python interpreter's path isn't absolute".into());
         }
         let dir = PrivateDir::create().map_err(|e| format!("couldn't make a folder for Python: {e}"))?;
-        let mut launch = Launch::python(&self.python, &dir.shim, &dir.work);
-        if let Some(wrap) = &self.wrap {
-            launch = wrap(launch)?;
-        }
+        let plain = Launch::python(&self.python, &dir.shim, &dir.work, &dir.root, &self.site_dirs);
+        let Wrapped { launch, guard } = match &self.wrap {
+            Some(wrap) => wrap(plain)?,
+            None => plain.into(),
+        };
         let mut child = launch.command().spawn().map_err(|e| format!("couldn't start {}: {e}", self.python.display()))?;
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             reap(child, dir);
@@ -121,7 +188,7 @@ impl Transport for ProcessTransport {
             let _ = std::thread::Builder::new().name("python-stderr".into()).spawn(move || drain_tail(err, &tail));
         }
         let memory = memory_probe(child.id());
-        self.running = Some(Running { child, dir, stderr });
+        self.running = Some(Running { child, dir, stderr, _guard: guard });
         Ok(Pipes { stdin: Box::new(stdin), stdout: Box::new(stdout), memory })
     }
 
@@ -356,8 +423,8 @@ mod tests {
 
     #[test]
     fn launch_is_isolated_with_an_empty_environment() {
-        let l = Launch::python(Path::new("/usr/bin/python3"), Path::new("/tmp/x/shim.py"), Path::new("/tmp/x/work"));
-        assert_eq!(l.args, ["-I", "-S", "-E", "/tmp/x/shim.py"].map(OsString::from));
+        let l = Launch::python(Path::new("/usr/bin/python3"), Path::new("/tmp/x/shim.py"), Path::new("/tmp/x/work"), Path::new("/tmp/x"), &[PathBuf::from("/site")]);
+        assert_eq!(l.args, ["-I", "-S", "-E", "/tmp/x/shim.py", "/site"].map(OsString::from));
         assert_eq!(l.env, vec![(OsString::from("OPENBLAS_NUM_THREADS"), OsString::from("1"))]);
         let c = l.command();
         let envs: Vec<_> = c.get_envs().collect();
@@ -406,7 +473,7 @@ mod tests {
         drop(pipes);
         let wrapped = ProcessTransport::new(PathBuf::from("/bin/sleep")).with_wrap(Arc::new(|l: Launch| {
             assert_eq!(l.args.len(), 4);
-            Ok(Launch { args: vec!["30".into()], ..l })
+            Ok(Launch { args: vec!["30".into()], ..l }.into())
         }));
         let mut t = wrapped;
         let _pipes = t.start().unwrap();

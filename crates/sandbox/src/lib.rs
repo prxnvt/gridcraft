@@ -90,14 +90,19 @@ pub fn support() -> Support {
 /// started (its standard streams are the program's). The command runs the current executable
 /// again, which must pass its arguments to [`handle_args`] first.
 pub fn launch_command(policy: &Policy, canary: &Canary, program: &Path, args: &[OsString]) -> Result<Command> {
-    let exe = std::env::current_exe()?;
-    let checked = policy.checked(&exe, program, canary)?;
+    launch_command_with(&std::env::current_exe()?, policy, canary, program, args)
+}
+
+/// [`launch_command`] with another executable as the launcher: one that also passes its arguments
+/// to [`handle_args`] first.
+pub fn launch_command_with(exe: &Path, policy: &Policy, canary: &Canary, program: &Path, args: &[OsString]) -> Result<Command> {
+    let checked = policy.checked(exe, program, canary)?;
     let mut launch = vec![OsString::from(LAUNCH_FLAG)];
     launch.extend(checked.to_args(canary.file()));
     launch.push(OsString::from("--"));
     launch.push(checked.program().as_os_str().to_owned());
     launch.extend(args.iter().cloned());
-    platform::command(&checked, &exe, &launch)
+    platform::command(&checked, exe, &launch)
 }
 
 /// Handles the application's own sandbox runs; call it with the process's arguments (without the

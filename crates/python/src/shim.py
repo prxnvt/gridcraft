@@ -1,7 +1,7 @@
 # GridCraft's Python worker, run by the user's own Python (3.11 or newer).
 #
-# GridCraft starts it as `python -I -S -E shim.py` with an empty environment, from a private copy
-# of this file. It speaks the JSON-lines protocol in crates/python/src/protocol.rs: requests arrive
+# GridCraft starts it as `python -I -S -E shim.py <package folders...>` with an empty environment,
+# from a private copy of this file, confined by the sandbox launcher. It speaks the JSON-lines protocol in crates/python/src/protocol.rs: requests arrive
 # one per line on standard input; each gets exactly one reply line on standard output. This file
 # is data that the user's interpreter runs; it is the one file in the repository that is not Rust.
 #
@@ -39,16 +39,25 @@ def _gridcraft_worker():
          "#CALC!", "#PYTHON!", "#BUSY!", "#TIMEOUT!", "#BLOCKED!", "#CONNECT!")
     )
 
-    # Installed packages, without `site` (which would run .pth files): the interpreter's own
-    # site-packages folders go on the path directly.
-    try:
-        paths = sysconfig.get_paths()
-    except Exception:
-        paths = {}
-    for key in ("purelib", "platlib"):
-        p = paths.get(key)
+    # Installed packages, without `site` (which would run .pth files): GridCraft worked out the
+    # package folders and hands them over, since this process may not even know it belongs to a
+    # virtual environment. Without any, the interpreter's own folders are used.
+    folders = sys.argv[1:]
+    if not folders:
+        try:
+            paths = sysconfig.get_paths()
+        except Exception:
+            paths = {}
+        folders = [paths.get(key) for key in ("purelib", "platlib")]
+    for p in folders:
         if p and p not in sys.path and os.path.isdir(p):
             sys.path.append(p)
+
+    # The sandbox lets nothing be written, so bytecode caches aren't tried. Numerical libraries stay
+    # on one thread, and matplotlib draws without a window, which the sandbox couldn't open.
+    sys.dont_write_bytecode = True
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["MPLBACKEND"] = "Agg"
 
     # The protocol's pipes are private copies. Standard input becomes an empty pipe, so input()
     # can't read requests, and standard output goes to standard error, so text that C code or a
