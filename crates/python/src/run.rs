@@ -19,6 +19,9 @@ pub struct Limits {
     /// reads `/proc`; on macOS it runs `ps` at most every 500 ms, so the limit is a watch rather
     /// than a hard cap. Elsewhere there is no watch.
     pub memory_bytes: u64,
+    /// Bytes the worker may keep in its scratch folder; it is killed above that. Read at the same
+    /// rate as its memory.
+    pub scratch_bytes: u64,
     /// Bytes in one line from the worker, at most [`MAX_LINE_BYTES`].
     pub line_bytes: usize,
 }
@@ -29,6 +32,7 @@ impl Default for Limits {
             timeout: Duration::from_secs(30),
             start_timeout: Duration::from_secs(10),
             memory_bytes: 1024 * 1024 * 1024,
+            scratch_bytes: 1024 * 1024 * 1024,
             line_bytes: MAX_LINE_BYTES,
         }
     }
@@ -45,6 +49,7 @@ impl Limits {
             timeout: self.timeout.clamp(Duration::from_millis(1), MAX_TIMEOUT),
             start_timeout: self.start_timeout.min(MAX_TIMEOUT),
             memory_bytes: self.memory_bytes,
+            scratch_bytes: self.scratch_bytes,
             line_bytes: self.line_bytes.clamp(1, MAX_LINE_BYTES),
         }
     }
@@ -61,6 +66,8 @@ pub enum Outcome {
     TimedOut,
     /// The worker went over its memory limit; it was killed.
     OverMemory { rss_bytes: u64 },
+    /// The worker went over its scratch folder's limit; it was killed.
+    OverScratch { bytes: u64 },
     /// The worker wrote a line over the cap; it was killed.
     OutputTooLarge,
     /// The worker wrote something the protocol doesn't allow (malformed, wrong id, unsolicited,
@@ -88,6 +95,7 @@ impl Outcome {
             Outcome::FailedToStart(_) => Some(CellError::Connect),
             Outcome::PythonError { .. }
             | Outcome::OverMemory { .. }
+            | Outcome::OverScratch { .. }
             | Outcome::OutputTooLarge
             | Outcome::ProtocolViolation(_)
             | Outcome::Crashed(_) => Some(CellError::Python),
@@ -128,6 +136,10 @@ pub struct Pipes {
 pub trait MemoryProbe: Send {
     /// Bytes in memory now, if it can be read.
     fn rss_bytes(&mut self) -> Option<u64>;
+    /// Bytes in the worker's scratch folder now, if it has one.
+    fn scratch_bytes(&mut self) -> Option<u64> {
+        None
+    }
     /// How long to wait between reads.
     fn interval(&self) -> Duration;
 }

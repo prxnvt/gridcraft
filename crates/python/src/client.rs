@@ -58,6 +58,8 @@ enum Event {
     Eof,
     /// The worker's memory went over the limit.
     OverMemory(u64),
+    /// The worker's scratch folder went over the limit.
+    OverScratch(u64),
 }
 
 struct Conn {
@@ -292,11 +294,12 @@ impl Client {
         let watch = pipes.memory.and_then(|probe| {
             let (watch, nudges) = mpsc::channel::<()>();
             let limit = self.limits.memory_bytes;
+            let scratch_limit = self.limits.scratch_bytes;
             let (tx, busy) = (tx.clone(), busy.clone());
             // Without the watcher the worker still runs, only without a memory limit.
             std::thread::Builder::new()
                 .name("python-memory".into())
-                .spawn(move || watch_memory(probe, limit, &busy, &nudges, &tx))
+                .spawn(move || watch_memory(probe, limit, scratch_limit, &busy, &nudges, &tx))
                 .ok()
                 .map(|_| watch)
         });
@@ -330,6 +333,7 @@ impl Client {
         match event {
             Event::TooLong => Some(Outcome::OutputTooLarge),
             Event::OverMemory(rss_bytes) => Some(Outcome::OverMemory { rss_bytes }),
+            Event::OverScratch(bytes) => Some(Outcome::OverScratch { bytes }),
             Event::Eof if ready => Some(Outcome::Crashed(self.stopped_message("Python stopped"))),
             Event::Eof => Some(Outcome::FailedToStart(self.stopped_message("Python stopped before it was ready"))),
             Event::Line(line) => match Reply::parse(&line) {
@@ -441,10 +445,10 @@ fn write_lines(mut output: Box<dyn Write + Send>, requests: &Receiver<Vec<u8>>) 
     }
 }
 
-/// The watcher thread: reads the worker's memory until the client drops its end, and reports
-/// once when it is over `limit`. It reads at the probe's rate while a request runs, ten times
-/// slower otherwise, and at once when a request starts.
-fn watch_memory(mut probe: Box<dyn MemoryProbe>, limit: u64, busy: &AtomicBool, nudges: &Receiver<()>, tx: &SyncSender<Event>) {
+/// The watcher thread: reads the worker's memory and scratch folder until the client drops its
+/// end, and reports once when one is over its limit. It reads at the probe's rate while a request
+/// runs, ten times slower otherwise, and at once when a request starts.
+fn watch_memory(mut probe: Box<dyn MemoryProbe>, limit: u64, scratch_limit: u64, busy: &AtomicBool, nudges: &Receiver<()>, tx: &SyncSender<Event>) {
     loop {
         let every = probe.interval();
         let wait = if busy.load(Ordering::SeqCst) { every } else { every.saturating_mul(IDLE_WATCH_FACTOR) };
@@ -452,11 +456,12 @@ fn watch_memory(mut probe: Box<dyn MemoryProbe>, limit: u64, busy: &AtomicBool, 
             Ok(()) | Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
-        let Some(rss) = probe.rss_bytes() else { continue };
-        if rss <= limit {
-            continue;
-        }
-        match tx.try_send(Event::OverMemory(rss)) {
+        let over = match (probe.rss_bytes(), probe.scratch_bytes()) {
+            (Some(rss), _) if rss > limit => Event::OverMemory(rss),
+            (_, Some(bytes)) if bytes > scratch_limit => Event::OverScratch(bytes),
+            _ => continue,
+        };
+        match tx.try_send(over) {
             Ok(()) | Err(TrySendError::Disconnected(_)) => return,
             // The queue is full of lines; the client reads them and this tries again.
             Err(TrySendError::Full(_)) => {}

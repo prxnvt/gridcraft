@@ -1,7 +1,8 @@
 //! The real worker: the user's interpreter running `shim.py`.
 //!
 //! Each worker gets a private directory (owner-only on Unix) holding a copy of the shim, written
-//! read-only from the copy compiled into the app, and an empty working directory. The interpreter
+//! read-only from the copy compiled into the app, an empty working directory, and an empty scratch
+//! folder, the only place a confined worker can write, gone with the worker. The interpreter
 //! starts as `<python> -I -S -E <shim> <package folders...>` (isolated mode, no `site`, no
 //! `PYTHON*` variables) with an empty environment apart from `OPENBLAS_NUM_THREADS=1`. [`Launch`]
 //! is the seam where a wrapper set with [`ProcessTransport::with_wrap`] can change the command;
@@ -28,6 +29,11 @@ pub const SHIM: &str = include_str!("shim.py");
 pub const PYTHON_FLAGS: [&str; 3] = ["-I", "-S", "-E"];
 /// The only environment variable the worker gets: numpy's BLAS runs on one thread.
 pub const WORKER_ENV: [(&str, &str); 1] = [("OPENBLAS_NUM_THREADS", "1")];
+/// The scratch folder's name, next to the shim; `shim.py` finds it there.
+const SCRATCH_FOLDER: &str = "tmp";
+/// Entries of a scratch folder counted, which also stops a flood of empty files: past this it reads
+/// as over any limit.
+const MAX_SCRATCH_ENTRIES: u64 = 100_000;
 /// Bytes of the worker's standard error kept (its end).
 const STDERR_TAIL: usize = 8 * 1024;
 
@@ -40,13 +46,16 @@ pub struct Launch {
     /// The whole environment (nothing is inherited).
     pub env: Vec<(OsString, OsString)>,
     pub cwd: PathBuf,
-    /// The worker's private folder: the shim and `cwd` are inside it.
+    /// The worker's private folder: the shim, `cwd` and the scratch folder are inside it.
     pub folder: PathBuf,
+    /// The scratch folder (`tmp` next to the shim).
+    pub scratch: PathBuf,
 }
 
 impl Launch {
     /// The interpreter running `shim` in `cwd`, inside `folder`, given its package folders.
     pub fn python(python: &Path, shim: &Path, cwd: &Path, folder: &Path, site_dirs: &[PathBuf]) -> Launch {
+        let scratch = folder.join(SCRATCH_FOLDER);
         let mut args: Vec<OsString> = PYTHON_FLAGS.iter().map(OsString::from).collect();
         args.push(shim.as_os_str().to_owned());
         args.extend(site_dirs.iter().map(|d| d.as_os_str().to_owned()));
@@ -56,6 +65,7 @@ impl Launch {
             env: WORKER_ENV.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))).collect(),
             cwd: cwd.to_path_buf(),
             folder: folder.to_path_buf(),
+            scratch,
         }
     }
 
@@ -98,7 +108,7 @@ pub fn sandboxed(interpreter: &Interpreter, launcher: Option<PathBuf>) -> Wrap {
             Some(exe) => exe.clone(),
             None => std::env::current_exe().map_err(|e| format!("couldn't find GridCraft's own program: {e}"))?,
         };
-        let mut policy = Policy::new().with_system_libraries().read(&launch.folder).exec(&launch.program);
+        let mut policy = Policy::new().with_system_libraries().read(&launch.folder).scratch(&launch.scratch).exec(&launch.program);
         for path in &read {
             policy = policy.read(path);
         }
@@ -111,6 +121,7 @@ pub fn sandboxed(interpreter: &Interpreter, launcher: Option<PathBuf>) -> Wrap {
             env,
             cwd: launch.cwd,
             folder: launch.folder,
+            scratch: launch.scratch,
         };
         Ok(Wrapped { launch: wrapped, guard: Some(Box::new(canary)) })
     })
@@ -187,7 +198,7 @@ impl Transport for ProcessTransport {
             // its deadline, which is still safe.
             let _ = std::thread::Builder::new().name("python-stderr".into()).spawn(move || drain_tail(err, &tail));
         }
-        let memory = memory_probe(child.id());
+        let memory = memory_probe(child.id()).map(|inner| Box::new(Watch { inner, scratch: dir.tmp.clone() }) as Box<dyn MemoryProbe>);
         self.running = Some(Running { child, dir, stderr, _guard: guard });
         Ok(Pipes { stdin: Box::new(stdin), stdout: Box::new(stdout), memory })
     }
@@ -245,6 +256,51 @@ pub struct PrivateDir {
     pub root: PathBuf,
     pub shim: PathBuf,
     pub work: PathBuf,
+    pub tmp: PathBuf,
+}
+
+/// The worker's memory, as the system's probe reads it, and the size of its scratch folder.
+struct Watch {
+    inner: Box<dyn MemoryProbe>,
+    scratch: PathBuf,
+}
+
+impl MemoryProbe for Watch {
+    fn rss_bytes(&mut self) -> Option<u64> {
+        self.inner.rss_bytes()
+    }
+
+    fn scratch_bytes(&mut self) -> Option<u64> {
+        Some(folder_bytes(&self.scratch))
+    }
+
+    fn interval(&self) -> Duration {
+        self.inner.interval()
+    }
+}
+
+/// The bytes in the files under `dir`, without following links. Past [`MAX_SCRATCH_ENTRIES`]
+/// entries it answers with the largest number.
+fn folder_bytes(dir: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut seen = 0u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(listing) = std::fs::read_dir(&d) else { continue };
+        for entry in listing.flatten() {
+            seen += 1;
+            if seen > MAX_SCRATCH_ENTRIES {
+                return u64::MAX;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
 }
 
 static DIRS: AtomicU64 = AtomicU64::new(0);
@@ -269,8 +325,9 @@ impl PrivateDir {
                 }
                 Err(e) => return Err(e),
             }
-            let dir = PrivateDir { shim: root.join("shim.py"), work: root.join("work"), root };
+            let dir = PrivateDir { shim: root.join("shim.py"), work: root.join("work"), tmp: root.join(SCRATCH_FOLDER), root };
             make_private_dir(&dir.work)?;
+            make_private_dir(&dir.tmp)?;
             write_private_file(&dir.shim, SHIM.as_bytes())?;
             return Ok(dir);
         }
@@ -423,7 +480,13 @@ mod tests {
 
     #[test]
     fn launch_is_isolated_with_an_empty_environment() {
-        let l = Launch::python(Path::new("/usr/bin/python3"), Path::new("/tmp/x/shim.py"), Path::new("/tmp/x/work"), Path::new("/tmp/x"), &[PathBuf::from("/site")]);
+        let l = Launch::python(
+            Path::new("/usr/bin/python3"),
+            Path::new("/tmp/x/shim.py"),
+            Path::new("/tmp/x/work"),
+            Path::new("/tmp/x"),
+            &[PathBuf::from("/site")],
+        );
         assert_eq!(l.args, ["-I", "-S", "-E", "/tmp/x/shim.py", "/site"].map(OsString::from));
         assert_eq!(l.env, vec![(OsString::from("OPENBLAS_NUM_THREADS"), OsString::from("1"))]);
         let c = l.command();

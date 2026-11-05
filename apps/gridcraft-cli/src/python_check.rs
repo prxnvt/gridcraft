@@ -52,7 +52,9 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     let env = SearchEnv::from_process();
     outln!("uv: {}", interp::find_uv(&env).map_or("not found".to_string(), |p| p.display().to_string()));
     let interpreter = match interp::detect(&env, python.as_deref(), interp::PROBE_TIMEOUT) {
-        Detection::Found { path, .. } => describe::describe(&path, interp::PROBE_TIMEOUT).map_err(|e| format!("couldn't ask {} what it is: {e:?}", path.display()))?,
+        Detection::Found { path, .. } => {
+            describe::describe(&path, interp::PROBE_TIMEOUT).map_err(|e| format!("couldn't ask {} what it is: {e:?}", path.display()))?
+        }
         Detection::NoneFound => {
             outln!("python: none found (Python {} or newer is needed)", interp::MIN_VERSION);
             setup_hint();
@@ -70,7 +72,8 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         }
     };
     report(&interpreter);
-    let mut client = Client::new(Box::new(ProcessTransport::confined(&interpreter, None)), Limits { timeout: Duration::from_secs(60), ..Limits::default() });
+    let mut client =
+        Client::new(Box::new(ProcessTransport::confined(&interpreter, None)), Limits { timeout: Duration::from_secs(60), ..Limits::default() });
     let mut ok = list_packages(&mut client);
     for c in &code {
         ok &= run_code(&mut client, c);
@@ -150,6 +153,7 @@ fn describe_outcome(o: &Outcome) -> String {
         Outcome::PythonError { error, .. } => error.message.clone(),
         Outcome::TimedOut => "ran past its time limit".into(),
         Outcome::OverMemory { rss_bytes } => format!("went over its memory limit ({rss_bytes} bytes)"),
+        Outcome::OverScratch { bytes } => format!("went over its scratch folder's limit ({bytes} bytes)"),
         Outcome::OutputTooLarge => "wrote a line over the cap".into(),
         Outcome::ProtocolViolation(m) | Outcome::Crashed(m) | Outcome::FailedToStart(m) => m.clone(),
     }
