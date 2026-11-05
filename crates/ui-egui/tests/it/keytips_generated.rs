@@ -95,6 +95,13 @@ fn keytip_m_() {
 }
 
 #[test]
+fn keytip_y_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "Y", false);
+    assert_eq!(h.state().ui.ribbon_tab, "Python", "Y must switch to the Python tab");
+}
+
+#[test]
 fn keytip_a_() {
     let mut h = harness(blank());
     sequence(&mut h, "A", false);
@@ -1919,6 +1926,144 @@ fn keytip_my_() {
 }
 
 #[test]
+fn keytip_mzr_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "MZR", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "MZR must invoke python.reset and surface its missing-params error");
+}
+
+#[test]
+fn keytip_mzd_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "MZD", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "MZD must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_ya_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YA", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "YA must invoke python.runAll and surface its missing-params error");
+}
+
+#[test]
+fn keytip_yb_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YB", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YB must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yc_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YC", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "YC must invoke python.run and surface its missing-params error");
+}
+
+#[test]
+fn keytip_ye_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YE", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YE must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yi_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YI", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YI must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yk_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YK", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YK must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yl_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YL", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YL must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_ym_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YM", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YM must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yn_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YN", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YN must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yo_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YO", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YO must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yp_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YP", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YP must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yr_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YR", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "YR must invoke python.reset and surface its missing-params error");
+}
+
+#[test]
+fn keytip_ys_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YS", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "python.stop"), "YS must journal python.stop");
+}
+
+#[test]
+fn keytip_yv_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YV", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YV must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yw_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YW", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YW must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_yx_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "YX", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "python.clearRunLog"), "YX must journal python.clearRunLog");
+}
+
+#[test]
 fn keytip_ab_() {
     let mut h = harness(blank());
     sequence(&mut h, "AB", false);
@@ -3097,7 +3242,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 414;
+    const EXPECTED: usize = 433;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 
