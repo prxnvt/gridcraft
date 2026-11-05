@@ -3,7 +3,7 @@
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
 //!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer]
-//!  [--python off|on|fromFile|notSetUp|noPython|blocked|noSandbox] [--ui 'id={json}']... out.png`
+//!  [--python off|on|shortLimit|fromFile|notSetUp|noPython|blocked|noSandbox] [--ui 'id={json}']... out.png`
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
 //! `range` on the grid, as a person picking a range for that box does.
@@ -13,7 +13,8 @@
 //! after it starts.
 //!
 //! `--python` shows Python in that state with a fake worker and a made-up report, so no Python runs:
-//! a cell's code is `ret 1`, `print text`, `fail`, or `hang`.
+//! a cell's code is `ret 1`, `print text`, `fail` (or any code with `raise` in it, failing on its
+//! second line), `denied`, `missing`, or `hang`. `shortLimit` has a time limit of a second.
 
 use gridcraft_engine::python::{Interpreter, InterpreterKind, PythonSearch, Version};
 use gridcraft_engine::{FoundPython, PythonEnvironment, PythonState, Session};
@@ -24,7 +25,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// The fake worker's cells: `ret 5`, `print some text`, `fail`, `hang`.
+/// The fake worker's cells.
 fn fake_worker() -> FakeTransport {
     FakeTransport::new(|mut w| {
         w.ready();
@@ -37,11 +38,24 @@ fn fake_worker() -> FakeTransport {
             };
             let number = code.strip_prefix("ret ").and_then(|n| n.parse().ok()).unwrap_or(1.0);
             let value = Ok(Output::Value(gridcraft_engine::core::Value::Number(number)));
+            let error = |kind: &str, message: &str, subject: Option<&str>, line| PyError {
+                message: message.into(),
+                kind: Some(kind.into()),
+                subject: subject.map(str::to_string),
+                line,
+            };
             let sent = if code == "hang" {
                 w.stall();
                 false
-            } else if code == "fail" {
+            } else if code == "fail" || code.contains("raise") {
                 w.done(id, Err(PyError { message: "ValueError: the input has no rows".into(), line: Some(2), ..PyError::default() }))
+            } else if code == "denied" {
+                w.done(
+                    id,
+                    Err(error("denied.file", "[Errno 1] Operation not permitted: '/Users/you/data.csv'", Some("/Users/you/data.csv"), Some(1))),
+                )
+            } else if code == "missing" {
+                w.done(id, Err(error("module.missing", "No module named 'sklearn'", Some("sklearn"), Some(1))))
             } else if let Some(text) = code.strip_prefix("print ") {
                 w.send(&Reply::Done { id, result: value, stdout: format!("{text}\n") })
             } else {
@@ -125,6 +139,7 @@ fn demo_python(app: &mut SheetApp, state: &str) {
             };
         }
         "noSandbox" => app.python.set_sandbox(Err("GridCraft has no sandbox for Windows".into())),
+        "shortLimit" => app.ui.python.time_limit_secs = 1,
         "fromFile" => {
             if let Some(d) = app.session.active_mut() {
                 d.trust = gridcraft_engine::Trust::FromFile;
@@ -294,9 +309,11 @@ fn main() {
     harness.run_steps(14);
     // A fake worker answers on its own thread: results come in without input, as in the app. A cell
     // that hangs keeps Python running, so the wait is bounded.
-    if python.is_some() {
-        for _ in 0..60 {
-            if harness.state().session.python_running().is_some() || !harness.state().session.python_busy() {
+    if let Some(state) = &python {
+        let wait_it_out = state == "shortLimit";
+        for _ in 0..if wait_it_out { 400 } else { 60 } {
+            let session = &harness.state().session;
+            if (session.python_running().is_some() && !wait_it_out) || !session.python_busy() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
