@@ -15,7 +15,9 @@
 //! - exactly one `{"type":"done","id":N,"ok":true,"value":V,"stdout":"…"}` or
 //!   `{"type":"done","id":N,"ok":false,"error":{"message":"…","line":3,"kind":"denied.file",
 //!   "subject":"/a/b"},"stdout":"…"}` per request (`stdout` is left out when nothing was printed;
-//!   `kind` and `subject` when the worker has none).
+//!   `kind` and `subject` when the worker has none). Either can carry `"peak":N`, the most resident
+//!   memory the process has used so far, in bytes, which catches a spike the parent's watcher reads
+//!   too late or not at all.
 //!
 //! A value `V` is `null` (empty), a number, a string, `true` or `false`, `{"error":"#N/A"}`,
 //! `{"array":{"rows":R,"cols":C,"data":[…]}}` with `R × C` scalars in row order, or, only as a
@@ -54,6 +56,8 @@ pub const MAX_STDOUT_BYTES: usize = 1024 * 1024;
 pub const OUTPUT_CUT: &str = "\n[output cut off]\n";
 /// Cells in one array.
 pub const MAX_ARRAY_CELLS: usize = 1_000_000;
+/// The largest `peak` a reply may report, in bytes.
+pub const MAX_PEAK_BYTES: u64 = 1 << 60;
 /// Bytes in the self-test's detail.
 pub const MAX_SELF_TEST_BYTES: usize = 4 * 1024;
 /// Bytes in an error value's text (`#GETTING_DATA` is the longest).
@@ -159,7 +163,14 @@ pub enum Reply {
     /// The worker started.
     Ready { self_test: SelfTest },
     /// Request `id` finished.
-    Done { id: u64, result: Result<Output, PyError>, stdout: String },
+    Done {
+        id: u64,
+        result: Result<Output, PyError>,
+        stdout: String,
+        /// The most resident memory the worker has used so far, in bytes, when it can tell. Untrusted:
+        /// too high only stops the worker that says so, and the parent's watcher stays for too low.
+        peak: Option<u64>,
+    },
 }
 
 impl Reply {
@@ -205,13 +216,20 @@ struct RawReply {
     error: Option<RawError>,
     stdout: Option<Capped<MAX_STDOUT_BYTES>>,
     self_test: Option<RawSelfTest>,
+    peak: Option<u64>,
 }
 
 impl RawReply {
     fn validate(self) -> Result<Reply, String> {
         match self.kind {
             ReplyKind::Ready => {
-                if self.id.is_some() || self.ok.is_some() || self.value.is_some() || self.error.is_some() || self.stdout.is_some() {
+                if self.id.is_some()
+                    || self.ok.is_some()
+                    || self.value.is_some()
+                    || self.error.is_some()
+                    || self.stdout.is_some()
+                    || self.peak.is_some()
+                {
                     return Err("ready carries only selfTest".into());
                 }
                 let st = self.self_test.ok_or("ready without selfTest")?;
@@ -228,6 +246,9 @@ impl RawReply {
                     return Err("done carries no selfTest".into());
                 }
                 let id = self.id.ok_or("done without id")?;
+                if self.peak.is_some_and(|p| p > MAX_PEAK_BYTES) {
+                    return Err(format!("a peak of more than {MAX_PEAK_BYTES} bytes"));
+                }
                 let result = match (self.ok, self.value, self.error) {
                     (Some(true), Some(v), None) => Ok(v.0),
                     (Some(false), None, Some(e)) => {
@@ -235,7 +256,7 @@ impl RawReply {
                     }
                     _ => return Err("done needs ok with a value, or not ok with an error".into()),
                 };
-                Ok(Reply::Done { id, result, stdout: self.stdout.map(|s| s.0).unwrap_or_default() })
+                Ok(Reply::Done { id, result, stdout: self.stdout.map(|s| s.0).unwrap_or_default(), peak: self.peak })
             }
         }
     }
@@ -630,7 +651,7 @@ impl Serialize for WireReply<'_> {
                 m.serialize_entry("type", "ready")?;
                 m.serialize_entry("selfTest", &WireSelfTest(self_test))?;
             }
-            Reply::Done { id, result, stdout } => {
+            Reply::Done { id, result, stdout, peak } => {
                 m.serialize_entry("type", "done")?;
                 m.serialize_entry("id", id)?;
                 match result {
@@ -645,6 +666,9 @@ impl Serialize for WireReply<'_> {
                 }
                 if !stdout.is_empty() {
                     m.serialize_entry("stdout", stdout)?;
+                }
+                if let Some(peak) = peak {
+                    m.serialize_entry("peak", peak)?;
                 }
             }
         }

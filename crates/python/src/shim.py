@@ -534,6 +534,27 @@ def _gridcraft_worker():
                 kind, subject = None, None
             return done_error(rid, error_message(e), error_line(e), capture.text(), kind, subject)
 
+    try:
+        import resource
+
+        # ru_maxrss counts bytes on macOS and KiB elsewhere.
+        peak_unit = 1 if sys.platform == "darwin" else 1024
+
+        def peak():
+            return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * peak_unit
+    except Exception:
+        peak = None
+
+    def with_peak(msg):
+        # The most this process has used, so that a spike counts against the request that made it,
+        # however short it was. Left out when it can't be read.
+        try:
+            if peak is not None:
+                msg["peak"] = peak()
+        except Exception:
+            pass
+        return msg
+
     fresh()
     send({"type": "ready", "selfTest": {"status": "notChecked"}})
     while True:
@@ -546,10 +567,10 @@ def _gridcraft_worker():
             break
         kind = req.get("type") if isinstance(req, dict) else None
         if kind == "run":
-            send(run(req))
+            send(with_peak(run(req)))
         elif kind == "reset":
             fresh()
-            send({"type": "done", "id": req.get("id"), "ok": True, "value": None})
+            send(with_peak({"type": "done", "id": req.get("id"), "ok": True, "value": None}))
         else:
             break
     # GridCraft closed the pipe: stop now, without waiting for threads the cells started.

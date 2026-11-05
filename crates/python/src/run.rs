@@ -17,7 +17,8 @@ pub struct Limits {
     pub start_timeout: Duration,
     /// Resident memory the worker may use, in bytes; it is killed above that. On Linux the parent
     /// reads `/proc`; on macOS it runs `ps` at most every 500 ms, so the limit is a watch rather
-    /// than a hard cap. Elsewhere there is no watch.
+    /// than a hard cap. Elsewhere there is no watch. Each reply also reports the worker's peak, so
+    /// that a spike between two reads counts against the request that made it.
     pub memory_bytes: u64,
     /// Bytes in one line from the worker, at most [`MAX_LINE_BYTES`].
     pub line_bytes: usize,

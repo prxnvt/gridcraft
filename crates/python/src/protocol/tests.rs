@@ -37,15 +37,26 @@ fn requests_and_replies_round_trip() {
     for reply in [
         Reply::Ready { self_test: SelfTest::NotChecked },
         Reply::Ready { self_test: SelfTest::Failed("socket opened".into()) },
-        Reply::Done { id: 3, result: Ok(Output::Value(array(1, 2, vec![Value::Number(1.0), Value::text("b")]))), stdout: "hi\n".into() },
-        Reply::Done { id: 4, result: Ok(Output::Object { type_name: "dict".into(), preview: "{'a': 1}".into() }), stdout: String::new() },
+        Reply::Done { id: 3, result: Ok(Output::Value(array(1, 2, vec![Value::Number(1.0), Value::text("b")]))), stdout: "hi\n".into(), peak: None },
+        Reply::Done {
+            id: 4,
+            result: Ok(Output::Object { type_name: "dict".into(), preview: "{'a': 1}".into() }),
+            stdout: String::new(),
+            peak: Some(123),
+        },
         Reply::Done {
             id: 5,
             result: Err(PyError { message: "NameError: name 'y' is not defined".into(), line: Some(2), ..PyError::default() }),
             stdout: String::new(),
+            peak: Some(456),
         },
-        Reply::Done { id: 6, result: Err(PyError { message: "SyntaxError".into(), line: None, ..PyError::default() }), stdout: String::new() },
-        Reply::Done { id: 9, result: Ok(Output::Value(Value::Empty)), stdout: String::new() },
+        Reply::Done {
+            id: 6,
+            result: Err(PyError { message: "SyntaxError".into(), line: None, ..PyError::default() }),
+            stdout: String::new(),
+            peak: None,
+        },
+        Reply::Done { id: 9, result: Ok(Output::Value(Value::Empty)), stdout: String::new(), peak: None },
     ] {
         let line = reply.to_line();
         assert_eq!(Reply::parse(line.trim_ascii_end()).unwrap(), reply);
@@ -227,5 +238,26 @@ fn the_shim_has_the_same_caps() {
     // And knows every error value.
     for e in CellError::ALL {
         assert!(shim.contains(&format!("\"{}\"", e.as_str())), "{e} in shim.py");
+    }
+}
+
+#[test]
+fn a_peak_is_an_optional_capped_number_on_an_answer() {
+    let peak = |line: &str| match Reply::parse(line.as_bytes()) {
+        Ok(Reply::Done { peak, .. }) => Ok(peak),
+        Ok(other) => panic!("{other:?}"),
+        Err(e) => Err(e),
+    };
+    assert_eq!(peak(r#"{"type":"done","id":1,"ok":true,"value":1}"#), Ok(None));
+    assert_eq!(peak(r#"{"type":"done","id":1,"ok":true,"value":1,"peak":1048576}"#), Ok(Some(1_048_576)));
+    assert_eq!(peak(&format!(r#"{{"type":"done","id":1,"ok":true,"value":1,"peak":{MAX_PEAK_BYTES}}}"#)), Ok(Some(MAX_PEAK_BYTES)));
+    for bad in [
+        format!(r#"{{"type":"done","id":1,"ok":true,"value":1,"peak":{}}}"#, MAX_PEAK_BYTES + 1),
+        r#"{"type":"done","id":1,"ok":true,"value":1,"peak":-1}"#.to_string(),
+        r#"{"type":"done","id":1,"ok":true,"value":1,"peak":1.5}"#.to_string(),
+        r#"{"type":"done","id":1,"ok":true,"value":1,"peak":"big"}"#.to_string(),
+        r#"{"type":"ready","selfTest":{"status":"notChecked"},"peak":1}"#.to_string(),
+    ] {
+        assert!(Reply::parse(bad.as_bytes()).is_err(), "{bad}");
     }
 }

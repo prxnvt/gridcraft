@@ -69,11 +69,11 @@ fn answer(w: &mut FakeWorker, id: u64, code: &str, inputs: &BTreeMap<String, Inp
         "none" => value(Value::Empty),
         "print" => {
             let n: usize = words[1].parse().unwrap();
-            return w.send(&Reply::Done { id, result: value(Value::Number(1.0)), stdout: "x".repeat(n) });
+            return w.send(&Reply::Done { id, result: value(Value::Number(1.0)), stdout: "x".repeat(n), peak: None });
         }
         "failprint" => {
             let error = PyError { message: "ValueError: boom".into(), ..PyError::default() };
-            return w.send(&Reply::Done { id, result: Err(error), stdout: "before the error\n".into() });
+            return w.send(&Reply::Done { id, result: Err(error), stdout: "before the error\n".into(), peak: None });
         }
         "tick" => {
             let n = vars.entry("tick".into()).or_insert(0.0);

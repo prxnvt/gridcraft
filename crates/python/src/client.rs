@@ -11,7 +11,8 @@
 //! - a watcher reads the worker's memory, when the system can, and reports when it is over the
 //!   limit.
 //!
-//! The worker is killed at the deadline, over the memory limit, when it crashes, for a line over
+//! The worker is killed at the deadline, over the memory limit (as the watcher reads it, or as a
+//! reply reports its peak, which catches a spike between two reads), when it crashes, for a line over
 //! the cap, for malformed JSON, for a reply with the wrong id, for an unsolicited line or a second
 //! reply, and when the client is dropped. The next request starts a fresh worker.
 
@@ -349,10 +350,15 @@ impl Client {
                     None
                 }
                 Ok(Reply::Done { .. }) if !ready => Some(Outcome::ProtocolViolation("an answer before Python was ready".into())),
-                Ok(Reply::Done { id, result, stdout }) => {
+                Ok(Reply::Done { id, result, stdout, peak }) => {
                     let expected = self.inflight.as_ref().map(|r| r.id);
                     if Some(id) != expected {
                         return Some(Outcome::ProtocolViolation(format!("an answer for request {id} while request {} ran", expected.unwrap_or(0))));
+                    }
+                    // Over the limit at any moment of this request, even if the watcher missed it:
+                    // it counts against this request, not the next one.
+                    if let Some(rss_bytes) = peak.filter(|p| *p > self.limits.memory_bytes) {
+                        return Some(Outcome::OverMemory { rss_bytes });
                     }
                     Some(match result {
                         Ok(output) => Outcome::Ok { output, stdout },

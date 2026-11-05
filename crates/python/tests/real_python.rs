@@ -267,6 +267,23 @@ fn deadlines_and_kills_with_a_real_worker() {
 }
 
 #[test]
+fn a_short_spike_over_the_memory_limit_counts_against_the_cell_that_made_it() {
+    let Some(py) = python() else { return };
+    let mut c = Client::new(
+        Box::new(ProcessTransport::new(py)),
+        Limits { timeout: Duration::from_secs(30), start_timeout: Duration::from_secs(20), memory_bytes: 200 * 1024 * 1024, ..Limits::default() },
+    );
+    assert_eq!(value(run(&mut c, "1 + 1")), Value::Number(2.0));
+    // Touched and gone again within a moment, between two reads of the watcher.
+    match run(&mut c, "spike = b'x' * (400 * 1024 * 1024)\ndel spike\n'done'") {
+        Outcome::OverMemory { rss_bytes } => assert!(rss_bytes > 200 * 1024 * 1024, "{rss_bytes}"),
+        other => panic!("the spike went unnoticed: {other:?}"),
+    }
+    // The next cell has nothing to do with it.
+    assert_eq!(value(run(&mut c, "2 + 2")), Value::Number(4.0));
+}
+
+#[test]
 fn the_worker_exits_when_its_input_closes() {
     let Some(py) = python() else { return };
     let mut t = ProcessTransport::new(py);

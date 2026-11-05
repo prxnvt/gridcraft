@@ -444,6 +444,7 @@ fn stdout_and_objects_come_through() {
                 id: req.id(),
                 result: Ok(Output::Object { type_name: "dict".into(), preview: "{1: 2}".into() }),
                 stdout: "printed\n".into(),
+                peak: None,
             };
             w.send(&reply);
         }
@@ -461,4 +462,32 @@ fn limits_are_clamped() {
     assert_eq!(l.timeout, crate::run::MAX_TIMEOUT);
     assert_eq!(l.line_bytes, MAX_LINE_BYTES);
     assert_eq!(Limits { timeout: Duration::ZERO, line_bytes: 0, ..Limits::default() }.clamped().timeout, Duration::from_millis(1));
+}
+
+/// A worker whose answers report a peak of the number its code holds.
+fn reporting_peak() -> FakeTransport {
+    FakeTransport::new(|mut w| {
+        w.ready();
+        while let Some(req) = w.next_request() {
+            let Request::Run { id, code, .. } = req else { continue };
+            let peak = code.parse().ok();
+            w.send(&Reply::Done { id, result: Ok(Output::Value(Value::Number(1.0))), stdout: String::new(), peak });
+        }
+    })
+}
+
+#[test]
+fn a_reply_over_the_memory_limit_counts_against_that_request() {
+    let t = reporting_peak();
+    let h = t.handle();
+    let mut c = Client::new(Box::new(t), Limits { memory_bytes: 1_000, ..limits(5_000) });
+    let fine = Outcome::Ok { output: Output::Value(Value::Number(1.0)), stdout: String::new() };
+    assert_eq!(c.run("no peak reported", no_inputs()).unwrap(), fine);
+    assert_eq!(c.run("1000", no_inputs()).unwrap(), fine, "at the limit is within it");
+    assert_eq!(h.starts(), 1);
+    assert_eq!(c.run("1001", no_inputs()).unwrap(), Outcome::OverMemory { rss_bytes: 1_001 });
+    assert!(!c.alive(), "the worker that went over is gone");
+    // The next request is clean, in a fresh worker.
+    assert_eq!(c.run("5", no_inputs()).unwrap(), fine);
+    assert_eq!(h.starts(), 2);
 }
