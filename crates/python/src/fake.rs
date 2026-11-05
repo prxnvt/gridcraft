@@ -22,6 +22,7 @@ pub struct FakeTransport {
     script: Arc<Script>,
     starts: Arc<AtomicU64>,
     rss: Arc<AtomicU64>,
+    scratch: Arc<AtomicU64>,
     /// Every request any worker of this transport read, in order.
     seen: Arc<Mutex<Vec<Request>>>,
     current: Option<Current>,
@@ -38,6 +39,7 @@ struct Current {
 pub struct FakeHandle {
     starts: Arc<AtomicU64>,
     rss: Arc<AtomicU64>,
+    scratch: Arc<AtomicU64>,
     seen: Arc<Mutex<Vec<Request>>>,
 }
 
@@ -49,6 +51,10 @@ impl FakeHandle {
     /// Sets the memory the current worker reports (0: none).
     pub fn set_rss(&self, bytes: u64) {
         self.rss.store(bytes, Ordering::SeqCst);
+    }
+    /// Sets what the current worker keeps in its scratch folder (0: none).
+    pub fn set_scratch(&self, bytes: u64) {
+        self.scratch.store(bytes, Ordering::SeqCst);
     }
     /// The requests the workers read so far.
     pub fn requests(&self) -> Vec<Request> {
@@ -63,6 +69,7 @@ impl FakeTransport {
             script: Arc::new(script),
             starts: Arc::new(AtomicU64::new(0)),
             rss: Arc::new(AtomicU64::new(0)),
+            scratch: Arc::new(AtomicU64::new(0)),
             seen: Arc::new(Mutex::new(Vec::new())),
             current: None,
         }
@@ -86,7 +93,20 @@ impl FakeTransport {
     }
 
     pub fn handle(&self) -> FakeHandle {
-        FakeHandle { starts: self.starts.clone(), rss: self.rss.clone(), seen: self.seen.clone() }
+        FakeHandle { starts: self.starts.clone(), rss: self.rss.clone(), scratch: self.scratch.clone(), seen: self.seen.clone() }
+    }
+
+    /// Another transport with the same script and counters, for a caller that makes one per
+    /// workbook.
+    pub fn sharing(&self) -> FakeTransport {
+        FakeTransport {
+            script: self.script.clone(),
+            starts: self.starts.clone(),
+            rss: self.rss.clone(),
+            scratch: self.scratch.clone(),
+            seen: self.seen.clone(),
+            current: None,
+        }
     }
 }
 
@@ -103,7 +123,11 @@ impl Transport for FakeTransport {
         let script = self.script.clone();
         std::thread::Builder::new().name("python-fake".into()).spawn(move || script(worker)).map_err(|e| e.to_string())?;
         self.current = Some(Current { killed, _kill: kill });
-        Ok(Pipes { stdin: Box::new(client_in), stdout: Box::new(client_out), memory: Some(Box::new(FakeMemory(self.rss.clone()))) })
+        Ok(Pipes {
+            stdin: Box::new(client_in),
+            stdout: Box::new(client_out),
+            memory: Some(Box::new(FakeMemory { rss: self.rss.clone(), scratch: self.scratch.clone() })),
+        })
     }
 
     fn kill(&mut self) {
@@ -123,11 +147,18 @@ impl Drop for FakeTransport {
     }
 }
 
-struct FakeMemory(Arc<AtomicU64>);
+struct FakeMemory {
+    rss: Arc<AtomicU64>,
+    scratch: Arc<AtomicU64>,
+}
 
 impl MemoryProbe for FakeMemory {
     fn rss_bytes(&mut self) -> Option<u64> {
-        let v = self.0.load(Ordering::SeqCst);
+        let v = self.rss.load(Ordering::SeqCst);
+        (v > 0).then_some(v)
+    }
+    fn scratch_bytes(&mut self) -> Option<u64> {
+        let v = self.scratch.load(Ordering::SeqCst);
         (v > 0).then_some(v)
     }
     fn interval(&self) -> Duration {
