@@ -15,6 +15,7 @@ def _gridcraft_worker():
     import ast
     import builtins
     import errno
+    import importlib
     import io
     import json
     import math
@@ -159,6 +160,29 @@ def _gridcraft_worker():
 
     state = {"inputs": None}
 
+    class XlReference(ValueError):
+        pass
+
+    XlReference.__name__ = "ValueError"
+    XlReference.__qualname__ = "ValueError"
+
+    # The names Excel's default initialization imports, so code written for it runs here. Each is
+    # imported the first time it is used, so a package that isn't installed only matters to the code
+    # that uses it, and starting Python stays quick.
+    class Lazy:
+        __slots__ = ("_module",)
+
+        def __init__(self, module):
+            object.__setattr__(self, "_module", module)
+
+        def __getattr__(self, name):
+            return getattr(importlib.import_module(object.__getattribute__(self, "_module")), name)
+
+        def __repr__(self):
+            return repr(importlib.import_module(object.__getattribute__(self, "_module")))
+
+    DEFAULT_IMPORTS = {"np": "numpy", "pd": "pandas", "plt": "matplotlib.pyplot", "sns": "seaborn", "sm": "statsmodels.api"}
+
     def table(rows, headers):
         # A range is a pandas DataFrame, as in Excel; `headers=True` makes its first row the column
         # names. Without pandas it stays a list of rows.
@@ -178,10 +202,10 @@ def _gridcraft_worker():
         if inputs is None:
             raise RuntimeError("xl() only works while a cell runs")
         if not isinstance(reference, str):
-            raise TypeError('xl() takes a reference written as text, such as xl("A1:B5")')
+            raise XlReference('xl() takes a reference written as text, such as xl("A1:B5")')
         entry = inputs.get(reference)
         if not isinstance(entry, dict):
-            raise ValueError(
+            raise XlReference(
                 'xl("%s"): only references written as text in this cell\'s code can be read' % cut_chars(reference, 100)
             )
         value = to_py(entry.get("value"))
@@ -407,6 +431,8 @@ def _gridcraft_worker():
         """The catalog's kind for an error, and what it was about."""
         if isinstance(e, SyntaxError):
             return "python.syntax", None
+        if isinstance(e, XlReference):
+            return "xl.notLiteral", None
         if isinstance(e, ModuleNotFoundError):
             return "module.missing", e.name
         if isinstance(e, ImportError):
@@ -445,6 +471,8 @@ def _gridcraft_worker():
         main = types.ModuleType("__main__")
         main.__dict__["__builtins__"] = builtins
         main.__dict__["xl"] = xl
+        for name, module in DEFAULT_IMPORTS.items():
+            main.__dict__[name] = Lazy(module)
         sys.modules["__main__"] = main
         namespace["globals"] = main.__dict__
 

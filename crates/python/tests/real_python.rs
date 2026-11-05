@@ -180,10 +180,10 @@ fn stdout_is_captured_and_the_protocol_is_out_of_reach() {
     assert_eq!(value(run(&mut c, "import sys\nsys.stdin.read()")), Value::text(""));
     // The shim's names aren't in __main__ (after a reset, which drops the names set above).
     assert_eq!(value(c.reset().unwrap()), Value::Empty);
-    assert_eq!(value(run(&mut c, "','.join(sorted(k for k in globals() if not k.startswith('__')))")), Value::text("xl"));
+    assert_eq!(value(run(&mut c, "','.join(sorted(k for k in globals() if not k.startswith('__')))")), Value::text("np,pd,plt,sm,sns,xl"));
     assert_eq!(
         value(run(&mut c, "','.join(sorted(k for k in vars(__import__('sys').modules['__main__']) if not k.startswith('__')))")),
-        Value::text("xl")
+        Value::text("np,pd,plt,sm,sns,xl")
     );
     // The same worker still answers after all that.
     assert_eq!(value(run(&mut c, "2")), Value::Number(2.0));
@@ -302,6 +302,13 @@ fn errors_say_what_kind_they_are() {
     assert_eq!(kind(&mut c, "import not_a_module_anywhere"), (k("module.missing"), k("not_a_module_anywhere")));
     assert_eq!(kind(&mut c, "not_a_name"), (k("python.name"), k("not_a_name")));
     assert_eq!(kind(&mut c, "1 / 0"), (k("python.exception"), None));
+    assert_eq!(kind(&mut c, "r = 'A1'\nxl(r)"), (k("xl.notLiteral"), None));
+    // A default name of Excel's initialization only matters once it is used.
+    assert_eq!(value(run(&mut c, "x = 1\nx")), Value::Number(1.0));
+    let fake = fake_pandas("lazy");
+    let mut with = Client::new(Box::new(ProcessTransport::new(python().unwrap()).with_site_dirs(vec![fake.clone()])), Limits::default());
+    assert_eq!(value(run(&mut with, "pd.DataFrame([[1]]).rows[0][0]")), Value::Number(1.0));
+    std::fs::remove_dir_all(fake).unwrap();
     assert_eq!(kind(&mut c, "raise PermissionError(1, 'no', '/some/file')"), (k("denied.file"), k("/some/file")));
     assert_eq!(kind(&mut c, "import os\nraise PermissionError(1, 'no') # os.fork()"), (k("denied.process"), None));
     assert_eq!(kind(&mut c, "raise PermissionError(1, 'no') # socket"), (k("denied.network"), None));
