@@ -197,9 +197,12 @@ fn first_start(misbehave: impl Fn(&mut FakeWorker, u64) + Send + Sync + 'static)
     })
 }
 
+/// What a fake worker does with a request's id.
+type Misbehaviour = Box<dyn Fn(&mut FakeWorker, u64) + Send + Sync>;
+
 #[test]
 fn forged_wrong_id_and_malformed_replies_kill_the_worker() {
-    let cases: Vec<(&str, Box<dyn Fn(&mut FakeWorker, u64) + Send + Sync>)> = vec![
+    let cases: Vec<(&str, Misbehaviour)> = vec![
         (
             "wrong id",
             Box::new(|w: &mut FakeWorker, id| {

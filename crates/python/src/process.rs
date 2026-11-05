@@ -363,11 +363,16 @@ impl Drop for PrivateDir {
     }
 }
 
+#[cfg(unix)]
 fn make_private_dir(path: &Path) -> std::io::Result<()> {
     let mut b = std::fs::DirBuilder::new();
-    #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
     b.create(path)
+}
+
+#[cfg(not(unix))]
+fn make_private_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir(path)
 }
 
 fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

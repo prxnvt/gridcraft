@@ -51,7 +51,7 @@ fn array(rows: usize, cols: usize, data: Vec<Value>) -> Value {
 }
 
 #[test]
-fn values_errors_globals_and_reset() {
+fn values_and_errors() {
     let Some(py) = python() else { return };
     let mut c = client(py);
     assert_eq!(value(run(&mut c, "1 + 2")), Value::Number(3.0));
@@ -108,7 +108,12 @@ fn values_errors_globals_and_reset() {
         Outcome::PythonError { error, .. } => assert_eq!(error.message, "SystemExit: 3"),
         other => panic!("{other:?}"),
     }
+}
 
+#[test]
+fn globals_last_until_a_reset() {
+    let Some(py) = python() else { return };
+    let mut c = client(py);
     // Globals persist across runs, until a reset.
     assert_eq!(value(run(&mut c, "shared = 41")), Value::Empty);
     assert_eq!(value(run(&mut c, "shared + 1")), Value::Number(42.0));
