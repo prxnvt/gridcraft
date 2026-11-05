@@ -4,6 +4,7 @@
 //! - `describe` works out what to start and what the sandbox must let it read.
 //! - `shim.py` is what that interpreter runs: it reads requests, keeps the globals the cells
 //!   share, gives each cell its `xl()` inputs and converts the result.
+//! - [`diagnostics`] is the catalog of what can be wrong, in the words the interface uses.
 //! - [`protocol`] is the JSON-lines protocol between them, with a cap on every field.
 //! - [`client::Client`] runs one request at a time with an absolute deadline, and kills the
 //!   worker at any limit or at anything the protocol doesn't allow.
@@ -15,6 +16,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod diagnostics;
 pub mod interp;
 pub mod protocol;
 pub mod run;
