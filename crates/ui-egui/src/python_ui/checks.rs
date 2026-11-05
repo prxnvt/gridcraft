@@ -128,6 +128,11 @@ impl CodeChecks {
             let chars = char_of(text, f.start)..char_of(text, f.end);
             let entry_level = level(f.kind.severity);
             marks.push(Mark { chars: chars.clone(), line: f.line, level: entry_level, tip: tip(f.kind, &f.detail) });
+            // The last run already said this about this line: the underline stays, the list says it once.
+            let said = self.run.as_ref().filter(|_| self.run_is_current).is_some_and(|d| d.line == Some(f.line) && restates(d.kind.id, f.kind.id));
+            if said {
+                continue;
+            }
             entries.push(Entry {
                 kind: f.kind,
                 level: entry_level,
@@ -192,6 +197,18 @@ pub(crate) fn update(app: &mut SheetApp, checks: &mut CodeChecks, text: &str, do
     let (names, generation) = installed(app);
     let (run, current) = run_of(app, doc, sheet, cell, text);
     checks.update(text, names.as_ref().map(|n| n.as_slice()), generation, app.ui.language, run.as_ref(), current);
+}
+
+/// Whether a check says what a run's error of kind `run` already says.
+fn restates(run: &str, check: &str) -> bool {
+    matches!(
+        (run, check),
+        ("module.missing", "lint.importMissing")
+            | ("plot.unsupported", "lint.plotting")
+            | ("denied.file", "lint.fileAccess")
+            | ("denied.network" | "denied.process", "lint.importBlocked")
+            | ("xl.notLiteral", "lint.xlNotLiteral")
+    )
 }
 
 #[cfg(test)]
@@ -260,5 +277,19 @@ mod tests {
         assert!(checks.entries.is_empty());
         checks.update("import nope\n", Some(&["pandas".to_string()]), 2, Language::En, None, false);
         assert_eq!(checks.entries[0].kind.id, "lint.importMissing");
+    }
+
+    #[test]
+    fn a_check_that_repeats_the_last_run_is_listed_once() {
+        let mut checks = CodeChecks::default();
+        let run = Diagnostic::new("module.missing", "No module named 'x'", Some(1));
+        let installed: Vec<String> = Vec::new();
+        checks.update("import x", Some(&installed), 1, Language::En, Some(&run), true);
+        let ids: Vec<&str> = checks.entries.iter().map(|e| e.kind.id).collect();
+        assert_eq!(ids, ["module.missing"]);
+        assert_eq!(checks.marks.len(), 2, "the underline stays");
+        // Code changed since the run: the run's line says nothing about this line.
+        checks.update("import x", Some(&installed), 1, Language::En, Some(&run), false);
+        assert_eq!(checks.entries.len(), 2);
     }
 }
