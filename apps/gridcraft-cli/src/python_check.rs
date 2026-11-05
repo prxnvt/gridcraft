@@ -153,7 +153,6 @@ fn describe_outcome(o: &Outcome) -> String {
         Outcome::PythonError { error, .. } => error.message.clone(),
         Outcome::TimedOut => "ran past its time limit".into(),
         Outcome::OverMemory { rss_bytes } => format!("went over its memory limit ({rss_bytes} bytes)"),
-        Outcome::OverScratch { bytes } => format!("went over its scratch folder's limit ({bytes} bytes)"),
         Outcome::OutputTooLarge => "wrote a line over the cap".into(),
         Outcome::ProtocolViolation(m) | Outcome::Crashed(m) | Outcome::FailedToStart(m) => m.clone(),
     }

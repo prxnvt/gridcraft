@@ -56,18 +56,10 @@ def _gridcraft_worker():
         if p and p not in sys.path and os.path.isdir(p):
             sys.path.append(p)
 
-    # The sandbox lets nothing be written outside the worker's scratch folder, next to this file,
-    # which goes with the worker: temporary files and matplotlib's cache live there, and bytecode
-    # caches aren't tried. Numerical libraries stay on one thread, and matplotlib draws without a
-    # window, which the sandbox couldn't open. The working directory stays read-only, so saving to
-    # a file by name fails instead of writing somewhere that disappears.
+    # The sandbox lets nothing be written, so bytecode caches aren't tried. Numerical libraries stay
+    # on one thread, and matplotlib draws without a window, which the sandbox couldn't open.
     sys.dont_write_bytecode = True
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["MPLBACKEND"] = "Agg"
-    scratch = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
-    if os.path.isdir(scratch):
-        os.environ["TMPDIR"] = scratch
-        os.environ["MPLCONFIGDIR"] = os.path.join(scratch, "matplotlib")
 
     # The protocol's pipes are private copies. Standard input becomes an empty pipe, so input()
     # can't read requests, and standard output goes to standard error, so text that C code or a

@@ -151,13 +151,6 @@ pub const CATALOG: &[Kind] = &[
     k("xl.tooLarge", Error, Cell, "This range is too large to send to Python.", A::None),
     k("limit.time", Error, Cell, "The code ran past the time limit. Python was restarted, so its variables were cleared.", A::RunAgain),
     k("limit.memory", Error, Cell, "The code went over the memory limit. Python was restarted, so its variables were cleared.", A::RunAgain),
-    k(
-        "limit.scratch",
-        Error,
-        Cell,
-        "The code wrote too much to its temporary folder. Python was restarted, so its variables were cleared.",
-        A::RunAgain,
-    ),
     k("limit.result", Error, Cell, "The result is too large to bring back to the sheet.", A::None),
     k("limit.output", Warning, Cell, "The printed output was cut off at its limit.", A::None),
     k("worker.lost", Error, Cell, "Python stopped unexpectedly and was restarted, so its variables were cleared.", A::RunAgain),
@@ -247,7 +240,6 @@ pub fn for_outcome(outcome: &Outcome) -> Option<Diagnostic> {
         Outcome::PythonError { error, .. } => for_error(error),
         Outcome::TimedOut => Diagnostic::new("limit.time", "", None),
         Outcome::OverMemory { rss_bytes } => Diagnostic::new("limit.memory", format!("{} MB in use", rss_bytes / (1024 * 1024)), None),
-        Outcome::OverScratch { bytes } => Diagnostic::new("limit.scratch", format!("{} MB written", bytes / (1024 * 1024)), None),
         Outcome::OutputTooLarge => Diagnostic::new("limit.result", "", None),
         Outcome::ProtocolViolation(why) | Outcome::Crashed(why) => Diagnostic::new("worker.lost", why.clone(), None),
         Outcome::FailedToStart(why) => match why.lines().find_map(|l| l.split_once(REFUSED)) {
@@ -306,7 +298,6 @@ mod tests {
         let id = |o: Outcome| for_outcome(&o).map(|d| d.kind.id);
         assert_eq!(id(Outcome::TimedOut), Some("limit.time"));
         assert_eq!(id(Outcome::OverMemory { rss_bytes: 5 }), Some("limit.memory"));
-        assert_eq!(id(Outcome::OverScratch { bytes: 5 }), Some("limit.scratch"));
         assert_eq!(id(Outcome::OutputTooLarge), Some("limit.result"));
         assert_eq!(id(Outcome::Crashed("x".into())), Some("worker.lost"));
         assert_eq!(id(Outcome::FailedToStart("no such file".into())), Some("connect.failed"));

@@ -457,7 +457,7 @@ fn stdout_and_objects_come_through() {
 
 #[test]
 fn limits_are_clamped() {
-    let l = Limits { timeout: Duration::MAX, start_timeout: Duration::MAX, memory_bytes: 0, scratch_bytes: 0, line_bytes: usize::MAX }.clamped();
+    let l = Limits { timeout: Duration::MAX, start_timeout: Duration::MAX, memory_bytes: 0, line_bytes: usize::MAX }.clamped();
     assert_eq!(l.timeout, crate::run::MAX_TIMEOUT);
     assert_eq!(l.line_bytes, MAX_LINE_BYTES);
     assert_eq!(Limits { timeout: Duration::ZERO, line_bytes: 0, ..Limits::default() }.clamped().timeout, Duration::from_millis(1));
