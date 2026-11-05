@@ -6,13 +6,15 @@
 //! runs the application itself again with [`LAUNCH_FLAG`]; the application hands its arguments to
 //! [`handle_args`] before anything else, and the launcher:
 //!
-//! 1. confines itself: on Linux with Landlock (read-only access to the policy's paths, execute
-//!    access only to its programs, no writes) and seccomp (no new processes, no network sockets,
-//!    none of the calls that escape or inspect a sandbox); on macOS it already runs under
-//!    `sandbox-exec` with a deny-by-default profile built from the same policy;
-//! 2. checks that the confinement holds: reading the canary, writing next to it, a TCP
+//! 1. refuses when a descriptor besides standard input, output and error is open: the confinement
+//!    doesn't revoke what is already open;
+//! 2. confines itself: on Linux with Landlock (read-only access to the policy's paths, execute
+//!    access only to its programs, no writes) and seccomp (no new processes, no sockets, none of
+//!    the calls that escape or inspect a sandbox); on macOS it runs itself again under
+//!    `sandbox-exec` with a deny-by-default profile built from the same policy ([`CONFINED_FLAG`]);
+//! 3. checks that the confinement holds: reading the canary, writing next to it, a TCP
 //!    connection and starting a process must each be denied;
-//! 3. only then replaces itself with the program.
+//! 4. only then replaces itself with the program.
 //!
 //! When any step fails, the program never runs: the launcher writes one line,
 //! `gridcraft-sandbox: refused: <reason>`, to its standard error and exits with
@@ -42,6 +44,9 @@ pub use probe::{Check, Outcome};
 
 /// The first argument of a launcher run: the application passes its arguments to [`handle_args`].
 pub const LAUNCH_FLAG: &str = "--sandbox-launch";
+/// The first argument of a launcher already running confined (macOS, under `sandbox-exec`): it
+/// goes straight to the enforcement check, which refuses when it isn't confined after all.
+pub const CONFINED_FLAG: &str = "--sandbox-confined";
 /// The first argument of the child the enforcement check tries to start; it exits at once.
 pub const PROBE_CHILD_FLAG: &str = "--sandbox-probe-child";
 /// The first argument of a confined run that reports what it may and may not do
@@ -101,8 +106,8 @@ pub fn launch_command(policy: &Policy, canary: &Canary, program: &Path, args: &[
 /// becomes the program.
 pub fn handle_args(args: &[OsString]) -> Option<i32> {
     let (first, rest) = args.split_first()?;
-    if first == OsStr::new(LAUNCH_FLAG) {
-        let Err(e) = launch(rest);
+    if first == OsStr::new(LAUNCH_FLAG) || first == OsStr::new(CONFINED_FLAG) {
+        let Err(e) = if first == OsStr::new(LAUNCH_FLAG) { launch(rest) } else { confined(rest) };
         eprintln!("gridcraft-sandbox: refused: {e}");
         return Some(REFUSED_EXIT_CODE);
     }
@@ -115,10 +120,21 @@ pub fn handle_args(args: &[OsString]) -> Option<i32> {
     None
 }
 
-/// The launcher: confine, check, become the program. Returns only on failure.
+/// The launcher: check what it inherited, confine, check the confinement, become the program.
+/// Returns only on failure.
 fn launch(args: &[OsString]) -> Result<std::convert::Infallible> {
+    // First, before the launcher opens anything itself. On macOS this is also before the sandbox:
+    // under a deny-by-default profile the system's libraries hold a socket of their own, which
+    // closes at `exec` and which safe code can't tell from one that was inherited.
+    no_inherited_descriptors()?;
+    let (checked, _) = policy::Checked::from_args(args)?;
+    platform::confine(&checked, args)?;
+    confined(args)
+}
+
+/// The launcher once it is confined: check that it holds, then become the program.
+fn confined(args: &[OsString]) -> Result<std::convert::Infallible> {
     let (checked, canary) = policy::Checked::from_args(args)?;
-    platform::confine(&checked)?;
     let exe = std::env::current_exe()?;
     for check in probe::enforcement(&canary, &exe) {
         if let Outcome::Allowed(detail) = check.outcome {
@@ -150,13 +166,43 @@ mod unsupported {
         Err(SandboxError::Unsupported(WHY.into()))
     }
 
-    pub fn confine(_: &Checked) -> Result<()> {
+    pub fn confine(_: &Checked, _: &[OsString]) -> Result<()> {
         Err(SandboxError::Unsupported(WHY.into()))
     }
 
     pub fn exec(_: &Path, _: &[OsString]) -> Result<std::convert::Infallible> {
         Err(SandboxError::Unsupported(WHY.into()))
     }
+}
+
+/// Refuses the launch when a descriptor besides standard input, output and error is open: one the
+/// parent leaked (a file outside the policy, a connected socket) would survive `exec`, and the
+/// confinement doesn't revoke what is already open. Only the listing's own directory descriptor
+/// may be there. A listing that can't be read refuses too.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn no_inherited_descriptors() -> Result<()> {
+    let dir = if cfg!(target_os = "linux") { "/proc/self/fd" } else { "/dev/fd" };
+    let listing = std::fs::read_dir(dir).map_err(|e| SandboxError::NotEnforced(format!("can't list open descriptors ({dir}): {e}")))?;
+    let mut above_stdio = Vec::new();
+    for entry in listing {
+        let entry = entry.map_err(|e| SandboxError::NotEnforced(format!("can't list open descriptors ({dir}): {e}")))?;
+        match entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) {
+            Some(fd) if fd > 2 => above_stdio.push(fd),
+            Some(_) => {}
+            None => return Err(SandboxError::NotEnforced(format!("unexpected entry in {dir}"))),
+        }
+    }
+    // The listing holds its own directory open, so one descriptor above stdio is expected.
+    if above_stdio.len() > 1 {
+        above_stdio.sort_unstable();
+        return Err(SandboxError::NotEnforced(format!("descriptors other than standard input, output and error are open ({above_stdio:?})")));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn no_inherited_descriptors() -> Result<()> {
+    Ok(())
 }
 
 /// Replaces this process with `program` (the confining platforms).

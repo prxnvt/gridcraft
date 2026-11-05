@@ -103,28 +103,30 @@ fn a_confined_program_reads_only_what_it_is_given() {
 
 #[test]
 fn a_launch_whose_check_fails_runs_nothing() {
-    // On macOS the launcher confines nothing itself (`sandbox-exec` does, before it starts), so a
-    // launcher started directly finds the canary readable and must refuse. On Linux a direct
-    // launch is the normal path: the launcher confines itself and the program runs.
+    // A run that says it is already confined and isn't finds the canary readable and must refuse.
+    // On macOS that is the second stage started without `sandbox-exec`; on Linux the launcher never
+    // uses that flag, and the same refusal must hold.
     let canary = scratch("canary");
     let echo = if Path::new("/bin/echo").exists() { "/bin/echo" } else { "/usr/bin/echo" };
     let probe = canary.join("allowed.txt").to_string_lossy().into_owned();
     // A dynamically linked `echo` needs the system's shared libraries and its loader.
-    let mut launch = vec!["--sandbox-launch".to_string(), "--exec".into(), echo.into()];
+    let mut launch =
+        vec!["--sandbox-confined".to_string(), "--exec".into(), echo.into(), "--exec".into(), env!("CARGO_BIN_EXE_gridcraft-cli").into()];
     for lib in ["/lib", "/lib64", "/usr/lib", "/usr/lib64"].into_iter().filter(|d| Path::new(d).exists()) {
         launch.extend(["--exec".to_string(), lib.into()]);
     }
     launch.extend(["--probe".to_string(), probe.clone(), "--".into(), echo.into(), "the program ran".into()]);
     let o = cli(&launch.iter().map(String::as_str).collect::<Vec<_>>());
     let out = text(&o);
-    if cfg!(target_os = "linux") {
-        if confines() {
-            assert!(o.status.success() && out.contains("the program ran"), "{out}");
-        }
-    } else {
-        assert_eq!(o.status.code(), Some(97), "{out}");
-        assert!(!out.contains("the program ran"), "{out}");
-        assert!(out.contains("gridcraft-sandbox: refused"), "{out}");
+    assert_eq!(o.status.code(), Some(97), "{out}");
+    assert!(!out.contains("the program ran"), "{out}");
+    assert!(out.contains("gridcraft-sandbox: refused"), "{out}");
+    // The normal path: the launcher confines itself first, and the program runs.
+    if confines() {
+        launch[0] = "--sandbox-launch".into();
+        let o = cli(&launch.iter().map(String::as_str).collect::<Vec<_>>());
+        let out = text(&o);
+        assert!(o.status.success() && out.contains("the program ran"), "{out}");
     }
     // A canary inside an allowed path is refused before anything runs, everywhere.
     let dir = canary.to_string_lossy().into_owned();
@@ -186,4 +188,27 @@ fn a_confined_program_inherits_no_secrets() {
     assert!(!out.contains("secret-"), "the environment reached the program:\n{out}");
     assert!(out.contains("LANG=en_US.UTF-8"), "the locale is kept:\n{out}");
     assert!(out.contains("PATH=/usr/bin:/bin"), "{out}");
+}
+
+/// A descriptor the parent leaves open (here fd 3, opened by a shell on a file outside any
+/// policy) would survive `exec` with access the sandbox doesn't revoke, so the launcher refuses
+/// before the program runs, on Linux as on macOS.
+#[test]
+fn an_inherited_descriptor_stops_the_launch() {
+    if !confines() {
+        return;
+    }
+    let outside = scratch("leak");
+    let leaked = outside.join("allowed.txt").to_string_lossy().into_owned();
+    let echo = if Path::new("/bin/echo").exists() { "/bin/echo" } else { "/usr/bin/echo" };
+    let cli = env!("CARGO_BIN_EXE_gridcraft-cli");
+    // `sandbox-check` builds a full policy; the shell opens fd 3 (not close-on-exec) and then
+    // becomes the command, which inherits it.
+    let script = format!("exec 3<'{leaked}'; exec '{cli}' sandbox-check -- '{echo}' 'the program ran'");
+    let o = Command::new("/bin/sh").args(["-c", &script]).output().unwrap();
+    let out = text(&o);
+    assert!(!o.status.success(), "{out}");
+    assert!(!String::from_utf8_lossy(&o.stdout).contains("the program ran"), "{out}");
+    assert!(out.contains("descriptors other than standard input, output and error are open"), "{out}");
+    std::fs::remove_dir_all(outside).unwrap();
 }

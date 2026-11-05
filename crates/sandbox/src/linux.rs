@@ -33,7 +33,7 @@ pub fn command(_: &Checked, exe: &Path, launch: &[OsString]) -> Result<Command> 
     Ok(c)
 }
 
-pub fn confine(policy: &Checked) -> Result<()> {
+pub fn confine(policy: &Checked, _: &[OsString]) -> Result<()> {
     landlock(policy)?;
     seccomp()
 }

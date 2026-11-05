@@ -1,12 +1,13 @@
-//! macOS: the launcher runs under `sandbox-exec` with a deny-by-default profile built from the
-//! policy, checks that the profile holds, and `exec`s the program, which stays under it.
+//! macOS: the launcher runs itself again under `sandbox-exec` with a deny-by-default profile built
+//! from the policy, checks that the profile holds, and `exec`s the program, which stays under it.
 
 use std::ffi::OsString;
+use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::Command;
 
 use crate::policy::Checked;
-use crate::{Result, SandboxError, Support};
+use crate::{CONFINED_FLAG, Result, SandboxError, Support};
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
@@ -18,19 +19,25 @@ pub fn support() -> Support {
     }
 }
 
+/// The launcher starts unconfined, so it can look at what it inherited first ([`confine`]). A
+/// policy the profile can't express is refused here, before anything starts.
 pub fn command(policy: &Checked, exe: &Path, launch: &[OsString]) -> Result<Command> {
     if !Path::new(SANDBOX_EXEC).exists() {
         return Err(SandboxError::Unsupported(format!("{SANDBOX_EXEC} is missing")));
     }
-    let mut c = Command::new(SANDBOX_EXEC);
-    c.arg("-p").arg(profile(policy)?).arg(exe).args(launch);
+    profile(policy)?;
+    let mut c = Command::new(exe);
+    c.args(launch);
     Ok(c)
 }
 
-/// Nothing to do in the process itself: `sandbox-exec` applied the profile before the launcher
-/// started, and the enforcement check that follows proves it.
-pub fn confine(_: &Checked) -> Result<()> {
-    Ok(())
+/// Runs the launcher again under `sandbox-exec`, with the profile applied before it starts; the
+/// enforcement check of that run proves it. Returns only on failure.
+pub fn confine(policy: &Checked, args: &[OsString]) -> Result<()> {
+    let exe = std::env::current_exe()?;
+    let mut c = Command::new(SANDBOX_EXEC);
+    c.arg("-p").arg(profile(policy)?).arg(exe).arg(CONFINED_FLAG).args(args);
+    Err(SandboxError::Io(c.exec()))
 }
 
 pub fn exec(program: &Path, args: &[OsString]) -> Result<std::convert::Infallible> {
