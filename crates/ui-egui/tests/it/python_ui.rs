@@ -1076,7 +1076,7 @@ fn the_run_log_shows_each_run_and_clears_through_a_command() {
     // A run shows all it printed, and goes to its cell.
     button(&h, "Sheet1!A1").click();
     h.run_steps(3);
-    click(&mut h, "Go to Cell");
+    click(&mut h, "Go To Cell");
     assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A1");
     // The pane's Clear, and the same on the ribbon.
     h.get_all_by_label("Clear").next().unwrap().click();

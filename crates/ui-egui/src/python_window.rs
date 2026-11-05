@@ -937,6 +937,7 @@ fn editor_key(ev: &egui::Event) -> Option<Key> {
 }
 
 fn contents(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
+    update_checks(app);
     egui::Panel::top("gridcraft.python_editor.header")
         .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 0, right: 0, top: 0, bottom: 6 }))
         .show(ui, |ui| header(app, ui, t));
@@ -948,17 +949,29 @@ fn contents(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
         .show(ui, |ui| code(app, ui));
 }
 
-/// The PY tag, the cell's address, its return type, and whether there are unsaved changes.
+/// Brings the checks of the window's code up to date.
+fn update_checks(app: &mut SheetApp) {
+    let Some(w) = app.py_window.as_ref() else { return };
+    let (text, doc, sheet, cell) = (w.text.clone(), w.doc, followed(app, w).map(|(sheet, _)| sheet), w.cell);
+    let mut checks = std::mem::take(&mut app.python.window_checks);
+    crate::python_ui::checks::update(app, &mut checks, &text, doc, sheet, cell);
+    app.python.window_checks = checks;
+}
+
+/// The PY tag, the cell's address, its return type, the interpreter, whether there are unsaved
+/// changes, and Python's state.
 fn header(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let Some(w) = app.py_window.as_ref() else { return };
     let lang = app.ui.language;
     let object = window_cell(app, w).is_some_and(|(_, object)| object);
     let address = w.address();
     let dirty = w.dirty();
+    let interpreter = app.session.python_report().interpreter.as_ref().map(|i| i.path.display().to_string());
     ui.horizontal(|ui| {
         let (tag, _) = ui.allocate_exact_size(vec2(22.0, 15.0), egui::Sense::hover());
         crate::python_card::paint_tag(ui.painter(), tag, t);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            crate::python_ui::state_chip(app, ui);
             if dirty {
                 ui.label(RichText::new(lang.tr(UNSAVED)).font(theme::ui_font(12.0)).color(t.text_dim));
             }
@@ -966,15 +979,64 @@ fn header(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
                 ui.add(egui::Label::new(RichText::new(address).font(theme::ui_bold(13.0)).color(t.text)).truncate());
                 let output = lang.tr(if object { PYTHON_OBJECT } else { EXCEL_VALUE });
                 ui.add(egui::Label::new(RichText::new(output).font(theme::ui_font(12.0)).color(t.text_dim)).truncate());
+                if let Some(path) = &interpreter {
+                    ui.add(egui::Label::new(RichText::new(path).font(theme::ui_font(11.5)).color(t.text_dim)).truncate());
+                }
             });
         });
     });
 }
 
-/// The message under the code, the question about unsaved changes, or the keys, the code's
-/// length and the Apply and Close buttons.
+/// The rows of the problems strip that show before it scrolls.
+const STRIP_ROWS: usize = 4;
+
+/// This cell's diagnostics and the checks of its code, under the code. A click on one that has a
+/// place in the code goes there. Only the rows in view are drawn.
+fn problems_strip(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
+    let count = app.python.window_checks.entries.len();
+    if count == 0 {
+        return;
+    }
+    let lang = app.ui.language;
+    let row = ui.text_style_height(&egui::TextStyle::Body) + 2.0;
+    let mut go = None;
+    egui::ScrollArea::vertical()
+        .id_salt("gridcraft.python_editor.problems")
+        .max_height(row * STRIP_ROWS as f32)
+        .auto_shrink([false, true])
+        .show_rows(ui, row, count, |ui, rows| {
+            for index in rows {
+                let Some(e) = app.python.window_checks.entries.get(index) else { continue };
+                let message = lang.tr(e.kind.message);
+                let said = match e.line {
+                    Some(line) => lang.tr("Line {line}: {message}").replace("{line}", &line.to_string()).replace("{message}", message),
+                    None => message.to_string(),
+                };
+                let text = if e.detail.is_empty() { said } else { format!("{said} ({})", e.detail.lines().next().unwrap_or_default()) };
+                let color = match e.level {
+                    code_editor::MarkLevel::Error => t.danger,
+                    code_editor::MarkLevel::Warning | code_editor::MarkLevel::Info => t.text,
+                };
+                let label = egui::Label::new(RichText::new(text).font(theme::ui_font(12.0)).color(color)).truncate().sense(egui::Sense::click());
+                if ui.add(label).clicked() {
+                    go = e.char_at;
+                }
+            }
+        });
+    ui.add_space(4.0);
+    if let (Some(at), Some(w)) = (go, app.py_window.as_mut()) {
+        w.caret = Some(at);
+        w.focus = true;
+    }
+}
+
+/// The problems strip with the message under the code, the question about unsaved changes, or the
+/// keys, the code's length and the Apply and Close buttons.
 fn footer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let lang = app.ui.language;
+    if app.py_window.as_ref().is_none_or(|w| w.pending.is_none()) {
+        problems_strip(app, ui, t);
+    }
     let Some(w) = app.py_window.as_ref() else { return };
     if w.pending.is_some() {
         return question(app, ui, t);
@@ -1077,6 +1139,7 @@ fn code(app: &mut SheetApp, ui: &mut Ui) {
     let stop = |ev: &egui::Event| editor_key(ev).is_some();
     let accept = |new: &str, old: &str| accept_code(new, old);
     let size = ui.available_size();
+    let checks = std::mem::take(&mut app.python.window_checks);
     let options = FieldOptions {
         width: size.x,
         max_height: size.y,
@@ -1088,9 +1151,16 @@ fn code(app: &mut SheetApp, ui: &mut Ui) {
         keep_escape: true,
         caret,
         name: &name,
+        marks: &checks.marks,
         ..FieldOptions::new(Lang::Python)
     };
     let out = code_editor::code_field(ui, id, &mut w.text, &options);
+    app.python.window_checks = checks;
+    // The marks catch up with this edit in the next frame.
+    if out.response.changed() {
+        ui.ctx().request_repaint();
+    }
+    let Some(w) = app.py_window.as_mut() else { return };
     w.gutter = out.gutter;
     if out.refused {
         w.notice = Some(Notice::TooLong);
