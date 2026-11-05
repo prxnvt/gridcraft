@@ -180,3 +180,6 @@ operates the real mouse and keyboard or the system's accessibility interface.
 workbookEnabled, hasCells, enableBar, calculation, interpreter?, running? {sheet, cell, ms},
 optionsPage, panes: {environment, packages, problems, runLog, permissions}}`. `state` is what the
 Python tab's button shows; `reason` is a diagnostic's id from `python.diagnostics`' vocabulary.
+The Python tab is contextual: `ui.ribbon {tab: "Python"}` shows it only while the active cell is a
+Python cell or Python code is being edited, and otherwise the ribbon goes back to Home. Its panes open
+by their commands either way.

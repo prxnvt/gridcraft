@@ -253,6 +253,10 @@ someone who can edit the preferences file, or who operates the real mouse and ke
 accessibility interface. With Python off nothing is started: the search for Pythons
 (`engine::search_pythons`, on a thread of its own) lists paths without asking them anything.
 
+The Python tab is a contextual tab like Table Design (`ribbon::contextual_tabs`, last, so rightmost):
+`python_ui::tab_shows` is true on a Python cell, or while a draft or the editor window edits code. Its
+key tip, `Y`, is in the static table, so `SheetApp::ribbon_keys` ignores a tab that isn't up.
+
 The panes (`python_ui/panes.rs`) read `python_report`, `python_diagnostics` and `python_run_log`, and
 each opens by a UI-only command (`ui.pythonEnvironment` and the like). Their lists draw only the rows
 in view. What the interface asks every frame is cheap: `python_state` copies nothing, `python_running`
