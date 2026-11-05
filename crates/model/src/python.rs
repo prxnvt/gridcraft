@@ -42,7 +42,7 @@ pub struct PyCode {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PyOutput {
-    /// The result as cells (an array spills), or its preview as text when it has no cell form.
+    /// The result as cells (an array spills); a result with no cell form shows its type's name.
     pub value: Value,
     /// Python's name for the result's type.
     pub type_name: String,
