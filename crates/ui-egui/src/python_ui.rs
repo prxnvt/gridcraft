@@ -24,7 +24,8 @@ use std::time::Duration;
 
 use egui::{Label, RichText, Ui};
 use gridcraft_engine::python::{
-    self, Diagnostic, Interpreter, InterpreterKind, Limits, MAX_TIMEOUT, MIN_VERSION, TransportFactory, pip_install_command,
+    self, Action, Diagnostic, Interpreter, InterpreterKind, Limits, MAX_TIMEOUT, MIN_VERSION, TransportFactory, pip_install_command,
+    uv_install_commands, uv_setup_commands,
 };
 use gridcraft_engine::{FoundPython, PythonCapability, PythonEnvironment, PythonSearch, PythonState};
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,8 @@ use crate::SheetApp;
 use crate::i18n::Language;
 use crate::icons::Icon;
 use crate::theme::{self, Tokens};
+
+pub mod panes;
 
 /// How often the app wakes while Python works, so results appear without input. An idle app stays
 /// idle: nothing asks for a repaint then.
@@ -50,6 +53,17 @@ pub const TIME_LIMIT_SECS: RangeInclusive<u64> = 1..=MAX_TIMEOUT.as_secs();
 pub const MEMORY_LIMIT_MB: RangeInclusive<u64> = 128..=262_144;
 
 const MIB: u64 = 1024 * 1024;
+
+/// The panes, as `app.grid.pane` names them.
+pub const ENVIRONMENT: &str = "pythonEnvironment";
+
+pub const PACKAGES: &str = "pythonPackages";
+
+pub const PROBLEMS: &str = "pythonProblems";
+
+pub const RUN_LOG: &str = "pythonRunLog";
+
+pub const PERMISSIONS: &str = "pythonPermissions";
 
 /// The person's Python settings, kept with the other preferences (`UiState::python`). Python is off
 /// until a person turns it on: an unreadable value reads as the default, so off.
@@ -109,6 +123,8 @@ pub struct PythonUi {
     locked_until: Option<u64>,
     /// Workbooks whose Enable bar was dismissed.
     bar_dismissed: HashSet<u64>,
+    /// What each pane keeps between frames.
+    pub(crate) panes: panes::PaneState,
     /// Workers from this factory instead of a real interpreter (tests).
     #[doc(hidden)]
     pub transport: Option<TransportFactory>,
@@ -427,6 +443,40 @@ pub fn open_options(app: &mut SheetApp) {
     }
 }
 
+/// Opens a pane, in place of any other.
+pub fn open_pane(app: &mut SheetApp, pane: &str) {
+    app.grid.pane = Some(pane.to_string());
+}
+
+/// The pane a UI-only command opens.
+pub fn pane_of_command(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "ui.pythonEnvironment" => ENVIRONMENT,
+        "ui.pythonPackages" => PACKAGES,
+        "ui.pythonProblems" => PROBLEMS,
+        "ui.pythonRunLog" => RUN_LOG,
+        "ui.pythonPermissions" => PERMISSIONS,
+        _ => return None,
+    })
+}
+
+/// `ui.pythonEnvironment` and the like, `{on?}`: opens or closes a pane, which is safe from any
+/// caller. Without `on` it switches. Replies `{open}`.
+pub fn pane_command(app: &mut SheetApp, pane: &str, p: &Json) -> Result<Json, String> {
+    let open = app.grid.pane.as_deref() == Some(pane);
+    let on = match p.get("on") {
+        None | Some(Json::Null) => !open,
+        Some(Json::Bool(b)) => *b,
+        Some(_) => return Err("`on` is true or false".into()),
+    };
+    if on {
+        open_pane(app, pane);
+    } else if open {
+        app.grid.pane = None;
+    }
+    Ok(json!({"open": on}))
+}
+
 /// Puts a command on the clipboard, and says so. GridCraft copies commands; it never runs them.
 pub(crate) fn copy_command(app: &mut SheetApp, ctx: &egui::Context, command: &str) {
     ctx.copy_text(command.to_string());
@@ -443,6 +493,14 @@ pub(crate) fn command_row(app: &mut SheetApp, ui: &mut Ui, command: &str) {
         }
         ui.add(Label::new(RichText::new(command).monospace()).wrap());
     });
+}
+
+/// The command that adds `packages`, on one line, for the chosen Python or for a new environment.
+pub fn install_command(interpreter: Option<&Interpreter>, packages: &[&str]) -> String {
+    match interpreter {
+        Some(i) => uv_install_commands(i, packages).join(" && "),
+        None => uv_setup_commands(packages).join(" && "),
+    }
 }
 
 /// The same with pip, for the chosen Python, or for whatever `python3` is.
@@ -502,6 +560,61 @@ pub fn enable_bar(app: &mut SheetApp, ui: &mut Ui) {
     }
     if dismissed && let Some(uid) = app.session.active().map(|d| d.uid) {
         app.python.bar_dismissed.insert(uid);
+    }
+}
+
+/// What confines the worker on this system, for one kind of thing it can't do.
+pub fn enforcer(what: Guard) -> &'static str {
+    let linux = cfg!(target_os = "linux");
+    let macos = cfg!(target_os = "macos");
+    match what {
+        _ if !linux && !macos => "Nothing on this system: Python doesn't run here",
+        Guard::Environment => "GridCraft starts Python with an empty environment",
+        _ if macos => "macOS sandbox profile",
+        Guard::Files => "Linux Landlock",
+        Guard::System => "Linux seccomp filter",
+    }
+}
+
+/// What kind of thing a line of the permissions list is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Guard {
+    /// Files on the computer, and what can't work without them.
+    Files,
+    /// The network, other programs and windows.
+    System,
+    /// The app's environment variables.
+    Environment,
+}
+
+/// What a diagnostic's action offers here, as a button; pressing it does it.
+pub(crate) fn action_button(app: &mut SheetApp, ui: &mut Ui, action: Action) {
+    let lang = app.ui.language;
+    let ctx = ui.ctx().clone();
+    let label = match action {
+        Action::None | Action::GoToCell => return,
+        Action::OpenSettings => "Open Python Settings",
+        Action::ChooseInterpreter => "Choose Interpreter",
+        Action::CopyInstallCommand => "Copy Install Command",
+        Action::EnableWorkbook => "Enable",
+        Action::RunAgain => "Run Again",
+        Action::Reset => "Reset",
+    };
+    if !ui.button(lang.tr(label)).clicked() {
+        return;
+    }
+    match action {
+        Action::OpenSettings | Action::ChooseInterpreter => open_options(app),
+        Action::CopyInstallCommand => {
+            let command = install_command(app.session.python_report().interpreter.as_ref(), &["pandas"]);
+            copy_command(app, &ctx, &command);
+        }
+        Action::EnableWorkbook => {
+            set_workbook(app, &ctx, true);
+        }
+        Action::RunAgain => app.run_or_alert("python.runAll", json!({})),
+        Action::Reset => app.run_or_alert("python.reset", json!({})),
+        Action::None | Action::GoToCell => {}
     }
 }
 

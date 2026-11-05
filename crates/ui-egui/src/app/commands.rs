@@ -305,6 +305,10 @@ impl SheetApp {
             }
             "ui.pythonCard" => crate::python_card::command(self, p),
             "ui.pythonEditor" => crate::python_window::command(self, p),
+            "ui.pythonEnvironment" | "ui.pythonPackages" | "ui.pythonProblems" | "ui.pythonRunLog" | "ui.pythonPermissions" => {
+                crate::python_ui::pane_of_command(id)
+                    .map_or_else(|| Err("unknown pane".to_string()), |pane| crate::python_ui::pane_command(self, pane, p))
+            }
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
