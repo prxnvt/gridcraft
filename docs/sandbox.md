@@ -16,8 +16,12 @@ account. Without a sandbox it could read and change the person's files, use the 
 other programs. The sandbox's job is that it can do none of these:
 
 - **Files:** it can read only the paths its policy lists (the interpreter's installation, the
-  system's shared libraries) and write no file except `/dev/null`. The home directory, documents and other
-  workbooks are out of reach.
+  system's shared libraries) and write only `/dev/null` and a scratch folder the policy names. The
+  home directory, documents and other workbooks are out of reach. A scratch folder is a throwaway of
+  the program's own: nothing in it can be executed, and the caller removes it. Python's worker needs
+  one because matplotlib won't import without a writable folder and `tempfile` needs one; it has a
+  size limit, and its working directory stays read-only, so saving to a file by name fails instead
+  of writing somewhere that disappears.
 - **Programs:** it can execute only the programs its policy lists, and it can't start a new
   process at all, so even those only replace itself.
 - **Network:** no sockets, no connections and no listeners.
@@ -69,7 +73,8 @@ The launcher applies two layers, then runs the check.
   - **Filesystem rights:** every right Landlock handles is denied except:
     - reading files and listing directories under the read paths;
     - executing and reading the executable paths;
-    - reading and writing `/dev/null`.
+    - reading and writing `/dev/null`;
+    - reading and writing under a scratch folder, without execute access.
   - **Required and best-effort rights:** the first ABI's filesystem rights are a hard
     requirement, so without Landlock the launch is refused. Newer rights are added where the kernel
     has them:
@@ -109,10 +114,12 @@ The launcher runs itself again under `sandbox-exec` with a profile built from th
   system services a process needs to start);
 - `process-exec` for the executable paths;
 - `file-read*` for those and the read paths;
-- file metadata (for path resolution), `sysctl` reads, and writing `/dev/null`.
+- file metadata (for path resolution), `sysctl` reads, and writing `/dev/null`;
+- `file-read*` and `file-write*` for a scratch folder.
 
-There is no rule for `process-fork`, the network or writing any file but `/dev/null`, so those stay
-denied.
+There is no rule for `process-fork`, the network or writing any other file, so those stay denied.
+A local socket pair isn't refused on macOS, so `asyncio`'s event loop starts there; it still can't
+reach the network.
 Paths are quoted as profile strings, and a path that can't be quoted safely is refused.
 
 `sandbox-exec` is deprecated by Apple; support needs `/usr/bin/sandbox-exec`, and without it
@@ -121,7 +128,9 @@ given machine.
 
 A framework build of Python (Homebrew, python.org) starts its real interpreter,
 `Python.app/Contents/MacOS/Python`, as a new process from `bin/python3`. Inside the sandbox that
-start is refused, so callers run the interpreter itself.
+start is refused, so callers run the interpreter itself. Homebrew's Python also loads `_ssl` and
+`_sqlite3`'s libraries from `opt` and `Cellar`, so `gridcraft_python::describe` adds those folders to
+the policy; Homebrew's `etc` and `var`, which can hold a person's data, stay out.
 
 ## Other systems
 
@@ -134,6 +143,7 @@ Windows, FreeBSD and the web build have no confinement here: `support()` reports
 ```text
 gridcraft-cli sandbox-check
 gridcraft-cli sandbox-check --read /usr -- /usr/bin/python3 -I -c "print(1)"
+gridcraft-cli python-check --code "1 + 1"
 ```
 
 Without a program it runs a confined copy of itself that tries each denied action, plus UDP and
@@ -142,3 +152,7 @@ prints one line per attempt. With a program it runs that program confined. Exit 
 everything is as required, and 1 not, including a launch the launcher refused (for example on a
 Linux kernel without Landlock). 2 means GridCraft has no sandbox for this kind of system at all
 (Windows, FreeBSD, an architecture other than x86_64 or aarch64, macOS without `sandbox-exec`).
+
+`python-check` goes further, through the same worker as a Python cell: it prints the Python found,
+what runs, what it may read and the packages it can import, listed from inside the sandbox, and
+runs each `--code` from its own command line.

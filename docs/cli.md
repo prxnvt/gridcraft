@@ -59,10 +59,25 @@ gridcraft-cli run --in book.xlsx \
 
 Command ids and parameters: `gridcraft-cli commands`.
 
+## `python-check`
+
+```text
+gridcraft-cli python-check [--python PATH] [--code CODE]...
+```
+
+Which Python cells would use on this machine, and what it can do. It prints whether the system has a
+sandbox, where uv is, the interpreter found (uv's environments and Pythons first, or `--python`),
+what runs, the package folders, what the sandbox lets it read, and the packages it can import, as
+listed from inside the sandbox. Each `--code` runs through the same worker and sandbox as a Python
+cell, in one shared set of variables, and prints its result. The code comes from this command line,
+never from a workbook: the CLI doesn't run Python cells. When no Python is found it prints the uv
+commands that set one up. Exit status: 0 when Python started and all the code ran, 1 otherwise, 2
+when GridCraft has no sandbox for this kind of system.
+
 ## `sandbox-check`
 
 ```text
-gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
+gridcraft-cli sandbox-check [--read PATH]... [--scratch PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
 ```
 
 Whether this system confines programs ([sandbox.md](sandbox.md)). Without a program it starts a
