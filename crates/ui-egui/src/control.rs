@@ -16,6 +16,10 @@
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
 //! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
+//!
+//! Nothing here turns Python on, chooses its interpreter or enables a workbook. They aren't
+//! commands, `ui.set` has no such field, and the widgets refuse synthetic input ([`crate::python_ui`]
+//! says what that covers, and the limit).
 
 use std::sync::mpsc::Sender;
 
@@ -283,7 +287,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("options.highlightActiveRow", "Highlight the active cell's row", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
-                ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),
+                (
+                    "ui.backstage",
+                    "File (Backstage view)",
+                    "{page?: home|new|open|info|saveAs|print|export|options|account|close, section?: general|python}",
+                ),
                 (
                     "ui.printSettings",
                     "Print Settings",

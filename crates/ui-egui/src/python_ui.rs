@@ -18,16 +18,21 @@
 
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use gridcraft_engine::python::{self, Diagnostic, Limits, MAX_TIMEOUT, TransportFactory};
-use gridcraft_engine::{PythonCapability, PythonEnvironment, PythonState};
+use egui::{Label, RichText, Ui};
+use gridcraft_engine::python::{
+    self, Diagnostic, Interpreter, InterpreterKind, Limits, MAX_TIMEOUT, MIN_VERSION, TransportFactory, pip_install_command,
+};
+use gridcraft_engine::{FoundPython, PythonCapability, PythonEnvironment, PythonSearch, PythonState};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
 use crate::i18n::Language;
 use crate::icons::Icon;
+use crate::theme::{self, Tokens};
 
 /// How often the app wakes while Python works, so results appear without input. An idle app stays
 /// idle: nothing asks for a repaint then.
@@ -81,6 +86,16 @@ pub fn lenient_prefs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<PythonPre
     Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
+/// The search for Pythons, which runs on a thread of its own.
+#[derive(Default)]
+enum Search {
+    #[default]
+    NotStarted,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Running(Receiver<PythonSearch>, bool),
+    Done(PythonSearch, bool),
+}
+
 /// The interface's Python state. What the person chose is in `UiState::python`.
 #[derive(Default)]
 pub struct PythonUi {
@@ -88,6 +103,7 @@ pub struct PythonUi {
     given: Option<PythonPrefs>,
     /// Whether this system can confine a worker, asked once.
     sandbox: Option<Result<String, String>>,
+    search: Search,
     /// The frame the switches stay refused until, after synthetic input.
     locked_until: Option<u64>,
     /// Workers from this factory instead of a real interpreter (tests).
@@ -96,6 +112,9 @@ pub struct PythonUi {
     /// This report instead of a check of Python (tests).
     #[doc(hidden)]
     pub report: Option<PythonEnvironment>,
+    /// This answer instead of a search (tests).
+    #[doc(hidden)]
+    pub search_answer: Option<PythonSearch>,
 }
 
 impl PythonUi {
@@ -115,6 +134,19 @@ impl PythonUi {
     pub fn no_sandbox(&self) -> Option<&str> {
         self.sandbox.as_ref().and_then(|s| s.as_ref().err()).map(String::as_str)
     }
+
+    /// Whether the Pythons are being looked for.
+    pub fn searching(&self) -> bool {
+        matches!(self.search, Search::Running(..))
+    }
+
+    /// What the last search found.
+    pub fn found(&self) -> Option<&PythonSearch> {
+        match &self.search {
+            Search::Done(found, _) => Some(found),
+            _ => None,
+        }
+    }
 }
 
 /// What the app does for Python every frame, from `SheetApp::logic`: gives the session what the
@@ -131,7 +163,8 @@ pub fn tick(app: &mut SheetApp, ctx: &egui::Context) {
     if app.session.python_poll(Duration::ZERO) {
         ctx.request_repaint();
     }
-    if app.session.python_busy() {
+    take_search(app, ctx);
+    if app.session.python_busy() || app.python.searching() {
         ctx.request_repaint_after(BUSY_REPAINT);
     }
 }
@@ -151,12 +184,27 @@ fn sync(app: &mut SheetApp) {
         report: app.python.report.clone(),
     };
     app.session.set_python_capability(capability);
+    // What is found depends on whether Python may be asked, and which is chosen.
+    if app.python.given.as_ref().is_none_or(|g| g.enabled != prefs.enabled) {
+        app.python.search = Search::NotStarted;
+    }
     app.python.given = Some(prefs);
 }
 
 /// Whether synthetic input is about: the switches refuse it, whatever it is aimed at.
 pub fn locked(app: &SheetApp, ctx: &egui::Context) -> bool {
     app.synthetic_pending || !app.synthetic.is_empty() || app.python.locked_until.is_some_and(|until| ctx.cumulative_frame_nr() <= until)
+}
+
+/// A write to the person's Python settings, by widget code only. Refused while [`locked`]. Returns
+/// whether it was written.
+pub(crate) fn write_settings(app: &mut SheetApp, ctx: &egui::Context, write: impl FnOnce(&mut PythonPrefs)) -> bool {
+    if locked(app, ctx) {
+        return false;
+    }
+    write(&mut app.ui.python);
+    sync(app);
+    true
 }
 
 /// The state to show: on a system with no sandbox Python is blocked, whatever the setting says.
@@ -231,4 +279,194 @@ fn python_off_workbook() -> &'static str {
 /// Why this system can't run Python, in the interface's language.
 pub fn system_blocked(app: &SheetApp) -> Option<String> {
     app.python.no_sandbox().map(|why| sentence(app.ui.language, &Diagnostic::new("blocked.platform", why, None)))
+}
+
+/// Starts looking for Pythons when nothing current has been found. Asks each one only while Python
+/// is on; with Python off, nothing is started.
+pub(crate) fn ensure_search(app: &mut SheetApp) {
+    let ask = app.ui.python.enabled;
+    match &app.python.search {
+        Search::Done(_, asked) | Search::Running(_, asked) if *asked == ask => return,
+        Search::Running(..) => return,
+        _ => {}
+    }
+    if let Some(answer) = app.python.search_answer.clone() {
+        app.python.search = Search::Done(answer, ask);
+        return;
+    }
+    app.python.search = spawn_search(ask);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_search(ask: bool) -> Search {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("python-search".into()).spawn(move || {
+        // The interface may have moved on by now.
+        let _ = tx.send(gridcraft_engine::search_pythons(ask));
+    });
+    match spawned {
+        Ok(_) => Search::Running(rx, ask),
+        Err(e) => {
+            log::warn!("Python: the search didn't start: {e}");
+            Search::Done(PythonSearch::default(), ask)
+        }
+    }
+}
+
+/// The web build has no processes and no threads to spare: there is nothing to find.
+#[cfg(target_arch = "wasm32")]
+fn spawn_search(ask: bool) -> Search {
+    Search::Done(PythonSearch::default(), ask)
+}
+
+/// Looks again at the next chance, after Check Sandbox.
+pub(crate) fn search_again(app: &mut SheetApp) {
+    app.python.search = Search::NotStarted;
+}
+
+fn take_search(app: &mut SheetApp, ctx: &egui::Context) {
+    let Search::Running(rx, ask) = &app.python.search else { return };
+    let ask = *ask;
+    match rx.try_recv() {
+        Ok(found) => {
+            app.python.search = Search::Done(found, ask);
+            ctx.request_repaint();
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => app.python.search = Search::Done(PythonSearch::default(), ask),
+    }
+}
+
+/// An interpreter's kind in the interface's language.
+pub fn kind_label(lang: Language, kind: InterpreterKind) -> &'static str {
+    lang.tr(kind.label())
+}
+
+/// The rest of a found Python's row: its version and kind when it was asked, or why it won't do.
+pub fn found_note(lang: Language, f: &FoundPython) -> Option<String> {
+    let version = f.version?;
+    let kind = f.kind.map_or("", |k| kind_label(lang, k));
+    Some(if version < MIN_VERSION {
+        lang.tr("{version}, too old: Python cells need 3.11 or newer").replace("{version}", &version.to_string())
+    } else {
+        format!("{version}, {kind}")
+    })
+}
+
+/// The list of Pythons to choose from: Automatic, what the search found, the chosen one when it
+/// isn't among those, and Browse…. Choosing writes the preference. For a menu.
+pub(crate) fn interpreter_items(app: &mut SheetApp, ui: &mut Ui) {
+    ensure_search(app);
+    let lang = app.ui.language;
+    let ctx = ui.ctx().clone();
+    let current = app.ui.python.interpreter.clone();
+    let mut choice: Option<Option<String>> = None;
+    ui.add_enabled_ui(!locked(app, &ctx), |ui| {
+        if ui.selectable_label(current.is_none(), lang.tr("Automatic")).clicked() {
+            choice = Some(None);
+        }
+        let rows: Vec<(String, Option<String>)> =
+            app.python.found().map_or_else(Vec::new, |s| s.found.iter().map(|f| (f.path.display().to_string(), found_note(lang, f))).collect());
+        if app.python.searching() {
+            ui.label(RichText::new(lang.tr("Looking for Python…")).weak());
+        }
+        for (path, note) in &rows {
+            let text = match note {
+                Some(note) => format!("{path}  ({note})"),
+                None => path.clone(),
+            };
+            if ui.selectable_label(current.as_deref() == Some(path), text).clicked() {
+                choice = Some(Some(path.clone()));
+            }
+        }
+        if let Some(path) = current.as_ref().filter(|p| !rows.iter().any(|(r, _)| r == *p)) {
+            let _ = ui.selectable_label(true, path.as_str());
+        }
+        ui.separator();
+        ui.add_enabled_ui(app.services.pick_interpreter.is_some(), |ui| {
+            if ui.button(lang.tr("Browse…")).clicked() {
+                browse(app, &ctx);
+                ui.close();
+            }
+        });
+    });
+    if let Some(interpreter) = choice {
+        write_settings(app, &ctx, |p| p.interpreter = interpreter);
+        ui.close();
+    }
+}
+
+/// Browse…: chooses an interpreter with the native file picker. Refused while [`locked`], before the
+/// picker opens.
+pub(crate) fn browse(app: &mut SheetApp, ctx: &egui::Context) {
+    if locked(app, ctx) {
+        return;
+    }
+    let Some(path) = app.services.pick_interpreter.as_ref().and_then(|pick| pick()) else { return };
+    write_settings(app, ctx, |p| p.interpreter = Some(path));
+}
+
+/// Opens File › Options on its Python page.
+pub fn open_options(app: &mut SheetApp) {
+    app.open_backstage(crate::backstage::Page::Options);
+    if let Some(b) = app.backstage.as_mut() {
+        b.options_tab = crate::backstage::OptionsTab::Python;
+    }
+}
+
+/// Puts a command on the clipboard, and says so. GridCraft copies commands; it never runs them.
+pub(crate) fn copy_command(app: &mut SheetApp, ctx: &egui::Context, command: &str) {
+    ctx.copy_text(command.to_string());
+    app.toast = Some(("Copied to the clipboard.".into(), crate::now_ms()));
+}
+
+/// One command to copy: the text, and a button.
+pub(crate) fn command_row(app: &mut SheetApp, ui: &mut Ui, command: &str) {
+    let lang = app.ui.language;
+    let ctx = ui.ctx().clone();
+    ui.horizontal_top(|ui| {
+        if ui.button(lang.tr("Copy")).clicked() {
+            copy_command(app, &ctx, command);
+        }
+        ui.add(Label::new(RichText::new(command).monospace()).wrap());
+    });
+}
+
+/// The same with pip, for the chosen Python, or for whatever `python3` is.
+pub fn pip_command(interpreter: Option<&Interpreter>, packages: &[&str]) -> String {
+    match interpreter {
+        Some(i) => pip_install_command(i, packages),
+        None => format!("python3 -m pip install {}", packages.join(" ")),
+    }
+}
+
+/// The sandbox in plain words, on every system: what each line of it means for a cell.
+pub(crate) fn sandbox_lines(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    let failed = app.session.python_report().diagnostic.as_ref().filter(|d| d.kind.id == "blocked.sandboxCheck").map(|d| sentence(lang, d));
+    match system_blocked(app).or(failed) {
+        Some(why) => {
+            ui.label(why);
+        }
+        None => {
+            for line in
+                ["Reading files outside Python: blocked", "Writing files: blocked", "Using the network: blocked", "Starting other programs: blocked"]
+            {
+                ui.label(lang.tr(line));
+            }
+            dim(ui, lang.tr("Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused."));
+        }
+    }
+}
+
+/// A line of secondary text.
+pub(crate) fn dim(ui: &mut Ui, text: &str) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(text).font(theme::ui_font(12.0)).color(t.text_dim));
+}
+
+/// `python.refreshEnvironment` from the interface: Check Sandbox and Check Again.
+pub(crate) fn check_again(app: &mut SheetApp) {
+    app.run_or_alert("python.refreshEnvironment", json!({}));
+    search_again(app);
 }

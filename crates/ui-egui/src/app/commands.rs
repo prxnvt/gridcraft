@@ -260,7 +260,19 @@ impl SheetApp {
                 match p.get("page").and_then(Json::as_str).map(str::trim) {
                     Some("close" | "none" | "") => self.backstage = None,
                     Some(id) => match backstage::Page::parse(id) {
-                        Some(page) => self.open_backstage(page),
+                        Some(page) => {
+                            self.open_backstage(page);
+                            // `{"page": "options", "section": "python"}` opens File › Options › Python.
+                            if let Some(section) = p.get("section").and_then(Json::as_str)
+                                && let Some(b) = self.backstage.as_mut()
+                            {
+                                b.options_tab = if section.eq_ignore_ascii_case("python") {
+                                    backstage::OptionsTab::Python
+                                } else {
+                                    backstage::OptionsTab::General
+                                };
+                            }
+                        }
                         None => {
                             return Some(Err(format!(
                                 "unknown File page {id:?} (use home, new, open, info, saveAs, print, export, options or close)"
