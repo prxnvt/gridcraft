@@ -1,11 +1,15 @@
-//! Static reading of a Python cell's code, in Rust with no Python process, so it works with Python
-//! off, on systems with no sandbox and on the web.
+//! Static checks on a Python cell's code: [`lint`] warns a person, in the editor and before anything
+//! runs, about code the sandbox will refuse, in the `lint.*` kinds of the [`crate::diagnostics`]
+//! catalog. It runs in Rust with no Python process, so it works with Python off, on systems with no
+//! sandbox and on the web.
 //!
 //! This is a tokenizer and a linear pass over its tokens, not a parser: code can be any text, and a
 //! line still being typed must get an answer too. Text inside a comment or a string is never read
 //! as code.
 
 use std::collections::HashSet;
+
+use crate::diagnostics::{Kind, kind};
 
 // Tokens.
 
@@ -14,11 +18,22 @@ enum Tok {
     /// A name or a keyword.
     Name,
     Number,
-    Str,
+    Str(Literal),
     /// One byte of punctuation (always ASCII).
     Punct(u8),
     /// The end of a statement: a line break outside brackets. Blank lines give one token.
     Newline,
+}
+
+/// What the lexer knows about a string literal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Literal {
+    /// How many prefix letters come before the quote.
+    prefix: u8,
+    triple: bool,
+    closed: bool,
+    /// An f-string or a t-string, whose value is only known when it runs.
+    interpolated: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -26,10 +41,13 @@ struct Token {
     kind: Tok,
     start: usize,
     end: usize,
+    /// For an opening bracket: the index of the token that ends its first element, a comma or the
+    /// closing bracket. 0 until one is seen, so also when the bracket is never closed.
+    first_end: usize,
 }
 
 fn tokenize(code: &str) -> Vec<Token> {
-    let mut lexer = Lexer { bytes: code.as_bytes(), i: 0, tokens: Vec::new(), depth: 0 };
+    let mut lexer = Lexer { bytes: code.as_bytes(), i: 0, tokens: Vec::new(), open: Vec::new() };
     while let Some(&b) = lexer.bytes.get(lexer.i) {
         lexer.step(b);
     }
@@ -40,8 +58,9 @@ struct Lexer<'a> {
     bytes: &'a [u8],
     i: usize,
     tokens: Vec<Token>,
-    /// How many brackets are open: line breaks inside them don't end a statement.
-    depth: usize,
+    /// The opening brackets not yet closed, as token indexes. Line breaks inside them don't end a
+    /// statement.
+    open: Vec<usize>,
 }
 
 impl Lexer<'_> {
@@ -55,11 +74,16 @@ impl Lexer<'_> {
             b' ' | b'\t' | 0x0c => self.i += 1,
             b'"' | b'\'' => self.string(self.i, self.i, false),
             b'(' | b'[' | b'{' => {
-                self.depth = self.depth.saturating_add(1);
+                self.open.push(self.tokens.len());
                 self.punct(b);
             }
             b')' | b']' | b'}' => {
-                self.depth = self.depth.saturating_sub(1);
+                self.end_first_element();
+                self.open.pop();
+                self.punct(b);
+            }
+            b',' => {
+                self.end_first_element();
                 self.punct(b);
             }
             b if is_word_byte(b) => self.word(),
@@ -67,8 +91,18 @@ impl Lexer<'_> {
         }
     }
 
+    /// The token about to be pushed is a comma or a closing bracket of the innermost open bracket.
+    fn end_first_element(&mut self) {
+        let here = self.tokens.len();
+        if let Some(bracket) = self.open.last().and_then(|at| self.tokens.get_mut(*at))
+            && bracket.first_end == 0
+        {
+            bracket.first_end = here;
+        }
+    }
+
     fn push(&mut self, kind: Tok, start: usize, end: usize) {
-        self.tokens.push(Token { kind, start, end });
+        self.tokens.push(Token { kind, start, end, first_end: 0 });
         self.i = end;
     }
 
@@ -79,7 +113,7 @@ impl Lexer<'_> {
     fn line_break(&mut self) {
         let end = after_line_break(self.bytes, self.i);
         let ended_a_statement = self.tokens.last().is_some_and(|t| t.kind != Tok::Newline);
-        if self.depth == 0 && ended_a_statement {
+        if self.open.is_empty() && ended_a_statement {
             self.push(Tok::Newline, self.i, end);
         } else {
             self.i = end;
@@ -110,8 +144,10 @@ impl Lexer<'_> {
     }
 
     fn string(&mut self, start: usize, quote_at: usize, interpolated: bool) {
-        let (end, _closed) = scan_string(self.bytes, quote_at, interpolated);
-        self.push(Tok::Str, start, end);
+        let (_, triple, _) = opening_quote(self.bytes, quote_at);
+        let (end, closed) = scan_string(self.bytes, quote_at, interpolated);
+        let prefix = u8::try_from(quote_at - start).unwrap_or_default();
+        self.push(Tok::Str(Literal { prefix, triple, closed, interpolated }), start, end);
     }
 }
 
@@ -343,6 +379,23 @@ const KEYWORDS: [&str; 35] = [
     "with", "yield",
 ];
 
+/// A module an import statement names.
+struct Imported<'a> {
+    /// Its dotted path.
+    path: String,
+    start: usize,
+    end: usize,
+    /// What a `from` statement takes from it.
+    names: Vec<Taken<'a>>,
+}
+
+/// A name a `from` statement takes from a module, or `*`.
+struct Taken<'a> {
+    name: &'a str,
+    start: usize,
+    end: usize,
+}
+
 /// The code with its tokens, read by index: an index past the end reads as nothing.
 struct Source<'a> {
     code: &'a str,
@@ -383,15 +436,15 @@ impl<'a> Source<'a> {
 
     /// The modules named by the statement at `i`, which [`Source::starts_import`] said is one, and
     /// the token to read next. `from` also reads `raise E from x`, which names nothing.
-    fn import_statement(&self, i: usize) -> (Vec<String>, usize) {
+    fn import_statement(&self, i: usize) -> (Vec<Imported<'a>>, usize) {
         if self.is_word(i, "from") { self.import_from(i) } else { self.import_plain(i) }
     }
 
-    fn import_plain(&self, i: usize) -> (Vec<String>, usize) {
+    fn import_plain(&self, i: usize) -> (Vec<Imported<'a>>, usize) {
         let mut found = Vec::new();
         let mut at = i + 1;
         while let Some((path, last)) = self.dotted(at) {
-            found.push(path);
+            found.push(self.imported(path, at, last, Vec::new()));
             at = self.skip_alias(last + 1);
             if !self.is_punct(at, b',') {
                 break;
@@ -401,23 +454,35 @@ impl<'a> Source<'a> {
         (found, at)
     }
 
-    fn import_from(&self, i: usize) -> (Vec<String>, usize) {
+    fn import_from(&self, i: usize) -> (Vec<Imported<'a>>, usize) {
         let mut at = i + 1;
         while self.is_punct(at, b'.') {
             at += 1;
         }
-        let relative = at > i + 1;
-        let module = self.dotted(at);
+        let first = at;
+        let relative = first > i + 1;
+        let module = self.dotted(first);
         if let Some((_, last)) = &module {
             at = last + 1;
         }
         if !self.is_word(at, "import") {
             return (Vec::new(), if relative { at } else { i + 1 });
         }
-        let next = self.names_end(at + 1);
+        let (names, next) = self.taken_names(at + 1);
         // A relative import names a module of the code's own package, not one to find or install.
-        let found = module.filter(|_| !relative).map(|(path, _)| path);
+        let found = module.filter(|_| !relative).map(|(path, last)| self.imported(path, first, last, names));
         (found.into_iter().collect(), next)
+    }
+
+    fn imported(&self, path: String, first: usize, last: usize, names: Vec<Taken<'a>>) -> Imported<'a> {
+        let (start, end) = self.span(first, last);
+        Imported { path, start, end, names }
+    }
+
+    /// Where the tokens `first` to `last` are in the code.
+    fn span(&self, first: usize, last: usize) -> (usize, usize) {
+        let start = self.tokens.get(first).map_or(0, |t| t.start);
+        (start, self.tokens.get(last).map_or(start, |t| t.end))
     }
 
     /// The dotted name at `i` and the index of its last token. `import a . b` is valid Python.
@@ -437,13 +502,16 @@ impl<'a> Source<'a> {
         if self.is_word(at, "as") { at + 2 } else { at }
     }
 
-    /// The token after the names of a `from` statement, which start at `at`.
-    fn names_end(&self, start: usize) -> usize {
+    /// The names of a `from` statement, which start at token `start`, and the token after them.
+    fn taken_names(&self, start: usize) -> (Vec<Taken<'a>>, usize) {
+        let mut names = Vec::new();
         let mut at = start;
         if self.is_punct(at, b'(') {
             at += 1;
         }
         while self.is_punct(at, b'*') || self.name(at).is_some() {
+            let (name_start, name_end) = self.span(at, at);
+            names.push(Taken { name: self.text(at), start: name_start, end: name_end });
             at = self.skip_alias(at + 1);
             if !self.is_punct(at, b',') {
                 break;
@@ -453,7 +521,7 @@ impl<'a> Source<'a> {
         if self.is_punct(at, b')') {
             at += 1;
         }
-        at
+        (names, at)
     }
 }
 
@@ -473,9 +541,9 @@ pub fn imported_modules(code: &str) -> Vec<String> {
             i += 1;
             continue;
         }
-        let (paths, next) = source.import_statement(i);
-        for path in &paths {
-            let top = top_level(path);
+        let (imported, next) = source.import_statement(i);
+        for module in &imported {
+            let top = top_level(&module.path);
             if seen.insert(top.to_string()) {
                 modules.push(top.to_string());
             }
@@ -771,12 +839,422 @@ pub fn missing_modules(code: &str, installed: &[String]) -> Vec<String> {
     imported_modules(code).into_iter().filter(|m| !in_standard_library(m) && !installed.provides(m)).collect()
 }
 
+// What runs into the sandbox.
+
+/// What a module needs that Python cells don't have.
+#[derive(Clone, Copy)]
+enum Needs {
+    Network,
+    Programs,
+}
+
+impl Needs {
+    fn words(self) -> &'static str {
+        match self {
+            Needs::Network => "needs the network",
+            Needs::Programs => "needs other programs",
+        }
+    }
+}
+
+/// Modules the sandbox refuses, with everything under them.
+const BLOCKED: [(&str, Needs); 21] = [
+    ("socket", Needs::Network),
+    ("ssl", Needs::Network),
+    ("http", Needs::Network),
+    ("urllib.request", Needs::Network),
+    ("urllib3", Needs::Network),
+    ("requests", Needs::Network),
+    ("httpx", Needs::Network),
+    ("aiohttp", Needs::Network),
+    ("ftplib", Needs::Network),
+    ("smtplib", Needs::Network),
+    ("poplib", Needs::Network),
+    ("imaplib", Needs::Network),
+    ("telnetlib", Needs::Network),
+    ("xmlrpc", Needs::Network),
+    ("websockets", Needs::Network),
+    ("paramiko", Needs::Network),
+    ("subprocess", Needs::Programs),
+    ("multiprocessing", Needs::Programs),
+    ("concurrent.futures.process", Needs::Programs),
+    // Not a module, but how that one is usually reached: `from concurrent.futures import ...`.
+    ("concurrent.futures.ProcessPoolExecutor", Needs::Programs),
+    ("pty", Needs::Programs),
+];
+
+fn is_or_under(path: &str, module: &str) -> bool {
+    path.strip_prefix(module).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
+/// What keeps `path` from working in a Python cell, if something does.
+fn blocked(path: &str) -> Option<Needs> {
+    // `multiprocessing.dummy` is threads under the same interface.
+    if is_or_under(path, "multiprocessing.dummy") {
+        return None;
+    }
+    // On Linux, asyncio's event loop can't open the local socket it needs.
+    if cfg!(target_os = "linux") && is_or_under(path, "asyncio") {
+        return Some(Needs::Network);
+    }
+    BLOCKED.iter().find(|(module, _)| is_or_under(path, module)).map(|(_, needs)| *needs)
+}
+
+/// Whether a call of `name` touches a file through its first argument. `open` as a method, or
+/// `Path` of something else, is someone else's.
+fn takes_a_path(name: &str, attribute: bool, receiver: Option<&str>) -> bool {
+    match name {
+        "open" => !attribute,
+        "Path" => !attribute || receiver == Some("pathlib"),
+        "connect" => receiver == Some("sqlite3"),
+        "read_csv" | "read_excel" | "read_parquet" | "read_json" | "read_table" | "read_pickle" | "to_csv" | "to_excel" | "to_parquet"
+        | "to_json" | "to_pickle" | "savefig" => true,
+        _ => false,
+    }
+}
+
+/// Whether the literal `text`, as the first argument of `name`, is a path or a URL. SQLite keeps a
+/// `:memory:` database in memory, and `read_json` also takes JSON text.
+fn is_a_path(name: &str, text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    match name {
+        "connect" => text != ":memory:" && !text.starts_with("file::memory:"),
+        "read_json" => !text.starts_with(['{', '[']),
+        _ => true,
+    }
+}
+
+/// Whether `text` is a URL of something on the network. `file://` isn't, and a drive letter isn't
+/// a scheme.
+fn is_url(text: &str) -> bool {
+    let Some((scheme, _)) = text.trim().split_once("://") else { return false };
+    let shaped = scheme.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'));
+    shaped && scheme.len() > 1 && scheme.starts_with(|c: char| c.is_ascii_alphabetic()) && !scheme.eq_ignore_ascii_case("file")
+}
+
+/// Whether a literal's text can be a reference: not empty, and escaping nothing but a quote or a
+/// backslash, which a sheet name may need.
+fn is_reference_text(text: &str) -> bool {
+    let mut bytes = text.bytes();
+    while let Some(b) = bytes.next() {
+        if b == b'\\' && !matches!(bytes.next(), Some(b'\\' | b'\'' | b'"')) {
+            return false;
+        }
+    }
+    !text.is_empty()
+}
+
+impl<'a> Source<'a> {
+    fn literal(&self, i: usize) -> Option<Literal> {
+        match self.tokens.get(i)?.kind {
+            Tok::Str(literal) => Some(literal),
+            _ => None,
+        }
+    }
+
+    /// The text between the quotes of the literal at `i`.
+    fn literal_text(&self, i: usize) -> Option<&'a str> {
+        let (literal, token) = (self.literal(i)?, self.tokens.get(i)?);
+        let quote = if literal.triple { 3 } else { 1 };
+        let end = if literal.closed { token.end.saturating_sub(quote) } else { token.end };
+        self.code.get(token.start + usize::from(literal.prefix) + quote..end)
+    }
+
+    /// Whether everything between tokens `a` and `b` is `allowed`. A comment isn't, whatever else is.
+    fn only_between(&self, a: usize, b: usize, allowed: fn(&u8) -> bool) -> bool {
+        let between = self.tokens.get(a).zip(self.tokens.get(b)).and_then(|(a, b)| self.code.as_bytes().get(a.end..b.start));
+        between.is_some_and(|gap| gap.iter().all(allowed))
+    }
+
+    /// Whether the call of `xl` at `name` has a reference the app can read from the code, which is
+    /// all the worker is given. This is the rule of `gridcraft_model::python::xl_calls`, so that this
+    /// warning and the failure when the cell runs are the same thing: a literal with no prefix, not
+    /// triple quoted, closed on its own line with nothing after it there but `,` or `)`.
+    fn plain_reference(&self, name: usize) -> bool {
+        let (open, literal, after) = (name + 1, name + 2, name + 3);
+        let same_line = |b: &u8| matches!(b, b' ' | b'\t');
+        self.literal(literal).is_some_and(|l| l.prefix == 0 && !l.triple && l.closed)
+            && (self.is_punct(after, b',') || self.is_punct(after, b')'))
+            && self.only_between(name, open, same_line)
+            && self.only_between(open, literal, u8::is_ascii_whitespace)
+            && self.only_between(literal, after, same_line)
+            && self.literal_text(literal).is_some_and(is_reference_text)
+    }
+
+    /// The first and last token of the first element of the bracket at `open`. A bracket never
+    /// closed has only the next token to go by. `None` when there's nothing in it.
+    fn first_element(&self, open: usize) -> Option<(usize, usize)> {
+        let first = open + 1;
+        match self.tokens.get(open)?.first_end {
+            0 => (first < self.tokens.len()).then_some((first, first)),
+            end => (end > first).then_some((first, end - 1)),
+        }
+    }
+
+    /// When the first argument of the call at `open` is a string literal and nothing more: its text
+    /// and where it is. Literals side by side are one literal, read by the first one's text.
+    fn literal_argument(&self, open: usize) -> Option<(&'a str, (usize, usize))> {
+        let fixed = |i: usize| self.literal(i).is_some_and(|l| l.closed && !l.interpolated);
+        let first = open + 1;
+        let mut last = first;
+        if !fixed(first) {
+            return None;
+        }
+        while fixed(last + 1) {
+            last += 1;
+        }
+        if !self.is_punct(last + 1, b',') && !self.is_punct(last + 1, b')') {
+            return None;
+        }
+        Some((self.literal_text(first)?, self.span(first, last)))
+    }
+
+    /// The name before the dot before `i`.
+    fn receiver(&self, i: usize) -> Option<&'a str> {
+        if !self.after_dot(i) {
+            return None;
+        }
+        self.name(i.checked_sub(2)?)
+    }
+
+    /// `def` or `class` is before `i`, so it is being defined and not called.
+    fn is_defined(&self, i: usize) -> bool {
+        i.checked_sub(1).is_some_and(|before| self.is_word(before, "def") || self.is_word(before, "class"))
+    }
+}
+
+/// One thing in the code that the sandbox will refuse.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Finding {
+    pub kind: &'static Kind,
+    /// The 1-based line of `start`.
+    pub line: u32,
+    /// Byte offsets into the code, on char boundaries.
+    pub start: usize,
+    pub end: usize,
+    /// The specifics: the module and what it needs, the path, or the name to install.
+    pub detail: String,
+}
+
+/// How many findings [`lint`] returns: the first ones in the code.
+const MAX_FINDINGS: usize = 100;
+
+/// How much of the code's own text a finding's detail holds.
+const MAX_DETAIL_CHARS: usize = 200;
+
+/// The code's text as a finding's detail: one line, of a length that can be shown.
+fn detail(text: &str) -> String {
+    let mut chars = text.chars().map(|c| if c.is_control() { ' ' } else { c });
+    let mut out: String = chars.by_ref().take(MAX_DETAIL_CHARS).collect();
+    if chars.next().is_some() {
+        out.push_str("...");
+    }
+    out
+}
+
+/// What the sandbox will refuse in `code`, in order of position, at most 100. `installed` is the
+/// distribution names of the packages this Python has, or `None` when not known yet, in which case
+/// `lint.importMissing` isn't reported.
+pub fn lint(code: &str, installed: Option<&[String]>) -> Vec<Finding> {
+    let mut linter = Linter { source: Source::new(code), installed: installed.map(Installed::new), found: Vec::new() };
+    let mut i = 0;
+    while i < linter.source.tokens.len() && linter.found.len() < MAX_FINDINGS {
+        i = linter.step(i);
+    }
+    let mut found = linter.found;
+    found.sort_by_key(|f| f.start);
+    number_lines(code, &mut found);
+    found
+}
+
+/// Sets each finding's line, for findings in order of position. `\r\n` and `\n` end a line, and so
+/// does a `\r` on its own, as Python reads it.
+fn number_lines(code: &str, found: &mut [Finding]) {
+    let bytes = code.as_bytes();
+    let ends_a_line = |i: &usize| match bytes.get(*i) {
+        Some(b'\n') => true,
+        Some(b'\r') => bytes.get(*i + 1) != Some(&b'\n'),
+        _ => false,
+    };
+    let (mut at, mut line) = (0, 1u32);
+    for finding in found {
+        let breaks = (at..finding.start).filter(ends_a_line).count();
+        line = line.saturating_add(u32::try_from(breaks).unwrap_or(u32::MAX));
+        at = finding.start;
+        finding.line = line;
+    }
+}
+
+struct Linter<'a> {
+    source: Source<'a>,
+    installed: Option<Installed>,
+    found: Vec<Finding>,
+}
+
+impl Linter<'_> {
+    fn report(&mut self, id: &str, (start, end): (usize, usize), detail: String) {
+        if let Some(kind) = kind(id)
+            && self.found.len() < MAX_FINDINGS
+        {
+            self.found.push(Finding { kind, line: 1, start, end, detail });
+        }
+    }
+
+    /// Reads token `i` and says which to read next. Findings come in order of position: a call's
+    /// finding is at or before anything in its arguments.
+    fn step(&mut self, i: usize) -> usize {
+        if self.source.starts_import(i) {
+            let (imported, next) = self.source.import_statement(i);
+            for module in &imported {
+                self.check_import(module);
+            }
+            return next;
+        }
+        if self.source.tokens.get(i).is_some_and(|t| t.kind == Tok::Name) {
+            self.check_name(i);
+        }
+        i + 1
+    }
+
+    fn check_import(&mut self, module: &Imported) {
+        // A module that can't work here isn't worth installing.
+        if !self.check_blocked(module) {
+            self.check_missing(module);
+        }
+    }
+
+    /// Reports what `module` can't do here, and says whether there was anything. In a `from`
+    /// statement, what is blocked can be the name it takes (`from urllib import request`).
+    fn check_blocked(&mut self, module: &Imported) -> bool {
+        let at_module = (module.start, module.end);
+        if module.names.is_empty() {
+            let Some(needs) = blocked(&module.path) else { return false };
+            self.report_blocked(at_module, &module.path, needs);
+            return true;
+        }
+        let whole_module = blocked(&module.path).is_some();
+        let mut any = false;
+        for taken in &module.names {
+            let path = format!("{}.{}", module.path, taken.name);
+            let Some(needs) = blocked(&path) else { continue };
+            if !whole_module {
+                self.report_blocked((taken.start, taken.end), &path, needs);
+            } else if !any {
+                self.report_blocked(at_module, &module.path, needs);
+            }
+            any = true;
+        }
+        any
+    }
+
+    fn report_blocked(&mut self, at: (usize, usize), path: &str, needs: Needs) {
+        self.report("lint.importBlocked", at, format!("{} {}", detail(path), needs.words()));
+    }
+
+    fn check_missing(&mut self, module: &Imported) {
+        let top = top_level(&module.path);
+        if self.installed.as_ref().is_some_and(|installed| !in_standard_library(top) && !installed.provides(top)) {
+            self.report("lint.importMissing", (module.start, module.end), detail(&install_name(top)));
+        }
+    }
+
+    fn check_name(&mut self, i: usize) {
+        let name = self.source.text(i);
+        let receiver = self.source.receiver(i);
+        if (receiver, name) == (Some("os"), "environ") {
+            self.report_name("lint.environ", i, "os.environ");
+        } else if self.source.is_punct(i + 1, b'(') && !self.source.is_defined(i) {
+            self.check_call(i, name, receiver);
+        }
+    }
+
+    fn check_call(&mut self, i: usize, name: &str, receiver: Option<&str>) {
+        let attribute = self.source.after_dot(i);
+        match (name, receiver) {
+            ("xl", _) if !attribute => self.check_xl(i),
+            ("input", _) if !attribute => self.report_name("lint.window", i, "input"),
+            ("show", Some(plt @ ("plt" | "pyplot"))) => self.report_name("lint.window", i, &format!("{plt}.show")),
+            ("getenv", Some("os")) => self.report_name("lint.environ", i, "os.getenv"),
+            _ if takes_a_path(name, attribute, receiver) => self.check_path(i, name),
+            _ => {}
+        }
+    }
+
+    /// Reports the name at `i`, with what it is an attribute of.
+    fn report_name(&mut self, id: &str, i: usize, what: &str) {
+        let first = if self.source.after_dot(i) { i.saturating_sub(2) } else { i };
+        self.report(id, self.source.span(first, i), what.to_string());
+    }
+
+    /// Points at the first argument, or at the call when it has none.
+    fn check_xl(&mut self, i: usize) {
+        if self.source.plain_reference(i) {
+            return;
+        }
+        let open = i + 1;
+        let (at, text) = match self.source.first_element(open) {
+            Some((first, last)) => {
+                let (start, end) = self.source.span(first, last);
+                ((start, end), self.source.code.get(start..end).unwrap_or_default())
+            }
+            None => {
+                let closer = self.source.tokens.get(open).map_or(0, |t| t.first_end);
+                (self.source.span(i, closer.max(open)), "")
+            }
+        };
+        self.report("lint.xlNotLiteral", at, detail(text));
+    }
+
+    fn check_path(&mut self, i: usize, name: &str) {
+        let Some((text, at)) = self.source.literal_argument(i + 1) else { return };
+        if !is_a_path(name, text) {
+            return;
+        }
+        let pandas = name.starts_with("read_") || name.starts_with("to_");
+        let text = if pandas && is_url(text) { format!("{} needs the network", detail(text)) } else { detail(text) };
+        self.report("lint.fileAccess", at, text);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn modules(code: &str) -> Vec<String> {
         imported_modules(code)
+    }
+
+    fn installed(names: &[&str]) -> Vec<String> {
+        names.iter().map(ToString::to_string).collect()
+    }
+
+    fn ids(code: &str) -> Vec<&'static str> {
+        lint(code, None).iter().map(|f| f.kind.id).collect()
+    }
+
+    /// The text each finding points at, with its detail.
+    fn spans(code: &str) -> Vec<(&str, String)> {
+        lint(code, None).into_iter().map(|f| (&code[f.start..f.end], f.detail)).collect()
+    }
+
+    /// What every result must be, whatever the code was.
+    fn assert_sound(code: &str, findings: &[Finding]) {
+        assert!(findings.len() <= 100);
+        let mut previous = 0;
+        for f in findings {
+            assert!(previous <= f.start && f.start <= f.end && f.end <= code.len(), "{f:?}");
+            assert!(code.is_char_boundary(f.start) && code.is_char_boundary(f.end), "{f:?}");
+            assert!(f.detail.chars().count() <= MAX_DETAIL_CHARS + 30, "{f:?}");
+            previous = f.start;
+            // Only on short code: this is slow, on purpose, to be plainly right.
+            if code.len() < 10_000 {
+                let before = code[..f.start].replace("\r\n", "\n").replace('\r', "\n");
+                assert_eq!(f.line as usize, before.matches('\n').count() + 1, "{code:?} {f:?}");
+            }
+        }
     }
 
     /// Whether the text after `code` is still read as code: the string or comment `code` ends in has
@@ -954,7 +1432,6 @@ mod tests {
 
     #[test]
     fn missing_modules_are_those_neither_standard_nor_installed() {
-        let installed = |names: &[&str]| names.iter().map(ToString::to_string).collect::<Vec<_>>();
         let code = "import os, json\nimport numpy as np\nimport pandas\nfrom __future__ import annotations\nfrom .x import y\nimport zzz.a";
         assert_eq!(missing_modules(code, &[]), ["numpy", "pandas", "zzz"]);
         assert_eq!(missing_modules(code, &installed(&["numpy", "zzz"])), ["pandas"]);
@@ -963,7 +1440,6 @@ mod tests {
 
     #[test]
     fn missing_modules_compare_names_as_distributions_do() {
-        let installed = |names: &[&str]| names.iter().map(ToString::to_string).collect::<Vec<_>>();
         assert!(missing_modules("import typing_inspect", &installed(&["typing-inspect"])).is_empty());
         assert!(missing_modules("import Foo_Bar", &installed(&["foo-bar"])).is_empty());
         for (module, distribution) in [
@@ -1019,13 +1495,699 @@ mod tests {
             format!("'''{}", repeat("a")),
             format!("f\"\"\"{{{}{}", repeat("x:{"), repeat("\n")),
             format!("f\"\"\"{{'{}", repeat("\n")),
+            // Calls that look at what follows them, nested and side by side.
+            repeat("xl("),
+            repeat("xl(a,"),
+            repeat("my_xl("),
+            repeat("open("),
+            repeat("open(x,"),
+            repeat("open(\"a\" "),
+            repeat("open(\"\","),
+            repeat("\"a\" "),
+            repeat("x."),
+            repeat("os."),
+            repeat("os.environ "),
+            repeat("input()\n"),
+            repeat("from urllib import request\n"),
+            format!("from urllib import {}", repeat("request,")),
+            format!("from a import {}", repeat("request,")),
+            format!("xl({})", repeat("a+")),
+            format!("xl(\"{}\")", repeat("\\\\")),
+            format!("xl({}\"A1\")", repeat(" ")),
+            format!("open(\"{}\")", repeat("a")),
+            format!("read_csv(\"https://{}\")", repeat("é")),
+            format!("x = 1{}\nimport socket", repeat(" ")),
         ];
         let installed = vec!["a".repeat(SIZE), "_".repeat(SIZE), "a-".repeat(SIZE / 2)];
         for code in &hostile {
             let began = std::time::Instant::now();
             let _ = imported_modules(code);
             let _ = missing_modules(code, &installed);
+            assert_sound(code, &lint(code, None));
+            assert_sound(code, &lint(code, Some(&installed)));
             assert!(began.elapsed().as_secs() < 10, "{:?}", code.get(..20));
+        }
+    }
+
+    #[test]
+    fn xl_needs_a_plain_literal_as_its_first_argument() {
+        for code in [
+            "xl(name)",
+            "xl(name, headers=True)",
+            "xl(f\"A1\")",
+            "xl(F'A1')",
+            "xl(\"A\" + \"1\")",
+            "xl(\"A\" \"1\")",
+            "xl()",
+            "xl( )",
+            "xl(\n)",
+            "xl(*refs)",
+            "xl(reference=\"A1\")",
+            "total = 1 + xl(a)[0]",
+            "if a:\n    b = xl(c)",
+            "f(g, xl(a))",
+            // Still being typed.
+            "xl(",
+            "xl(\"A1",
+            "xl(\"A1\"",
+            // The app reads none of these, so they fail when the cell runs.
+            "xl(r\"A1\")",
+            "xl(u\"A1\")",
+            "xl(b\"A1\")",
+            "xl('''A1''')",
+            "xl(\"\")",
+            "xl(\"A\\n1\")",
+            "xl(\"A1\\\")",
+            "xl((\"A1\"))",
+            "xl(\"A1\"\n)",
+            "xl(\"A1\" # c\n)",
+            "xl(# c\n\"A1\")",
+            "xl(\"A\\\n1\")",
+            "xl(\"A1\".upper())",
+            "xl(\"A1\" if a else \"B1\")",
+            "[xl\n(\"A1\")]",
+            "xl \\\n(\"A1\")",
+        ] {
+            assert_eq!(ids(code), ["lint.xlNotLiteral"], "{code}");
+        }
+    }
+
+    #[test]
+    fn xl_with_a_plain_literal_is_fine() {
+        for code in [
+            "xl(\"A1\")",
+            "xl('A1')",
+            "xl( \"A1\" )",
+            "xl  (\"A1\")",
+            "xl\t('A1')",
+            "xl(\n  \"A1\",\n  headers=True,\n)",
+            "xl(\"A1:B5\", headers=True)",
+            "xl(\"A1\" , headers=True)",
+            "xl(\"'My Sheet'!A1:B3\")",
+            "xl('Bob\\'s!A1')",
+            "xl(\"A\\\\1\")",
+            "xl(\"Données!A1\")",
+            "y = xl(\"A1\") + xl('B1')",
+            "f(xl(\"A1\"), 2)",
+        ] {
+            assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
+        }
+    }
+
+    #[test]
+    fn only_a_call_of_the_name_xl_counts() {
+        for code in [
+            ".xl(name)",
+            "obj.xl(name)",
+            "obj . xl(name)",
+            "a().xl(name)",
+            "my_xl(name)",
+            "xl2(name)",
+            "_xl(name)",
+            "XL(name)",
+            "def xl(a): pass",
+            "x = xl",
+            "map(xl, refs)",
+            "from a import xl",
+        ] {
+            assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
+        }
+    }
+
+    #[test]
+    fn xl_points_at_its_first_argument_or_at_the_call() {
+        for (code, span, text) in [
+            ("xl(name)", "name", "name"),
+            ("xl( name )", "name", "name"),
+            ("xl(\"A\" + \"1\", headers=True)", "\"A\" + \"1\"", "\"A\" + \"1\""),
+            ("xl(f(a, b), c)", "f(a, b)", "f(a, b)"),
+            ("xl([a, b])", "[a, b]", "[a, b]"),
+            ("xl(a +\n  b)", "a +\n  b", "a +   b"),
+            ("xl()", "xl()", ""),
+            ("xl( ,)", "xl( ,", ""),
+            ("xl(", "xl(", ""),
+            ("xl(name", "name", "name"),
+        ] {
+            assert_eq!(spans(code), [(span, text.to_string())], "{code}");
+        }
+    }
+
+    #[test]
+    fn imports_of_what_needs_the_network_or_other_programs_are_blocked() {
+        for (module, needs) in [
+            ("socket", "needs the network"),
+            ("ssl", "needs the network"),
+            ("http", "needs the network"),
+            ("urllib.request", "needs the network"),
+            ("urllib3", "needs the network"),
+            ("requests", "needs the network"),
+            ("httpx", "needs the network"),
+            ("aiohttp", "needs the network"),
+            ("ftplib", "needs the network"),
+            ("smtplib", "needs the network"),
+            ("poplib", "needs the network"),
+            ("imaplib", "needs the network"),
+            ("telnetlib", "needs the network"),
+            ("xmlrpc", "needs the network"),
+            ("websockets", "needs the network"),
+            ("paramiko", "needs the network"),
+            ("subprocess", "needs other programs"),
+            ("multiprocessing", "needs other programs"),
+            ("concurrent.futures.process", "needs other programs"),
+            ("pty", "needs other programs"),
+        ] {
+            let expected = [(module, format!("{module} {needs}"))];
+            for code in [
+                format!("import {module}"),
+                format!("import {module} as x"),
+                format!("from {module} import y"),
+                format!("from {module} import y as z, w"),
+                format!("from {module} import (\n  y,\n  z,\n)"),
+                format!("from {module} import *"),
+                format!("import os, {module}, sys"),
+                format!("if a:\n    import {module}"),
+                format!("def f():\n\timport {module} as x"),
+                format!("try: import {module}\nexcept E: pass"),
+                format!("a = 1; import {module}"),
+            ] {
+                assert_eq!(spans(&code), expected, "{code}");
+                assert_eq!(ids(&code), ["lint.importBlocked"], "{code}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_module_under_a_blocked_one_is_blocked() {
+        assert_eq!(spans("import http.client"), [("http.client", "http.client needs the network".to_string())]);
+        assert_eq!(spans("from xmlrpc.client import x"), [("xmlrpc.client", "xmlrpc.client needs the network".to_string())]);
+        assert_eq!(spans("import http . client"), [("http . client", "http.client needs the network".to_string())]);
+    }
+
+    #[test]
+    fn what_a_from_statement_takes_can_be_what_is_blocked() {
+        let blocked = |span: &'static str, path: &str, needs: &str| (span, format!("{path} {needs}"));
+        assert_eq!(spans("from urllib import parse, request"), [blocked("request", "urllib.request", "needs the network")]);
+        assert_eq!(spans("from urllib import request as r"), [blocked("request", "urllib.request", "needs the network")]);
+        let code = "from concurrent.futures import ProcessPoolExecutor";
+        assert_eq!(spans(code), [blocked("ProcessPoolExecutor", "concurrent.futures.ProcessPoolExecutor", "needs other programs")]);
+        let code = "from concurrent.futures import process";
+        assert_eq!(spans(code), [blocked("process", "concurrent.futures.process", "needs other programs")]);
+        // A statement taking several things from a blocked module is one finding, at the module.
+        assert_eq!(spans("from socket import socket, AF_INET"), [blocked("socket", "socket", "needs the network")]);
+        assert_eq!(lint("from socket import socket, AF_INET", None)[0].start, 5);
+        assert_eq!(spans("from multiprocessing import dummy, Pool"), [blocked("multiprocessing", "multiprocessing", "needs other programs")]);
+    }
+
+    #[test]
+    fn imports_that_work_are_not_blocked() {
+        for code in [
+            "import urllib",
+            "import urllib.parse",
+            "import urllib.parse as p",
+            "from urllib.parse import quote",
+            "from urllib import parse",
+            "import pandas",
+            "import pandas as pd",
+            "import concurrent.futures",
+            "from concurrent.futures import ThreadPoolExecutor",
+            "import concurrent.futures.thread",
+            "import multiprocessing.dummy",
+            "from multiprocessing.dummy import Pool",
+            "from multiprocessing import dummy",
+            // Names that only look like blocked ones.
+            "import sslx",
+            "import httpx2",
+            "import my_socket",
+            "import Socket",
+            "import requests_mock",
+            // Not imports, or of the code's own package.
+            "from . import socket",
+            "from .socket import x",
+            "socket.socket()",
+            "raise E from socket",
+            "x.import_socket",
+        ] {
+            assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
+        }
+    }
+
+    #[test]
+    fn asyncio_is_blocked_only_on_linux() {
+        let linux = cfg!(target_os = "linux");
+        for code in ["import asyncio", "from asyncio import run", "import asyncio.subprocess"] {
+            assert_eq!(ids(code) == ["lint.importBlocked"], linux, "{code}");
+            assert_eq!(ids(code).is_empty(), !linux, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_missing_package_is_reported_only_when_what_is_installed_is_known() {
+        assert!(lint("import pandas", None).is_empty());
+        let found = lint("import pandas", Some(&[]));
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].kind.id, found[0].detail.as_str(), found[0].line), ("lint.importMissing", "pandas", 1));
+        assert!(lint("import pandas", Some(&installed(&["Pandas"]))).is_empty());
+        assert!(lint("import os, json\nfrom __future__ import annotations\nfrom .a import b", Some(&[])).is_empty());
+    }
+
+    #[test]
+    fn a_missing_package_says_the_name_to_install() {
+        for (code, span, install) in [
+            ("import sklearn.svm as s", "sklearn.svm", "scikit-learn"),
+            ("from PIL import Image", "PIL", "pillow"),
+            ("import cv2", "cv2", "opencv-python"),
+            ("if a:\n  import yaml", "yaml", "pyyaml"),
+            ("from bs4 import BeautifulSoup as B, Tag", "bs4", "beautifulsoup4"),
+            ("from dateutil.parser import parse", "dateutil.parser", "python-dateutil"),
+            ("import os, dotenv", "dotenv", "python-dotenv"),
+            ("import zzz.a.b", "zzz.a.b", "zzz"),
+        ] {
+            let found = lint(code, Some(&[]));
+            assert_eq!(found.len(), 1, "{code}");
+            assert_eq!((found[0].kind.id, &code[found[0].start..found[0].end], found[0].detail.as_str()), ("lint.importMissing", span, install));
+        }
+        assert!(lint("import sklearn", Some(&installed(&["scikit-learn"]))).is_empty());
+    }
+
+    #[test]
+    fn a_blocked_module_is_not_also_told_to_be_installed() {
+        let code = "import requests\nfrom httpx import get\nimport urllib3 as u\nimport zzz";
+        let found: Vec<&str> = lint(code, Some(&[])).iter().map(|f| f.kind.id).collect();
+        assert_eq!(found, ["lint.importBlocked", "lint.importBlocked", "lint.importBlocked", "lint.importMissing"]);
+    }
+
+    #[test]
+    fn each_place_a_missing_package_is_imported_is_a_finding() {
+        let lines: Vec<u32> = lint("import a\nx = 1\nimport a", Some(&[])).iter().map(|f| f.line).collect();
+        assert_eq!(lines, [1, 3]);
+    }
+
+    #[test]
+    fn a_literal_path_as_the_first_argument_is_file_access() {
+        for call in [
+            "open",
+            "pd.read_csv",
+            "pandas.read_csv",
+            "read_csv",
+            ".read_csv",
+            "a().read_csv",
+            "pd.read_excel",
+            "pd.read_parquet",
+            "pd.read_json",
+            "pd.read_table",
+            "pd.read_pickle",
+            "df.to_csv",
+            "df.to_excel",
+            "df.to_parquet",
+            "df.to_json",
+            "df.to_pickle",
+            "plt.savefig",
+            "fig.savefig",
+            "Path",
+            "pathlib.Path",
+            "sqlite3.connect",
+        ] {
+            for args in
+                ["(\"a.csv\")", "('a.csv')", "( 'a.csv' )", "(\"a.csv\", 'w')", "(\n  \"a.csv\",\n  x=1,\n)", "(# c\n\"a.csv\")", "  (\"a.csv\")"]
+            {
+                let code = format!("{call}{args}");
+                let found = lint(&code, None);
+                assert_eq!(found.len(), 1, "{code}");
+                assert_eq!((found[0].kind.id, found[0].detail.as_str()), ("lint.fileAccess", "a.csv"), "{code}");
+                assert!(code[found[0].start..found[0].end].contains("a.csv"), "{code}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_path_can_be_any_plain_literal() {
+        for (code, span, text) in [
+            ("open(r\"C:\\a.txt\")", "r\"C:\\a.txt\"", "C:\\a.txt"),
+            ("open(b'a')", "b'a'", "a"),
+            ("open(RB'a')", "RB'a'", "a"),
+            ("open(u'a')", "u'a'", "a"),
+            ("open('''a''')", "'''a'''", "a"),
+            ("open(\"\"\"a\"\"\", 'w')", "\"\"\"a\"\"\"", "a"),
+            ("open('a' 'b')", "'a' 'b'", "a"),
+            ("with open('a') as f:\n  pass", "'a'", "a"),
+            ("x = open('a').read()", "'a'", "a"),
+            ("open('/etc/passwd')", "'/etc/passwd'", "/etc/passwd"),
+            ("Path('.')", "'.'", "."),
+        ] {
+            assert_eq!(spans(code), [(span, text.to_string())], "{code}");
+        }
+    }
+
+    #[test]
+    fn what_is_not_a_literal_path_is_not_file_access() {
+        for code in [
+            // Not known until it runs.
+            "open(path)",
+            "open(f\"{a}.txt\")",
+            "open(F'a.txt')",
+            "open(rf'a.txt')",
+            "open('a' f'{b}')",
+            "open(\"a\" + b)",
+            "open(\"a{}\".format(b))",
+            "open(\"a%d\" % b)",
+            "open(('a'))",
+            "open('a' if b else 'c')",
+            "open('a'",
+            "open('a",
+            "pd.read_csv(io.StringIO(\"a,b\"))",
+            "df.to_csv(None)",
+            // No arguments, or only named ones: these return text.
+            "df.to_csv()",
+            "df.to_json()",
+            "df.to_csv(index=False)",
+            "df.to_csv(sep=\",\")",
+            "Path()",
+            "open()",
+            // In memory, or not a path at all.
+            "sqlite3.connect(\":memory:\")",
+            "sqlite3.connect(':memory:', x=1)",
+            "sqlite3.connect('file::memory:?cache=shared', uri=True)",
+            "sqlite3.connect('')",
+            "open('')",
+            "pd.read_json('{\"a\": 1}')",
+            "pd.read_json(' [1, 2]')",
+            // Someone else's method or function.
+            "x.open('a')",
+            "obj.open('a')",
+            "obj . open('a')",
+            "a().open('a')",
+            "x.Path('a')",
+            "conn.connect('a')",
+            "connect('a')",
+            "my_open('a')",
+            "reopen('a')",
+            "open2('a')",
+            "read_csv2('a')",
+            "my_read_csv('a')",
+            "Path.home()",
+            // Definitions and bare names.
+            "def open(a): pass",
+            "def to_csv(a): pass",
+            "class Path(a): pass",
+            "x = open",
+            "map(open, paths)",
+            "from a import open",
+        ] {
+            assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
+        }
+    }
+
+    #[test]
+    fn a_url_in_a_pandas_call_says_it_needs_the_network() {
+        for code in [
+            "pd.read_csv(\"https://a.example/b.csv\")",
+            ".read_csv('http://a.example/b.csv')",
+            "pd.read_json('s3://a/b.json')",
+            "pd.read_excel('ftp://a/b.xlsx', x=1)",
+            "df.to_csv('s3://a/b.csv')",
+        ] {
+            let found = lint(code, None);
+            assert_eq!(found.len(), 1, "{code}");
+            assert_eq!(found[0].kind.id, "lint.fileAccess", "{code}");
+            assert!(found[0].detail.ends_with(" needs the network"), "{code}");
+        }
+        for (code, text) in [
+            ("pd.read_csv('file:///a/b.csv')", "file:///a/b.csv"),
+            ("pd.read_csv('C://a/b.csv')", "C://a/b.csv"),
+            ("pd.read_csv('a/b.csv')", "a/b.csv"),
+            ("pd.read_csv('://a')", "://a"),
+            ("pd.read_csv('1a://b')", "1a://b"),
+            ("open('https://a.example')", "https://a.example"),
+        ] {
+            assert_eq!(lint(code, None)[0].detail, text, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_detail_stays_short_and_on_one_line() {
+        let long = "é".repeat(5000);
+        let found = lint(&format!("open('{long}')\nimport {long}\nread_csv('http://{long}')\nxl({long})"), Some(&[]));
+        assert_eq!(found.len(), 4);
+        for f in &found {
+            assert!(f.detail.chars().count() < MAX_DETAIL_CHARS + 30, "{}", f.detail.len());
+        }
+        assert!(found[0].detail.ends_with("é..."));
+        assert!(found[2].detail.ends_with("é... needs the network"));
+        assert_eq!(lint("open('a\tb\0c\x1b')", None)[0].detail, "a b c ");
+        assert_eq!(lint("open('''a\nb''')", None)[0].detail, "a b");
+    }
+
+    #[test]
+    fn windows_and_input_are_reported() {
+        for (code, span, text) in [
+            ("plt.show()", "plt.show", "plt.show"),
+            ("plt.show(block=False)", "plt.show", "plt.show"),
+            ("plt . show ()", "plt . show", "plt.show"),
+            ("pyplot.show()", "pyplot.show", "pyplot.show"),
+            ("matplotlib.pyplot.show()", "pyplot.show", "pyplot.show"),
+            ("input()", "input", "input"),
+            ("input('Name? ')", "input", "input"),
+            ("name = input ()", "input", "input"),
+            ("print(input())", "input", "input"),
+        ] {
+            assert_eq!(spans(code), [(span, text.to_string())], "{code}");
+            assert_eq!(ids(code), ["lint.window"], "{code}");
+        }
+        for code in [
+            "fig.show()",
+            "df.plot().show()",
+            "show()",
+            "plt.show",
+            "my_plt.show()",
+            "plt.showing()",
+            "x.input()",
+            "input",
+            "my_input()",
+            "def input(): pass",
+            "def show(): pass",
+            "input = 1",
+        ] {
+            assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
+        }
+    }
+
+    #[test]
+    fn the_environment_is_reported() {
+        for (code, span, text) in [
+            ("os.environ", "os.environ", "os.environ"),
+            ("x = os.environ['A']", "os.environ", "os.environ"),
+            ("os.environ.get('A')", "os.environ", "os.environ"),
+            ("os.getenv('A')", "os.getenv", "os.getenv"),
+            ("os . getenv ('A', 'b')", "os . getenv", "os.getenv"),
+        ] {
+            assert_eq!(spans(code), [(span, text.to_string())], "{code}");
+            assert_eq!(ids(code), ["lint.environ"], "{code}");
+        }
+        for code in ["os.getenv", "environ", "getenv('A')", "my_os.environ", "os.environment", "os.path", "x.getenv('A')", "def getenv(): pass"] {
+            assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
+        }
+    }
+
+    #[test]
+    fn every_kind_is_in_the_catalog_with_the_scope_of_a_line() {
+        let code = "xl(a)\nimport socket\nimport zzz\nopen('a')\ninput()\nos.environ";
+        let found = lint(code, Some(&[]));
+        let ids: Vec<&str> = found.iter().map(|f| f.kind.id).collect();
+        assert_eq!(ids, ["lint.xlNotLiteral", "lint.importBlocked", "lint.importMissing", "lint.fileAccess", "lint.window", "lint.environ"]);
+        assert_eq!(found.iter().map(|f| f.line).collect::<Vec<_>>(), [1, 2, 3, 4, 5, 6]);
+        assert!(found.iter().all(|f| f.kind.scope == crate::diagnostics::Scope::Line));
+    }
+
+    #[test]
+    fn nothing_in_a_comment_or_a_string_is_reported() {
+        const BODY: &str = "open(\"a.csv\"); import socket; xl(a); plt.show(); input(); os.environ; pd.read_csv(\"b\")";
+        assert_eq!(lint(BODY, None).len(), 7, "the text would be reported if it were code");
+        let other_quotes = BODY.replace('"', "'");
+        for code in [
+            format!("# {BODY}"),
+            format!("x = 1 # {BODY}"),
+            format!("'{BODY}'"),
+            format!("'''{BODY}'''"),
+            format!("'''\n{BODY}\n'''"),
+            format!("\"\"\"\n{BODY}\n\"\"\""),
+            format!("r'{BODY}'"),
+            format!("b'{BODY}'"),
+            format!("rb'''{BODY}'''"),
+            format!("BR'{BODY}'"),
+            format!("u'{BODY}'"),
+            format!("f'{BODY}'"),
+            format!("F'''{BODY}'''"),
+            format!("rf'{BODY}'"),
+            format!("f\"\"\"\n{BODY}\n\"\"\""),
+            format!("t'{BODY}'"),
+            format!("\"{other_quotes}\""),
+            format!("f\"{other_quotes}\""),
+            // Inside an f-string's replacement field too.
+            format!("f'{{{BODY}}}'"),
+            format!("f\"{{{BODY}}}\""),
+            format!("f\"{{x:{BODY}}}\""),
+            format!("f'''\n{{\n{BODY}\n}}\n'''"),
+            "f\"{open('a.csv')}\"".to_string(),
+            "f\"{open(\"a.csv\")}\"".to_string(),
+            "f\"{xl(a)}\"".to_string(),
+            "f\"{input()}\"".to_string(),
+            "f\"{f'{os.environ}'}\"".to_string(),
+            "print(\"open(\")".to_string(),
+            "x = \"open(\\\"a.csv\\\")\"".to_string(),
+            "'xl(name)'".to_string(),
+            "'import socket'".to_string(),
+        ] {
+            assert!(lint(&code, None).is_empty(), "{code}");
+            let after = format!("{code}\nimport socket");
+            let found = lint(&after, None);
+            assert_eq!(found.len(), 1, "{after}");
+            assert_eq!((&after[found[0].start..found[0].end], found[0].line as usize), ("socket", code.matches('\n').count() + 2), "{after}");
+        }
+    }
+
+    #[test]
+    fn offsets_and_lines_are_right_after_non_ascii_text() {
+        let code = "名前 = \"日本語\" # コメント é\nopen(\"données.csv\")\nçà = 1; input()\nx = 'é\nimport sócket, socket\nxl(é)\nos.environ # é";
+        let found = lint(code, None);
+        assert_sound(code, &found);
+        let read: Vec<(&str, u32, &str)> = found.iter().map(|f| (&code[f.start..f.end], f.line, f.detail.as_str())).collect();
+        assert_eq!(
+            read,
+            [
+                ("\"données.csv\"", 2, "données.csv"),
+                ("input", 3, "input"),
+                ("socket", 5, "socket needs the network"),
+                ("é", 6, "é"),
+                ("os.environ", 7, "os.environ"),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_line_ending_counts_one_line() {
+        let lines = |code: &str| lint(code, None).iter().map(|f| f.line).collect::<Vec<_>>();
+        assert_eq!(lines("input()"), [1]);
+        assert_eq!(lines("\ninput()"), [2]);
+        assert_eq!(lines("a = 1\r\nb = 2\r\ninput()\r\nc = 3\r\ninput()"), [3, 5]);
+        assert_eq!(lines("a\rinput()\r\rinput()"), [2, 4]);
+        assert_eq!(lines("a\n\r\n\rinput()"), [4]);
+        // Line breaks inside strings, comments, brackets and joined lines are lines all the same.
+        assert_eq!(lines("x = \"\"\"\r\n\r\n\"\"\"\r\ninput()"), [4]);
+        assert_eq!(lines("x = '''\n\n'''\ninput()"), [4]);
+        assert_eq!(lines("# a\r\n# b\r\ninput()"), [3]);
+        assert_eq!(lines("x = (\r\n1,\r\ninput())"), [3]);
+        assert_eq!(lines("x = 1 + \\\r\n  2\r\ninput()"), [3]);
+        assert_eq!(lines("x = 'a\\\r\nb'\r\ninput()"), [3]);
+    }
+
+    #[test]
+    fn a_statement_ends_at_a_windows_line_ending() {
+        assert_eq!(ids("import socket\r\nimport ssl\r\n"), ["lint.importBlocked", "lint.importBlocked"]);
+        assert_eq!(ids("x = 'import socket\r\ninput()"), ["lint.window"]);
+        assert_eq!(ids("# import socket\r\ninput()"), ["lint.window"]);
+    }
+
+    #[test]
+    fn findings_are_in_order_and_capped() {
+        let code = "input()\n".repeat(150);
+        let found = lint(&code, None);
+        assert_sound(&code, &found);
+        assert_eq!(found.len(), 100);
+        assert_eq!(found.iter().map(|f| f.line).collect::<Vec<_>>(), (1..=100).collect::<Vec<u32>>());
+
+        // A statement with more findings than the cap is cut there as well.
+        let code = format!("from urllib import {}", "request, ".repeat(150));
+        let found = lint(&code, None);
+        assert_sound(&code, &found);
+        assert_eq!(found.len(), 100);
+
+        // A call's argument is reported after the call, at or after its position.
+        let code = "xl(os.environ)\nxl(open('a'))\nxl(input())\nplt.show(input())";
+        let found = lint(code, None);
+        assert_sound(code, &found);
+        assert_eq!(found.len(), 8);
+    }
+
+    #[test]
+    fn empty_and_strange_code_finds_nothing_and_does_not_panic() {
+        for code in [
+            "", " ", "\n", "\r", "\r\n", "\0", "\0\0\0", "\\", "\\\n", "\\\r\n", "'", "\"", "'''", "f'", "f'{", "f'{{", "#", "é", "(", ")", "]", "}",
+            ".", ",",
+        ] {
+            assert!(lint(code, None).is_empty(), "{code:?}");
+            assert!(lint(code, Some(&[])).is_empty(), "{code:?}");
+            assert!(imported_modules(code).is_empty(), "{code:?}");
+        }
+        assert_eq!(ids("input\0()"), Vec::<&str>::new());
+        assert_eq!(ids("\0input()"), ["lint.window"]);
+    }
+
+    /// Pieces of Python put together at random, with the same seed each time: whatever comes out,
+    /// nothing panics and every result is sound.
+    #[test]
+    fn random_code_gives_sound_results() {
+        const PIECES: [&str; 44] = [
+            "xl",
+            "(",
+            ")",
+            "\"",
+            "'",
+            "\"\"\"",
+            "'''",
+            "f\"",
+            "rb'",
+            "F'''",
+            "{",
+            "}",
+            ":",
+            "\\",
+            "\n",
+            "\r\n",
+            "\r",
+            "#",
+            " ",
+            ",",
+            ".",
+            "é",
+            "日本",
+            "open",
+            "import ",
+            "from ",
+            "socket",
+            " as ",
+            "os.environ",
+            "plt.show",
+            "input",
+            "read_csv",
+            "to_csv",
+            "Path",
+            "\"a.csv\"",
+            "sqlite3.connect",
+            "\0",
+            "=",
+            "+",
+            "*",
+            "[",
+            "]",
+            "urllib",
+            "request",
+        ];
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move |below: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state % below as u64).unwrap()
+        };
+        let installed = installed(&["é", "a-b", "socket"]);
+        for _ in 0..4000 {
+            let mut code = String::new();
+            for _ in 0..next(60) {
+                code.push_str(PIECES[next(PIECES.len())]);
+            }
+            assert_sound(&code, &lint(&code, None));
+            assert_sound(&code, &lint(&code, Some(&installed)));
+            let _ = missing_modules(&code, &installed);
         }
     }
 }
