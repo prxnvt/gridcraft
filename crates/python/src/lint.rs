@@ -415,6 +415,31 @@ impl<'a> Source<'a> {
         self.tokens.get(i).is_some_and(|t| t.kind == Tok::Punct(b))
     }
 
+    /// Whether the code defines `name` itself: `def name` or `name = ...` at any depth of block,
+    /// not an attribute (`x.name = 1`), a comparison (`name == 1`) or a keyword argument.
+    fn rebinds(&self, name: &str) -> bool {
+        let mut depth = 0u32;
+        for i in 0..self.tokens.len() {
+            if self.is_punct(i, b'(') || self.is_punct(i, b'[') || self.is_punct(i, b'{') {
+                depth = depth.saturating_add(1);
+            } else if self.is_punct(i, b')') || self.is_punct(i, b']') || self.is_punct(i, b'}') {
+                depth = depth.saturating_sub(1);
+            }
+            if !self.is_word(i, name) || self.after_dot(i) {
+                continue;
+            }
+            let previous = i.checked_sub(1);
+            if previous.is_some_and(|p| self.is_word(p, "def")) {
+                return true;
+            }
+            let assigned = self.is_punct(i + 1, b'=') && !self.is_punct(i + 2, b'=');
+            if depth == 0 && assigned {
+                return true;
+            }
+        }
+        false
+    }
+
     fn is_word(&self, i: usize, word: &str) -> bool {
         self.tokens.get(i).is_some_and(|t| t.kind == Tok::Name) && self.text(i) == word
     }
@@ -556,14 +581,27 @@ pub fn imported_modules(code: &str) -> Vec<String> {
 // Packages.
 
 /// Modules whose distribution has another name.
-const INSTALL_NAMES: [(&str, &str); 7] = [
+const INSTALL_NAMES: [(&str, &str); 20] = [
     ("sklearn", "scikit-learn"),
+    ("skimage", "scikit-image"),
     ("PIL", "pillow"),
     ("cv2", "opencv-python"),
     ("yaml", "pyyaml"),
     ("bs4", "beautifulsoup4"),
     ("dateutil", "python-dateutil"),
     ("dotenv", "python-dotenv"),
+    ("attr", "attrs"),
+    ("serial", "pyserial"),
+    ("jwt", "pyjwt"),
+    ("dns", "dnspython"),
+    ("git", "gitpython"),
+    ("docx", "python-docx"),
+    ("pptx", "python-pptx"),
+    ("Crypto", "pycryptodome"),
+    ("OpenSSL", "pyopenssl"),
+    ("zmq", "pyzmq"),
+    ("magic", "python-magic"),
+    ("fitz", "pymupdf"),
 ];
 
 /// The name to install for `module`.
@@ -872,10 +910,11 @@ impl Needs {
 }
 
 /// Modules the sandbox refuses, with everything under them.
-const BLOCKED: [(&str, Needs); 21] = [
+const BLOCKED: [(&str, Needs); 22] = [
     ("socket", Needs::Network),
     ("ssl", Needs::Network),
-    ("http", Needs::Network),
+    ("http.client", Needs::Network),
+    ("http.server", Needs::Network),
     ("urllib.request", Needs::Network),
     ("urllib3", Needs::Network),
     ("requests", Needs::Network),
@@ -1089,7 +1128,9 @@ fn detail(text: &str) -> String {
 /// distribution names of the packages this Python has, or `None` when not known yet, in which case
 /// `lint.importMissing` isn't reported.
 pub fn lint(code: &str, installed: Option<&[String]>) -> Vec<Finding> {
-    let mut linter = Linter { source: Source::new(code), installed: installed.map(Installed::new), found: Vec::new() };
+    let source = Source::new(code);
+    let (rebinds_open, rebinds_input) = (source.rebinds("open"), source.rebinds("input"));
+    let mut linter = Linter { source, installed: installed.map(Installed::new), rebinds_open, rebinds_input, found: Vec::new() };
     let mut i = 0;
     while i < linter.source.tokens.len() && linter.found.len() < MAX_FINDINGS {
         i = linter.step(i);
@@ -1121,6 +1162,9 @@ fn number_lines(code: &str, found: &mut [Finding]) {
 struct Linter<'a> {
     source: Source<'a>,
     installed: Option<Installed>,
+    /// The code gives `open` or `input` a meaning of its own, so calling it says nothing.
+    rebinds_open: bool,
+    rebinds_input: bool,
     found: Vec<Finding>,
 }
 
@@ -1200,6 +1244,9 @@ impl Linter<'_> {
             self.report_name("lint.environ", i);
         } else if self.source.is_plot_name(i) {
             self.report_plot_name(i);
+        } else if name == "plot" && self.source.after_dot(i) && self.source.is_punct(i + 1, b'.') {
+            // `df.plot.bar()`.
+            self.report_name("lint.plotting", i);
         } else if self.source.is_punct(i + 1, b'(') && !self.source.is_defined(i) {
             self.check_call(i, name, receiver);
         }
@@ -1211,10 +1258,13 @@ impl Linter<'_> {
             // `plt.plot(` was reported at `plt`.
             _ if self.source.is_plot_attribute(i) => {}
             ("xl", _) if !attribute => self.check_xl(i),
-            ("input", _) if !attribute => self.report_name("lint.window", i),
+            ("input", _) if !attribute && !self.rebinds_input => self.report_name("lint.window", i),
+            ("open", _) if !attribute && self.rebinds_open => {}
             ("getenv", Some("os")) => self.report_name("lint.environ", i),
             // Whatever its argument: there is no figure to save.
-            ("savefig", _) | ("plot" | "hist", Some(_)) => self.report_name("lint.plotting", i),
+            ("savefig", _) => self.report_name("lint.plotting", i),
+            // On anything: `df.plot()`, `df["a"].hist()`.
+            ("plot" | "hist", _) if attribute => self.report_name("lint.plotting", i),
             _ if takes_a_path(name, attribute, receiver) => self.check_path(i, name),
             _ => {}
         }
@@ -1696,7 +1746,7 @@ mod tests {
         for (module, needs) in [
             ("socket", "needs the network"),
             ("ssl", "needs the network"),
-            ("http", "needs the network"),
+            ("http.client", "needs the network"),
             ("urllib.request", "needs the network"),
             ("urllib3", "needs the network"),
             ("requests", "needs the network"),
@@ -2110,9 +2160,6 @@ mod tests {
             "hist(x)",
             "df.plot",
             "df.hist",
-            "a().plot()",
-            "df['a'].plot()",
-            ".plot()",
             "def plot(self): pass",
             "def hist(self): pass",
             "my.plotter()",
@@ -2369,5 +2416,40 @@ mod tests {
             assert_sound(&code, &lint(&code, Some(&installed)));
             let _ = missing_modules(&code, &installed);
         }
+    }
+
+    #[test]
+    fn a_redefined_open_or_input_is_someone_elses() {
+        assert!(lint("def open(p):\n    return p\nopen('a.csv')", None).is_empty());
+        assert!(lint("input = lambda: 1\ninput()", None).is_empty());
+        // Comparing, passing or setting an attribute doesn't redefine it.
+        assert_eq!(lint("input == 1\ninput()", None).len(), 1);
+        assert_eq!(lint("f(open=1)\nopen('a.csv')", None).len(), 1);
+        assert_eq!(lint("x.open = 1\nopen('a.csv')", None).len(), 1);
+    }
+
+    #[test]
+    fn the_http_package_is_only_the_network_in_its_client_and_server() {
+        assert!(lint("from http import HTTPStatus\nimport http", None).is_empty());
+        for code in ["import http.client", "from http import client", "from http.server import HTTPServer"] {
+            assert_eq!(lint(code, None).first().map(|f| f.kind.id), Some("lint.importBlocked"), "{code}");
+        }
+    }
+
+    #[test]
+    fn plots_are_found_on_any_expression() {
+        for code in ["df.plot()", "df['a'].plot()", "df.plot.bar()", "f().hist()"] {
+            assert_eq!(lint(code, None).first().map(|f| f.kind.id), Some("lint.plotting"), "{code}");
+        }
+        assert!(lint("plot()\nhist(x)", None).is_empty(), "a plain function of the person's own");
+    }
+
+    #[test]
+    fn modules_with_another_install_name_read_as_installed() {
+        assert_eq!(install_name("attr"), "attrs");
+        assert_eq!(install_name("serial"), "pyserial");
+        assert_eq!(install_name("jwt"), "pyjwt");
+        let installed = ["attrs".to_string(), "PyJWT".to_string(), "pyserial".to_string()];
+        assert!(missing_modules("import attr, jwt, serial", &installed).is_empty());
     }
 }
