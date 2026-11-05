@@ -314,6 +314,8 @@ fn the_options_page_writes_the_preference_and_hands_the_session_a_capability() {
     h.run_steps(3);
     assert!(turned_on(&h).0, "the capability");
     assert!(h.state().ui.python.enabled, "the preference");
+    // A1 is a Python cell, which runs now.
+    settle(&mut h);
     assert_eq!(h.state().session.python_state(), PythonState::Ready);
     // It goes with the other preferences.
     let saved: gridcraft_ui_egui::UiState = serde_json::from_str(&serde_json::to_string(&h.state().ui).unwrap()).unwrap();
