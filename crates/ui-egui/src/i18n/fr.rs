@@ -178,9 +178,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Excel Value" => "Valeur Excel",
         "Convert to Normal Cell" => "Convertir en cellule normale",
         "Show Card" => "Afficher la carte",
-        "This version of GridCraft stores Python code but does not run it." => {
-            "Cette version de GridCraft enregistre le code Python mais ne l’exécute pas."
-        }
         "Insert\nPython" => "Insérer\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Insérer Python (Ctrl+Alt+Shift+P)",
         "Python Editor" => "Éditeur Python",
@@ -574,7 +571,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "No problems." => "Aucun problème.",
         "This workbook" => "Ce classeur",
         "No runs yet." => "Aucune exécution pour le moment.",
-        "Go to Cell" => "Atteindre la cellule",
+        "Go To Cell" => "Atteindre la cellule",
         "This run printed nothing." => "Cette exécution n'a rien imprimé.",
         "Python cells can" => "Les cellules Python peuvent",
         "Read cells through xl()" => "Lire des cellules avec xl()",
@@ -745,6 +742,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This Python doesn't have this package." => "Ce Python n'a pas ce paquet.",
         "Python cells can't open windows or ask for input." => "Les cellules Python ne peuvent pas ouvrir de fenêtres ni demander de saisie.",
         "Python cells don't see your environment variables." => "Les cellules Python ne voient pas vos variables d'environnement.",
+        "Open Settings" => "Ouvrir les paramètres",
+        "Show Printed Output" => "Afficher la sortie imprimée",
+        "Hide Printed Output" => "Masquer la sortie imprimée",
+        "Line {line}" => "Ligne {line}",
+        "Line {line}: {message}" => "Ligne {line} : {message}",
+        "Python {version}, ready" => "Python {version}, prêt",
+        "Python {version}, running" => "Python {version}, en cours d’exécution",
         _ => return None,
     })
 }

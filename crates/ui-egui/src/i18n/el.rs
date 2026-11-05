@@ -152,9 +152,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Excel Value" => "Τιμή Excel",
         "Convert to Normal Cell" => "Μετατροπή σε κανονικό κελί",
         "Show Card" => "Εμφάνιση κάρτας",
-        "This version of GridCraft stores Python code but does not run it." => {
-            "Αυτή η έκδοση του GridCraft αποθηκεύει κώδικα Python αλλά δεν τον εκτελεί."
-        }
         "Insert\nPython" => "Εισαγωγή\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Εισαγωγή Python (Ctrl+Alt+Shift+P)",
         "Python Editor" => "Πρόγραμμα επεξεργασίας Python",
@@ -1101,7 +1098,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Packages: {count}" => "Πακέτα: {count}",
         "No problems." => "Δεν υπάρχουν προβλήματα.",
         "No runs yet." => "Καμία εκτέλεση ακόμη.",
-        "Go to Cell" => "Μετάβαση σε κελί",
+        "Go To Cell" => "Μετάβαση σε κελί",
         "This run printed nothing." => "Αυτή η εκτέλεση δεν εκτύπωσε τίποτα.",
         "Python cells can" => "Τα κελιά Python μπορούν να",
         "Read cells through xl()" => "Διαβάζουν κελιά μέσω του xl()",
@@ -1274,6 +1271,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This Python doesn't have this package." => "Αυτή η Python δεν έχει αυτό το πακέτο.",
         "Python cells can't open windows or ask for input." => "Τα κελιά Python δεν μπορούν να ανοίξουν παράθυρα ή να ζητήσουν είσοδο.",
         "Python cells don't see your environment variables." => "Τα κελιά Python δεν βλέπουν τις μεταβλητές περιβάλλοντος σας.",
+        "Open Settings" => "Άνοιγμα ρυθμίσεων",
+        "Show Printed Output" => "Εμφάνιση εκτυπωμένης εξόδου",
+        "Hide Printed Output" => "Απόκρυψη εκτυπωμένης εξόδου",
+        "Line {line}" => "Γραμμή {line}",
+        "Line {line}: {message}" => "Γραμμή {line}: {message}",
+        "Python {version}, ready" => "Python {version}, έτοιμο",
+        "Python {version}, running" => "Python {version}, εκτελείται",
         _ => return None,
     })
 }

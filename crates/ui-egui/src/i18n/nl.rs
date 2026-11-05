@@ -172,9 +172,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Excel Value" => "Excel-waarde",
         "Convert to Normal Cell" => "Converteren naar normale cel",
         "Show Card" => "Kaart weergeven",
-        "This version of GridCraft stores Python code but does not run it." => {
-            "Deze versie van GridCraft bewaart Python-code, maar voert die niet uit."
-        }
         "Insert\nPython" => "Python\ninvoegen",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Python invoegen (Ctrl+Alt+Shift+P)",
         "Python Editor" => "Python-editor",
@@ -646,7 +643,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "No problems." => "Geen problemen.",
         "This workbook" => "Deze werkmap",
         "No runs yet." => "Nog geen uitvoeringen.",
-        "Go to Cell" => "Naar cel gaan",
+        "Go To Cell" => "Naar cel gaan",
         "This run printed nothing." => "Deze uitvoering heeft niets afgedrukt.",
         "Python cells can" => "Python-cellen kunnen",
         "Read cells through xl()" => "Cellen lezen via xl()",
@@ -815,6 +812,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This Python doesn't have this package." => "Deze Python heeft dit pakket niet.",
         "Python cells can't open windows or ask for input." => "Python-cellen kunnen geen vensters openen of om invoer vragen.",
         "Python cells don't see your environment variables." => "Python-cellen zien uw omgevingsvariabelen niet.",
+        "Open Settings" => "Instellingen openen",
+        "Show Printed Output" => "Afgedrukte uitvoer weergeven",
+        "Hide Printed Output" => "Afgedrukte uitvoer verbergen",
+        "Line {line}" => "Regel {line}",
+        "Line {line}: {message}" => "Regel {line}: {message}",
+        "Python {version}, ready" => "Python {version}, gereed",
+        "Python {version}, running" => "Python {version}, wordt uitgevoerd",
         _ => return None,
     })
 }

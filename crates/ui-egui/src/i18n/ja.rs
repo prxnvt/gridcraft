@@ -173,10 +173,6 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Excel Value", "Excel の値"),
     ("Convert to Normal Cell", "通常のセルに変換"),
     ("Show Card", "カードの表示"),
-    (
-        "This version of GridCraft stores Python code but does not run it.",
-        "このバージョンの GridCraft は Python コードを保存しますが、実行はしません。",
-    ),
     ("Insert\nPython", "Python の\n挿入"),
     ("Insert Python (Ctrl+Alt+Shift+P)", "Python の挿入 (Ctrl+Alt+Shift+P)"),
     ("Python Editor", "Python エディター"),
@@ -542,7 +538,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Packages: {count}", "パッケージ: {count}"),
     ("No problems.", "問題はありません。"),
     ("No runs yet.", "まだ実行されていません。"),
-    ("Go to Cell", "セルへジャンプ"),
+    ("Go To Cell", "セルへジャンプ"),
     ("This run printed nothing.", "この実行では何も出力されませんでした。"),
     ("Python cells can", "Python セルでできること"),
     ("Read cells through xl()", "xl() でセルを読み取る"),
@@ -733,6 +729,13 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("This Python doesn't have this package.", "この Python にはこのパッケージがありません。"),
     ("Python cells can't open windows or ask for input.", "Python セルは、ウィンドウを開いたり入力を求めたりできません。"),
     ("Python cells don't see your environment variables.", "Python セルは環境変数を参照できません。"),
+    ("Open Settings", "設定を開く"),
+    ("Show Printed Output", "出力結果を表示"),
+    ("Hide Printed Output", "出力結果を非表示"),
+    ("Line {line}", "{line} 行目"),
+    ("Line {line}: {message}", "{line} 行目: {message}"),
+    ("Python {version}, ready", "Python {version}、準備完了"),
+    ("Python {version}, running", "Python {version}、実行中"),
 ];
 
 /// English label → Japanese for the dialog, message, Backstage and menu strings beyond [`CORE`].

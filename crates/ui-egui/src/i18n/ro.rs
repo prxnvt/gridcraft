@@ -174,9 +174,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Excel Value" => "Valoare Excel",
         "Convert to Normal Cell" => "Conversie în celulă normală",
         "Show Card" => "Afișare card",
-        "This version of GridCraft stores Python code but does not run it." => {
-            "Această versiune GridCraft stochează codul Python, dar nu îl rulează."
-        }
         "Insert\nPython" => "Inserare\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Inserare Python (Ctrl+Alt+Shift+P)",
         "Python Editor" => "Editor Python",
@@ -1153,7 +1150,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Packages: {count}" => "Pachete: {count}",
         "No problems." => "Nicio problemă.",
         "No runs yet." => "Încă nicio rulare.",
-        "Go to Cell" => "Salt la celulă",
+        "Go To Cell" => "Salt la celulă",
         "This run printed nothing." => "Această rulare nu a tipărit nimic.",
         "Python cells can" => "Celulele Python pot",
         "Read cells through xl()" => "Citi celule prin xl()",
@@ -1320,6 +1317,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This Python doesn't have this package." => "Acest Python nu are acest pachet.",
         "Python cells can't open windows or ask for input." => "Celulele Python nu pot deschide ferestre sau cere intrări.",
         "Python cells don't see your environment variables." => "Celulele Python nu văd variabilele dumneavoastră de mediu.",
+        "Open Settings" => "Deschide setările",
+        "Show Printed Output" => "Afișează ieșirea tipărită",
+        "Hide Printed Output" => "Ascunde ieșirea tipărită",
+        "Line {line}" => "Linia {line}",
+        "Line {line}: {message}" => "Linia {line}: {message}",
+        "Python {version}, ready" => "Python {version}, pregătit",
+        "Python {version}, running" => "Python {version}, în execuție",
         _ => return None,
     })
 }

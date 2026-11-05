@@ -890,7 +890,14 @@ mod tests {
         "This workbook",
         "Clear",
         "No runs yet.",
-        "Go to Cell",
+        "Go To Cell",
+        "Open Settings",
+        "Show Printed Output",
+        "Hide Printed Output",
+        "Line {line}",
+        "Line {line}: {message}",
+        "Python {version}, ready",
+        "Python {version}, running",
         "This run printed nothing.",
         "Python cells can",
         "Read cells through xl()",
@@ -1000,7 +1007,7 @@ mod tests {
                 assert!(!language.tr(key).contains('|'), "{code} shows a context prefix for {key:?}");
                 let label = key.rsplit_once('|').map_or(*key, |(_, label)| label);
                 assert_eq!(label.contains('\n'), language.tr(key).contains('\n'), "{code}: the lines of {key:?}");
-                for placeholder in ["{cell}", "{seconds}", "{state}", "{count}", "{version}"] {
+                for placeholder in ["{cell}", "{seconds}", "{state}", "{count}", "{version}", "{line}", "{message}"] {
                     assert_eq!(key.contains(placeholder), language.tr(key).contains(placeholder), "{code}: {placeholder} in {key:?}");
                 }
             }
