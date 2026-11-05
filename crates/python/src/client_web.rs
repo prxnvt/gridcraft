@@ -44,6 +44,9 @@ impl Client {
     pub fn submit_run(&mut self, _code: &str, _inputs: BTreeMap<String, Input>) -> Result<u64, Busy> {
         self.refuse()
     }
+    pub fn submit_cell(&mut self, _code: &str, _inputs: BTreeMap<String, Input>, _object: bool) -> Result<u64, Busy> {
+        self.refuse()
+    }
     pub fn submit_reset(&mut self) -> Result<u64, Busy> {
         self.refuse()
     }
