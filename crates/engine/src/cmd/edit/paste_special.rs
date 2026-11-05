@@ -342,6 +342,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let passive =
         matches!(what, What::ColumnWidths | What::Comments) || (!link && matches!(what, What::Formats | What::Values | What::ValuesAndNumberFormats));
     if !same_doc && !passive {
+        s.python_note_pasted(&clip);
         let d = s.doc_mut()?;
         d.trust = d.trust.receive(clip.trust);
     }

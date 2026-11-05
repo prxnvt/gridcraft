@@ -1,7 +1,8 @@
-//! Python in cells: making and editing Python cells, their return type, and turning them back
-//! into normal cells. This build stores
-//! the code and the last result a file cached; it doesn't run Python, so a cell with new or
-//! changed code shows `#BLOCKED!`.
+//! Python in cells: making and editing Python cells, their return type, turning them back into
+//! normal cells, and running them. Running needs a capability the app gives the session
+//! ([`crate::Session::set_python_capability`]), which no command can give: without one, these
+//! commands report that Python doesn't run here, and a cell with new or changed code shows
+//! `#BLOCKED!`. See [`crate::python`].
 
 use std::sync::Arc;
 
@@ -9,7 +10,8 @@ use gridcraft_core::{CellError, CellRef, Value};
 use gridcraft_model::{Cell, PyCode, python::MAX_FORMULA_CHARS};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, bad, cell_param_on, cmd, edit, has_doc, str_param, target_sheet};
+use super::{CommandSpec, always, bad, cell_param_on, cmd, edit, has_doc, str_param, target_sheet};
+use crate::python::{PythonCalculation, diagnostic_entry_json, environment_json, run_json};
 use crate::{EngineError, Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -40,6 +42,87 @@ pub fn specs() -> Vec<CommandSpec> {
             "{cell?} turns a Python cell (default: the active cell) into a normal cell that keeps what it shows: the code goes, the cell keeps its value, and each cell its result spills over keeps its value as a plain value. A Python-only error (#BLOCKED!, #BUSY!, #PYTHON!, #TIMEOUT!) is no result and can't be an ordinary cell's value, so a cell showing one becomes empty. Formats stay, and what reads the cells is recalculated. One undo step brings the Python cell back with its code, return type and result",
             has_doc,
             clear
+        ),
+        cmd!(
+            noundo "python.run",
+            "Run Python Cell",
+            [],
+            None,
+            "{cell?, sheet?} runs a Python cell (default: the active cell) now, whatever the calculation mode. Cells share variables, so the cells after it run too, or under manual calculation are marked stale. A cell that stopped the worker runs again only this way. Returns {cell, queued}. An error when Python doesn't run here, with the reason; it opens no dialog",
+            has_doc,
+            run
+        ),
+        cmd!(
+            noundo "python.runAll",
+            "Run All Python Cells",
+            [],
+            None,
+            "runs every Python cell of the workbook in run order, whatever the calculation mode, in the variables Python has now. Returns {queued}. An error when Python doesn't run here, with the reason",
+            has_doc,
+            run_all
+        ),
+        cmd!(
+            noundo "python.stop",
+            "Stop Python",
+            [],
+            None,
+            "stops the workbook's running cell by stopping its worker, which clears the variables: that cell shows #PYTHON! with the diagnostic state.stopped, and the cells waiting keep what they kept, marked stale. Returns {stopped}, false when nothing was running or waiting",
+            has_doc,
+            stop
+        ),
+        cmd!(
+            noundo "python.reset",
+            "Reset Python",
+            [],
+            None,
+            "starts the workbook's Python again with fresh variables and runs every cell, whatever the calculation mode. Returns {queued}. An error when Python doesn't run here, with the reason",
+            has_doc,
+            reset
+        ),
+        cmd!(
+            noundo "python.calculation",
+            "Python Calculation",
+            [],
+            None,
+            "{mode?: automatic|manual} sets when the workbook's Python cells run: as soon as they are due, or under manual, marked stale until python.run or python.runAll. The setting stays with the open workbook and isn't saved. Without `mode` it reports the current one. Returns {mode}",
+            has_doc,
+            calculation
+        ),
+        cmd!(
+            noundo "python.refreshEnvironment",
+            "Check Python Again",
+            [],
+            None,
+            "checks again whether Python can run here, in the background, when the app has turned Python on: python.environment gives the answer. It can't turn Python on or choose an interpreter. Returns the report as python.environment does",
+            always,
+            refresh_environment
+        ),
+        cmd!(
+            query "python.environment",
+            "Python Environment",
+            [],
+            None,
+            "→ {state: off|notSetUp|ready|running|blocked, diagnostic?, sandbox, uv?, interpreter? {path, runAs, version, kind, siteDirs, readPaths}, packages: [{name, version}]}. Read-only",
+            always,
+            environment
+        ),
+        cmd!(
+            query "python.diagnostics",
+            "Python Diagnostics",
+            [],
+            None,
+            "→ what is wrong or worth saying about Python in this workbook, as a list of {kind, severity, scope, message, action, detail, line?, cell?}, with `cell` as Sheet!A1 where it is about one cell. Read-only",
+            has_doc,
+            diagnostics
+        ),
+        cmd!(
+            query "python.runLog",
+            "Python Run Log",
+            [],
+            None,
+            "→ the workbook's last 200 Python runs, oldest first, as a list of {sheet, cell, ms, stdout, stdoutCut, diagnostic?}, with printed output cut to 64 KiB. Read-only",
+            has_doc,
+            run_log
         ),
     ]
 }
@@ -82,6 +165,7 @@ fn set(s: &mut Session, p: &Json) -> Result<Json> {
     let old = existing(s, sheet, at)?;
     let object = mode.or(old.as_ref().map(|o| o.object)).unwrap_or(false);
     store(s, "python.set", sheet, at, PyCode { object, ..PyCode::new(code) }, old)?;
+    s.python_after_edit();
     let d = s.doc()?;
     let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
     Ok(json!({"cell": at.a1(), "value": crate::cmd::inspect::value_json(&shown)}))
@@ -146,6 +230,7 @@ fn output(s: &mut Session, p: &Json) -> Result<Json> {
     if object != old.object {
         let py = PyCode { code: old.code.clone(), object, ..PyCode::default() };
         store(s, "python.output", sheet, at, py, Some(old))?;
+        s.python_after_edit();
     }
     let d = s.doc()?;
     let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
@@ -217,4 +302,53 @@ fn clear(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
     Ok(json!({"cell": at.a1(), "value": crate::cmd::inspect::value_json(&shown)}))
+}
+
+fn run(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, at) = target_cell(s, p)?;
+    let queued = s.python_run_cell(sheet, at)?;
+    Ok(json!({"cell": at.a1(), "queued": queued}))
+}
+
+fn run_all(s: &mut Session, _: &Json) -> Result<Json> {
+    Ok(json!({"queued": s.python_run_all(false)?}))
+}
+
+fn reset(s: &mut Session, _: &Json) -> Result<Json> {
+    Ok(json!({"queued": s.python_run_all(true)?}))
+}
+
+fn stop(s: &mut Session, _: &Json) -> Result<Json> {
+    Ok(json!({"stopped": s.python_stop()}))
+}
+
+fn calculation(s: &mut Session, p: &Json) -> Result<Json> {
+    let mode = match p.get("mode") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(m)) if m.eq_ignore_ascii_case("automatic") => Some(PythonCalculation::Automatic),
+        Some(Json::String(m)) if m.eq_ignore_ascii_case("manual") => Some(PythonCalculation::Manual),
+        Some(_) => return Err(bad("python.calculation", "`mode` is `automatic` or `manual`")),
+    };
+    if let Some(mode) = mode {
+        s.python_set_calculation(mode);
+    }
+    Ok(json!({"mode": s.python_calculation()}))
+}
+
+fn refresh_environment(s: &mut Session, _: &Json) -> Result<Json> {
+    s.python_refresh_environment();
+    Ok(environment_json(&s.python_environment()))
+}
+
+fn environment(s: &mut Session, _: &Json) -> Result<Json> {
+    Ok(environment_json(&s.python_environment()))
+}
+
+fn diagnostics(s: &mut Session, _: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    Ok(Json::Array(s.python_diagnostics().iter().map(|e| diagnostic_entry_json(&d.wb, e)).collect()))
+}
+
+fn run_log(s: &mut Session, _: &Json) -> Result<Json> {
+    Ok(Json::Array(s.python_run_log().map(run_json).collect()))
 }

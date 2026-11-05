@@ -2099,6 +2099,7 @@ dependencies = [
  "gridcraft-model",
  "gridcraft-numfmt",
  "gridcraft-pdf",
+ "gridcraft-python",
  "gridcraft-xlsx",
  "image",
  "log",

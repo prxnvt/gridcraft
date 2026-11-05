@@ -20,6 +20,7 @@ pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+pub mod python;
 pub mod recent;
 pub mod record;
 pub mod sample;
@@ -42,6 +43,7 @@ pub use gridcraft_formula as formula;
 pub use gridcraft_math as math;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
+pub use python::{PythonCalculation, PythonCapability, PythonDiagnosticEntry, PythonEnvironment, PythonRun, PythonState, python_order};
 pub use selection::Selection;
 pub use windows::{Target, TargetGuard, WindowState, WindowView};
 
@@ -531,6 +533,8 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// Python cells: what the app allows, and each open workbook's worker and cells ([`python`]).
+    pub(crate) python: python::Runtime,
 }
 
 impl Session {
@@ -593,6 +597,8 @@ impl Session {
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
             let d = self.docs.remove(i);
+            // Its worker stops with it, whatever it was running.
+            self.python.forget(d.uid);
             self.groups.retain(|g| g.doc != d.uid);
             // A macro being debugged in this workbook ends with it; its group just went.
             if self.macro_debug.as_ref().is_some_and(|m| m.doc == d.uid) {
@@ -772,6 +778,7 @@ impl Session {
                     macros::debug::recover(self);
                     self.trim_history();
                     self.group_step = None;
+                    self.python_after_command();
                 }
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
@@ -880,6 +887,7 @@ impl Session {
         if self.depth == 0 {
             self.trim_history();
             self.group_step = None;
+            self.python_after_command();
         } else if let Some(uid) = doc_uid {
             self.bound_tail(uid);
         }
