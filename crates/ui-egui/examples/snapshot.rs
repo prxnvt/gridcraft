@@ -43,7 +43,7 @@ fn fake_worker() -> FakeTransport {
             } else if code == "fail" {
                 w.done(id, Err(PyError { message: "ValueError: the input has no rows".into(), line: Some(2), ..PyError::default() }))
             } else if let Some(text) = code.strip_prefix("print ") {
-                w.send(&Reply::Done { id, result: value, stdout: format!("{text}\n") })
+                w.send(&Reply::Done { id, result: value, stdout: format!("{text}\n"), peak: None })
             } else {
                 w.done(id, value)
             };

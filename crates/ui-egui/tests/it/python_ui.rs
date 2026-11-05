@@ -43,7 +43,7 @@ fn worker() -> FakeTransport {
                 }
                 "fail" => w.done(id, Err(PyError { message: "ValueError: boom".into(), line: Some(2), ..PyError::default() })),
                 other => match other.strip_prefix("print ") {
-                    Some(text) => w.send(&Reply::Done { id, result: value, stdout: format!("{text}\n") }),
+                    Some(text) => w.send(&Reply::Done { id, result: value, stdout: format!("{text}\n"), peak: None }),
                     None => w.done(id, value),
                 },
             };
