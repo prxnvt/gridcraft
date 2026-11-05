@@ -14,6 +14,7 @@
 def _gridcraft_worker():
     import ast
     import builtins
+    import errno
     import io
     import json
     import math
@@ -29,6 +30,7 @@ def _gridcraft_worker():
     MAX_LINE_BYTES = 67108864
     MAX_TEXT_BYTES = 131072
     MAX_MESSAGE_BYTES = 8192
+    MAX_SUBJECT_BYTES = 1024
     MAX_TYPE_NAME_BYTES = 256
     MAX_PREVIEW_CHARS = 255
     MAX_STDOUT_BYTES = 1048576
@@ -96,10 +98,14 @@ def _gridcraft_worker():
         proto_out.write(data + b"\n")
         proto_out.flush()
 
-    def done_error(rid, message, line, stdout=""):
+    def done_error(rid, message, line, stdout="", kind=None, subject=None):
         err = {"message": cut_bytes(message, MAX_MESSAGE_BYTES)}
         if isinstance(line, int) and not isinstance(line, bool) and 0 <= line <= 4294967295:
             err["line"] = line
+        if kind:
+            err["kind"] = kind
+        if isinstance(subject, str) and subject:
+            err["subject"] = cut_bytes(subject, MAX_SUBJECT_BYTES)
         msg = {"type": "done", "id": rid, "ok": False, "error": err}
         if stdout:
             msg["stdout"] = stdout
@@ -288,6 +294,73 @@ def _gridcraft_worker():
             text = ""
         return "%s: %s" % (name, text) if text else name
 
+    # What kind of failure an error is, in the words of the diagnostics catalog (diagnostics.rs), so
+    # the person is told what to do about it. A guess is fine: the message goes along with it.
+    NETWORK_FILES = ("socket.py", "ssl.py", "selectors.py", "connection.py", "connectionpool.py", "client.py", "request.py", "adapters.py")
+    NETWORK_FOLDERS = ("asyncio", "urllib", "urllib3", "http", "requests", "httpx", "aiohttp")
+    PROCESS_FILES = ("subprocess.py", "popen_fork.py", "popen_spawn_posix.py", "popen_forkserver.py", "spawn.py")
+    PROCESS_FOLDERS = ("multiprocessing", "joblib", "loky")
+    NETWORK_WORDS = ("socket", "connect", "urlopen", "getaddrinfo")
+    PROCESS_WORDS = ("fork", "exec", "spawn", "system(", "popen", "Popen", "subprocess")
+
+    def chain(e):
+        seen = 0
+        while e is not None and seen < 16:
+            yield e
+            seen += 1
+            link = e.__cause__ or e.__context__ or getattr(e, "reason", None)
+            e = link if isinstance(link, BaseException) else None
+
+    def denied_kind(e, code):
+        """Which kind of denial a permission error is, from where it was raised."""
+        tb = e.__traceback__
+        line = None
+        while tb is not None:
+            name = tb.tb_frame.f_code.co_filename
+            base = os.path.basename(name)
+            parts = name.replace("\\", "/").split("/")
+            if base in PROCESS_FILES or any(f in parts for f in PROCESS_FOLDERS):
+                return "denied.process"
+            if base in NETWORK_FILES or any(f in parts for f in NETWORK_FOLDERS):
+                return "denied.network"
+            if name == "<cell>":
+                line = tb.tb_lineno
+            tb = tb.tb_next
+        lines = code.split("\n") if isinstance(code, str) else []
+        text = lines[line - 1] if isinstance(line, int) and 0 < line <= len(lines) else ""
+        if any(w in text for w in PROCESS_WORDS):
+            return "denied.process"
+        if any(w in text for w in NETWORK_WORDS):
+            return "denied.network"
+        return "denied.file"
+
+    def classify(e, code):
+        """The catalog's kind for an error, and what it was about."""
+        if isinstance(e, SyntaxError):
+            return "python.syntax", None
+        if isinstance(e, ModuleNotFoundError):
+            return "module.missing", e.name
+        if isinstance(e, ImportError):
+            text = str(e)
+            if "sandbox" in text or "not permitted" in text or "Permission denied" in text:
+                return "module.blockedLibrary", getattr(e, "name", None)
+            return "python.exception", None
+        if isinstance(e, NameError):
+            return "python.name", getattr(e, "name", None)
+        for link in chain(e):
+            if isinstance(link, PermissionError) or (isinstance(link, OSError) and link.errno in (errno.EPERM, errno.EACCES)):
+                kind = denied_kind(link, code)
+                return kind, str(link.filename) if kind == "denied.file" and link.filename else None
+            if isinstance(link, socket_errors()):
+                return "denied.network", None
+        if isinstance(e, FileNotFoundError) and "No usable temporary directory" in str(e):
+            return "denied.file", None
+        return "python.exception", None
+
+    def socket_errors():
+        s = sys.modules.get("socket")
+        return (s.gaierror,) if s is not None else ()
+
     def compile_cell(code):
         tree = ast.parse(code, "<cell>", "exec")
         last = None
@@ -332,7 +405,11 @@ def _gridcraft_worker():
         except TooBig as e:
             return done_error(rid, str(e), None, capture.text())
         except BaseException as e:  # noqa: BLE001 - whatever the cell raised is its result
-            return done_error(rid, error_message(e), error_line(e), capture.text())
+            try:
+                kind, subject = classify(e, code)
+            except Exception:
+                kind, subject = None, None
+            return done_error(rid, error_message(e), error_line(e), capture.text(), kind, subject)
 
     fresh()
     send({"type": "ready", "selfTest": {"status": "notChecked"}})

@@ -39,8 +39,12 @@ fn requests_and_replies_round_trip() {
         Reply::Ready { self_test: SelfTest::Failed("socket opened".into()) },
         Reply::Done { id: 3, result: Ok(Output::Value(array(1, 2, vec![Value::Number(1.0), Value::text("b")]))), stdout: "hi\n".into() },
         Reply::Done { id: 4, result: Ok(Output::Object { type_name: "dict".into(), preview: "{'a': 1}".into() }), stdout: String::new() },
-        Reply::Done { id: 5, result: Err(PyError { message: "NameError: name 'y' is not defined".into(), line: Some(2) }), stdout: String::new() },
-        Reply::Done { id: 6, result: Err(PyError { message: "SyntaxError".into(), line: None }), stdout: String::new() },
+        Reply::Done {
+            id: 5,
+            result: Err(PyError { message: "NameError: name 'y' is not defined".into(), line: Some(2), ..PyError::default() }),
+            stdout: String::new(),
+        },
+        Reply::Done { id: 6, result: Err(PyError { message: "SyntaxError".into(), line: None, ..PyError::default() }), stdout: String::new() },
         Reply::Done { id: 9, result: Ok(Output::Value(Value::Empty)), stdout: String::new() },
     ] {
         let line = reply.to_line();

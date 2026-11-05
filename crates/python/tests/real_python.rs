@@ -84,7 +84,7 @@ fn values_errors_globals_and_reset() {
     assert_eq!(
         run(&mut c, "a = 1\nb = a + undefined_name\nb"),
         Outcome::PythonError {
-            error: PyError { message: "NameError: name 'undefined_name' is not defined".into(), line: Some(2) },
+            error: PyError { message: "NameError: name 'undefined_name' is not defined".into(), line: Some(2), kind: Some("python.name".into()), subject: Some("undefined_name".into()) },
             stdout: String::new()
         }
     );
@@ -219,11 +219,11 @@ fn big_results_stay_within_the_caps() {
 fn the_interpreter_is_isolated() {
     let Some(py) = python() else { return };
     let mut c = client(py);
-    // Only the one variable, a fresh empty working directory, no site module, isolated flags.
-    // Only the one variable comes from GridCraft; Python adds LC_CTYPE when it coerces the C
-    // locale to UTF-8, and macOS adds its text encoding, both inside the worker.
+    // Only the variables the shim sets itself, a fresh empty working directory, no site module,
+    // isolated flags. Python adds LC_CTYPE when it coerces the C locale to UTF-8, and macOS adds its
+    // text encoding, both inside the worker.
     let env = value(run(&mut c, "import os\n','.join(sorted(k for k in os.environ if k not in ('LC_CTYPE', '__CF_USER_TEXT_ENCODING')))"));
-    assert_eq!(env, Value::text("OPENBLAS_NUM_THREADS"));
+    assert_eq!(env, Value::text("MPLBACKEND,MPLCONFIGDIR,OPENBLAS_NUM_THREADS,TMPDIR"));
     assert_eq!(value(run(&mut c, "import os\nos.listdir('.')")), Value::Error(CellError::Calc), "an empty list");
     assert_eq!(value(run(&mut c, "import sys\n'site' in sys.modules")), Value::Bool(false));
     assert_eq!(
@@ -281,4 +281,28 @@ fn a_missing_interpreter_fails_to_start() {
     let o = run(&mut c, "1");
     assert!(matches!(&o, Outcome::FailedToStart(_)), "{o:?}");
     assert_eq!(o.cell_error(), Some(CellError::Connect));
+}
+
+/// The worker says what kind of failure an error is.
+#[test]
+fn errors_say_what_kind_they_are() {
+    let Some(p) = python() else { return };
+    let mut c = client(p);
+    let kind = |c: &mut Client, code: &str| match run(c, code) {
+        Outcome::PythonError { error, .. } => (error.kind, error.subject),
+        other => panic!("{code}: {other:?}"),
+    };
+    let k = |s: &str| Some(s.to_string());
+    assert_eq!(kind(&mut c, "1 +"), (k("python.syntax"), None));
+    assert_eq!(kind(&mut c, "import not_a_module_anywhere"), (k("module.missing"), k("not_a_module_anywhere")));
+    assert_eq!(kind(&mut c, "not_a_name"), (k("python.name"), k("not_a_name")));
+    assert_eq!(kind(&mut c, "1 / 0"), (k("python.exception"), None));
+    assert_eq!(kind(&mut c, "raise PermissionError(1, 'no', '/some/file')"), (k("denied.file"), k("/some/file")));
+    assert_eq!(kind(&mut c, "import os\nraise PermissionError(1, 'no') # os.fork()"), (k("denied.process"), None));
+    assert_eq!(kind(&mut c, "raise PermissionError(1, 'no') # socket"), (k("denied.network"), None));
+    // Wrapped, as urllib and requests do.
+    assert_eq!(
+        kind(&mut c, "try:\n    raise PermissionError(1, 'no') # socket\nexcept OSError as e:\n    raise ValueError('wrapped') from e"),
+        (k("denied.network"), None)
+    );
 }

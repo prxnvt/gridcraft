@@ -12,8 +12,9 @@
 //!
 //! - `{"type":"ready","selfTest":{"status":"notChecked"}}` once, when it starts;
 //! - exactly one `{"type":"done","id":N,"ok":true,"value":V,"stdout":"…"}` or
-//!   `{"type":"done","id":N,"ok":false,"error":{"message":"…","line":3},"stdout":"…"}` per
-//!   request (`stdout` is left out when nothing was printed).
+//!   `{"type":"done","id":N,"ok":false,"error":{"message":"…","line":3,"kind":"denied.file",
+//!   "subject":"/a/b"},"stdout":"…"}` per request (`stdout` is left out when nothing was printed;
+//!   `kind` and `subject` when the worker has none).
 //!
 //! A value `V` is `null` (empty), a number, a string, `true` or `false`, `{"error":"#N/A"}`,
 //! `{"array":{"rows":R,"cols":C,"data":[…]}}` with `R × C` scalars in row order, or, only as a
@@ -38,6 +39,9 @@ pub const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_TEXT_BYTES: usize = 128 * 1024;
 /// Bytes in an error message.
 pub const MAX_MESSAGE_BYTES: usize = 8 * 1024;
+/// Bytes in an error's kind and in its subject.
+pub const MAX_KIND_BYTES: usize = 64;
+pub const MAX_SUBJECT_BYTES: usize = 1024;
 /// Bytes in an object's type name.
 pub const MAX_TYPE_NAME_BYTES: usize = 256;
 /// Characters in an object's preview (its `repr`, cut).
@@ -128,6 +132,11 @@ pub struct PyError {
     pub message: String,
     /// The line in the cell's code, when the error happened in it.
     pub line: Option<u32>,
+    /// What kind of failure the worker takes this for, an id of the diagnostics catalog. Untrusted:
+    /// [`crate::diagnostics::for_error`] maps one it doesn't know to a plain Python error.
+    pub kind: Option<String>,
+    /// What it was about: a module's name, the file tried.
+    pub subject: Option<String>,
 }
 
 /// The worker's check of its own confinement, reported in `ready`. A worker that makes no such
@@ -216,7 +225,9 @@ impl RawReply {
                 let id = self.id.ok_or("done without id")?;
                 let result = match (self.ok, self.value, self.error) {
                     (Some(true), Some(v), None) => Ok(v.0),
-                    (Some(false), None, Some(e)) => Err(PyError { message: e.message.0, line: e.line }),
+                    (Some(false), None, Some(e)) => {
+                        Err(PyError { message: e.message.0, line: e.line, kind: e.kind.map(|k| k.0), subject: e.subject.map(|k| k.0) })
+                    }
                     _ => return Err("done needs ok with a value, or not ok with an error".into()),
                 };
                 Ok(Reply::Done { id, result, stdout: self.stdout.map(|s| s.0).unwrap_or_default() })
@@ -230,6 +241,8 @@ impl RawReply {
 struct RawError {
     message: Capped<MAX_MESSAGE_BYTES>,
     line: Option<u32>,
+    kind: Option<Capped<MAX_KIND_BYTES>>,
+    subject: Option<Capped<MAX_SUBJECT_BYTES>>,
 }
 
 #[derive(Deserialize)]
@@ -653,6 +666,12 @@ impl Serialize for WireError<'_> {
         m.serialize_entry("message", &self.0.message)?;
         if let Some(line) = self.0.line {
             m.serialize_entry("line", &line)?;
+        }
+        if let Some(kind) = &self.0.kind {
+            m.serialize_entry("kind", kind)?;
+        }
+        if let Some(subject) = &self.0.subject {
+            m.serialize_entry("subject", subject)?;
         }
         m.end()
     }

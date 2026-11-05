@@ -25,10 +25,11 @@ fn client(t: FakeTransport, timeout_ms: u64) -> (Client, FakeHandle) {
 fn calculator() -> FakeTransport {
     FakeTransport::answering(|code, inputs| match code {
         "xl" => Ok(Output::Value(inputs.get("A1").map(|i| i.value.clone()).unwrap_or_default())),
-        c => c
-            .parse::<f64>()
-            .map(|n| Output::Value(Value::Number(n)))
-            .map_err(|_| PyError { message: "NameError: name 'y' is not defined".into(), line: Some(2) }),
+        c => c.parse::<f64>().map(|n| Output::Value(Value::Number(n))).map_err(|_| PyError {
+            message: "NameError: name 'y' is not defined".into(),
+            line: Some(2),
+            ..PyError::default()
+        }),
     })
 }
 
@@ -53,7 +54,10 @@ fn values_round_trip_on_one_worker() {
     assert_eq!(ok_value(&c.run("xl", inputs).unwrap()), range);
     assert_eq!(
         c.run("y", no_inputs()).unwrap(),
-        Outcome::PythonError { error: PyError { message: "NameError: name 'y' is not defined".into(), line: Some(2) }, stdout: String::new() }
+        Outcome::PythonError {
+            error: PyError { message: "NameError: name 'y' is not defined".into(), line: Some(2), ..PyError::default() },
+            stdout: String::new()
+        }
     );
     // A Python error keeps the worker (and its globals).
     assert!(c.alive());
