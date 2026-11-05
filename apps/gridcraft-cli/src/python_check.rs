@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use gridcraft_python::describe::{self, Interpreter};
+use gridcraft_python::diagnostics;
 use gridcraft_python::interp::{self, Detection, SearchEnv};
 use gridcraft_python::process::ProcessTransport;
 use gridcraft_python::{Client, Limits, Outcome, Output};
@@ -140,7 +141,8 @@ fn run_code(client: &mut Client, code: &str) -> bool {
             true
         }
         Ok(other) => {
-            outln!("failed: {}", describe_outcome(&other));
+            let kind = diagnostics::for_outcome(&other).map_or("", |d| d.kind.id);
+            outln!("failed ({kind}): {}", describe_outcome(&other));
             false
         }
         Err(_) => false,
@@ -153,7 +155,6 @@ fn describe_outcome(o: &Outcome) -> String {
         Outcome::PythonError { error, .. } => error.message.clone(),
         Outcome::TimedOut => "ran past its time limit".into(),
         Outcome::OverMemory { rss_bytes } => format!("went over its memory limit ({rss_bytes} bytes)"),
-        Outcome::OverScratch { bytes } => format!("went over its scratch folder's limit ({bytes} bytes)"),
         Outcome::OutputTooLarge => "wrote a line over the cap".into(),
         Outcome::ProtocolViolation(m) | Outcome::Crashed(m) | Outcome::FailedToStart(m) => m.clone(),
     }

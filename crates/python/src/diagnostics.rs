@@ -147,17 +147,11 @@ pub const CATALOG: &[Kind] = &[
     k("denied.file", Error, Cell, "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl().", A::None),
     k("denied.network", Error, Cell, "Python cells can't use the network. Put the data on a sheet and read it with xl().", A::None),
     k("denied.process", Error, Cell, "Python cells can't start other programs or processes.", A::None),
+    k("plot.unsupported", Error, Cell, "Python cells don't draw plots. Return the data to a sheet and build a chart from it.", A::None),
     k("xl.notLiteral", Error, Cell, "xl() needs its reference written as text in the code, such as xl(\"A1:B5\").", A::None),
     k("xl.tooLarge", Error, Cell, "This range is too large to send to Python.", A::None),
     k("limit.time", Error, Cell, "The code ran past the time limit. Python was restarted, so its variables were cleared.", A::RunAgain),
     k("limit.memory", Error, Cell, "The code went over the memory limit. Python was restarted, so its variables were cleared.", A::RunAgain),
-    k(
-        "limit.scratch",
-        Error,
-        Cell,
-        "The code wrote too much to its temporary folder. Python was restarted, so its variables were cleared.",
-        A::RunAgain,
-    ),
     k("limit.result", Error, Cell, "The result is too large to bring back to the sheet.", A::None),
     k("limit.output", Warning, Cell, "The printed output was cut off at its limit.", A::None),
     k("worker.lost", Error, Cell, "Python stopped unexpectedly and was restarted, so its variables were cleared.", A::RunAgain),
@@ -183,6 +177,7 @@ pub const CATALOG: &[Kind] = &[
         "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl().",
         A::None,
     ),
+    k("lint.plotting", Warning, Line, "Python cells don't draw plots. Return the data to a sheet and build a chart from it.", A::None),
     k("lint.window", Warning, Line, "Python cells can't open windows or ask for input.", A::None),
     k("lint.environ", Info, Line, "Python cells don't see your environment variables.", A::None),
 ];
@@ -216,7 +211,7 @@ const PYTHON_EXCEPTION: &Kind = &k("python.exception", Error, Cell, "The code ra
 
 /// Which kinds a worker may report for an error it raised: only the cell-level ones about code.
 /// Anything else it names (it is untrusted) reads as a plain error.
-const WORKER_KINDS: [&str; 8] = [
+const WORKER_KINDS: [&str; 10] = [
     "python.syntax",
     "python.exception",
     "python.name",
@@ -225,6 +220,8 @@ const WORKER_KINDS: [&str; 8] = [
     "denied.file",
     "denied.network",
     "denied.process",
+    "plot.unsupported",
+    "xl.notLiteral",
 ];
 
 /// The diagnostic for an error the code raised.
@@ -247,7 +244,6 @@ pub fn for_outcome(outcome: &Outcome) -> Option<Diagnostic> {
         Outcome::PythonError { error, .. } => for_error(error),
         Outcome::TimedOut => Diagnostic::new("limit.time", "", None),
         Outcome::OverMemory { rss_bytes } => Diagnostic::new("limit.memory", format!("{} MB in use", rss_bytes / (1024 * 1024)), None),
-        Outcome::OverScratch { bytes } => Diagnostic::new("limit.scratch", format!("{} MB written", bytes / (1024 * 1024)), None),
         Outcome::OutputTooLarge => Diagnostic::new("limit.result", "", None),
         Outcome::ProtocolViolation(why) | Outcome::Crashed(why) => Diagnostic::new("worker.lost", why.clone(), None),
         Outcome::FailedToStart(why) => match why.lines().find_map(|l| l.split_once(REFUSED)) {
@@ -293,6 +289,25 @@ mod tests {
     }
 
     #[test]
+    fn every_kind_the_worker_names_is_accepted_and_in_the_catalog() {
+        let shim = include_str!("shim.py");
+        let classify = &shim[shim.find("def classify").unwrap()..shim.find("def socket_errors").unwrap()];
+        let mut named: Vec<&str> = WORKER_KINDS.to_vec();
+        for piece in classify.split('"').skip(1).step_by(2).filter(|p| {
+            p.split_once('.').is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && p.chars().all(|c| c.is_ascii_alphabetic() || c == '.'))
+        }) {
+            named.push(piece);
+            assert!(WORKER_KINDS.contains(&piece), "{piece} is raised by the shim but not accepted");
+        }
+        for id in named {
+            assert!(kind(id).is_some(), "{id} isn't in the catalog");
+        }
+        assert!(WORKER_KINDS.contains(&"denied.process"), "denied_kind's answers are accepted too");
+        assert!(WORKER_KINDS.contains(&"denied.network"));
+        assert!(WORKER_KINDS.contains(&"denied.file"));
+    }
+
+    #[test]
     fn the_subject_joins_the_message_once() {
         let e = PyError { message: "No module named 'x'".into(), kind: Some("module.missing".into()), subject: Some("x".into()), line: Some(3) };
         let d = for_error(&e);
@@ -306,7 +321,6 @@ mod tests {
         let id = |o: Outcome| for_outcome(&o).map(|d| d.kind.id);
         assert_eq!(id(Outcome::TimedOut), Some("limit.time"));
         assert_eq!(id(Outcome::OverMemory { rss_bytes: 5 }), Some("limit.memory"));
-        assert_eq!(id(Outcome::OverScratch { bytes: 5 }), Some("limit.scratch"));
         assert_eq!(id(Outcome::OutputTooLarge), Some("limit.result"));
         assert_eq!(id(Outcome::Crashed("x".into())), Some("worker.lost"));
         assert_eq!(id(Outcome::FailedToStart("no such file".into())), Some("connect.failed"));
