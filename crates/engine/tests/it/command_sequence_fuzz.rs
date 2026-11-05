@@ -865,7 +865,17 @@ const CURATED: &[(&str, usize)] = &[
 fn generate(rng: &mut Rng, s: &Session, python: bool) -> Step {
     let wb = wb_of(s);
     if python && rng.chance(35) {
-        let id = *rng.pick(&["python.set", "python.set", "python.set", "python.output", "python.clear", "python.run", "python.runAll", "python.reset", "python.stop"]);
+        let id = *rng.pick(&[
+            "python.set",
+            "python.set",
+            "python.set",
+            "python.output",
+            "python.clear",
+            "python.run",
+            "python.runAll",
+            "python.reset",
+            "python.stop",
+        ]);
         return (id.to_string(), python_params(rng, wb, id));
     }
     if rng.chance(82) {
@@ -907,7 +917,7 @@ fn fake_answer(code: &str, inputs: &BTreeMap<String, Input>) -> Result<Output, P
     if code.is_empty() {
         return Ok(Output::Value(Value::Empty));
     }
-    if code.len() % 7 == 0 {
+    if code.len().is_multiple_of(7) {
         return Ok(Output::Object { type_name: "dict".into(), preview: "{}".into() });
     }
     Ok(Output::Value(Value::Number((code.len() + inputs.len()) as f64)))

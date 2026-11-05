@@ -44,6 +44,11 @@ pub(super) struct Inflight {
     pub discard: bool,
 }
 
+#[allow(clippy::disallowed_methods)] // `web_time`'s clock, which works on wasm
+fn now() -> Instant {
+    Instant::now()
+}
+
 /// What starts workers.
 pub(super) struct Starter<'a> {
     pub capability: &'a PythonCapability,
@@ -309,7 +314,7 @@ impl DocRun {
                 let Some(client) = self.client.as_mut() else { return Step::Stop };
                 match client.submit_cell(&py.code, inputs, py.object) {
                     Ok(id) => {
-                        self.inflight = Some(Inflight { id, index, fp, started: Instant::now(), discard: false });
+                        self.inflight = Some(Inflight { id, index, fp, started: now(), discard: false });
                         Step::Submitted
                     }
                     Err(_) => {
@@ -498,10 +503,10 @@ impl DocRun {
         if flight.is_none() && self.due == 0 {
             return false;
         }
-        if flight.is_some() {
-            if let Some(client) = self.client.as_mut() {
-                client.stop();
-            }
+        if flight.is_some()
+            && let Some(client) = self.client.as_mut()
+        {
+            client.stop();
         }
         if let Some(f) = flight.as_ref().filter(|f| !f.discard) {
             self.stop_running(d, f);
