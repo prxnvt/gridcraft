@@ -21,6 +21,7 @@ mod galleries;
 mod home;
 mod insert;
 mod page_layout;
+mod python;
 mod review;
 mod shortcuts;
 mod title_bar;
@@ -36,13 +37,14 @@ pub use home::FONTS;
 use home::home;
 use insert::{draw, insert};
 use page_layout::page_layout;
+use python::python;
 use review::review;
 pub use shortcuts::shortcut;
 pub use title_bar::{MAC_CONTENT_LEFT, MAC_TITLE_BAR, TITLE_LEFT_PAD, title_bar};
 use title_bar::{TITLE_BAR_H, TITLE_CONTROL_H};
 use view::view;
 
-pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
+pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Python", "Data", "Review", "View", "Automate"];
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
 /// Draws the ribbon tabs and the active tab's horizontally scrollable card, resetting an unavailable contextual tab to Home.
@@ -149,6 +151,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Draw" => draw(app, ui),
                             "Page Layout" => page_layout(app, ui),
                             "Formulas" => formulas(app, ui),
+                            "Python" => python(app, ui),
                             "Data" => data(app, ui),
                             "Review" => review(app, ui),
                             "View" => view(app, ui),
@@ -312,6 +315,7 @@ mod tooltip_tests {
             include_str!("ribbon/home.rs"),
             include_str!("ribbon/insert.rs"),
             include_str!("ribbon/page_layout.rs"),
+            include_str!("ribbon/python.rs"),
             include_str!("ribbon/review.rs"),
             include_str!("ribbon/shortcuts.rs"),
             include_str!("ribbon/title_bar.rs"),

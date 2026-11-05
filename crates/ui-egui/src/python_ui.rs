@@ -448,6 +448,11 @@ pub fn open_pane(app: &mut SheetApp, pane: &str) {
     app.grid.pane = Some(pane.to_string());
 }
 
+/// Opens the pane, or closes it when it is the one open.
+pub(crate) fn toggle_pane(app: &mut SheetApp, pane: &str) {
+    app.grid.pane = if app.grid.pane.as_deref() == Some(pane) { None } else { Some(pane.to_string()) };
+}
+
 /// The pane a UI-only command opens.
 pub fn pane_of_command(id: &str) -> Option<&'static str> {
     Some(match id {
