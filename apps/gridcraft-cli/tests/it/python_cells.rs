@@ -281,3 +281,19 @@ fn a_dataframe_result_spills_with_its_header_row() {
     assert_eq!(v(&s, "A1"), Value::text("DataFrame"));
     assert_eq!(v(&s, "A2"), Value::Empty);
 }
+
+#[test]
+fn a_memory_spike_lands_on_its_cell_and_the_next_cell_keeps_its_variables() {
+    let limits = Limits { memory_bytes: 200 * 1024 * 1024, ..Limits::default() };
+    let Some(mut s) = session_with(limits, None) else { return };
+    py(&mut s, "A1", "x = 40\nx + 2");
+    py(&mut s, "A2", "spike = b'x' * (400 * 1024 * 1024)\ndel spike\n'done'");
+    py(&mut s, "A3", "x + 1");
+    py(&mut s, "A4", "x + 2");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), num(42.0));
+    assert_eq!(v(&s, "A2"), Value::Error(CellError::Python));
+    assert_eq!(kind(&s, "A2"), Some("limit.memory"), "the cell that did it, through the sandbox");
+    assert_eq!((v(&s, "A3"), kind(&s, "A3")), (num(41.0), None), "a fresh worker ran A1 first");
+    assert_eq!((v(&s, "A4"), kind(&s, "A4")), (num(42.0), None));
+}
