@@ -193,7 +193,7 @@ impl Session {
         self.python.capability = capability.into();
         let capability = self.python.capability.clone();
         self.python.env.restart(capability.as_ref());
-        self.python_refresh();
+        self.python_guarded(Session::python_refresh);
     }
 
     /// What the app allows now.
@@ -210,7 +210,7 @@ impl Session {
         let Some(uid) = self.active().map(|d| d.uid) else { return };
         self.python.ever = true;
         self.python.docs.entry(uid).or_default().switch = Some(on);
-        self.python_refresh();
+        self.python_guarded(Session::python_refresh);
     }
 
     /// Whether Python is on for the active workbook, whatever the capability says.
@@ -226,6 +226,10 @@ impl Session {
         if !self.python.ever {
             return false;
         }
+        self.python_guarded(|s| s.python_poll_inner(wait))
+    }
+
+    fn python_poll_inner(&mut self, wait: Duration) -> bool {
         let mut changed = self.python_take_environment(Duration::ZERO);
         changed |= self.python_refresh();
         if self.python_take_one_result(Duration::ZERO) {
@@ -323,7 +327,26 @@ impl Session {
     /// given a capability stops at its first check.
     pub(crate) fn python_after_command(&mut self) {
         if self.python.ever {
-            self.python_refresh();
+            self.python_guarded(Session::python_refresh);
+        }
+    }
+
+    /// Runs Python's work outside any command, so outside the guard a command runs in. A panic there
+    /// leaves the workbooks as they are, since a write only takes effect when it is done, and stops
+    /// Python for the session, with the reason in the report: losing Python never loses the work.
+    fn python_guarded(&mut self, work: impl FnOnce(&mut Session) -> bool) -> bool {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(self))) {
+            Ok(changed) => changed,
+            Err(panic) => {
+                let why =
+                    panic.downcast_ref::<&str>().map(ToString::to_string).or_else(|| panic.downcast_ref::<String>().cloned()).unwrap_or_default();
+                log::error!("Python cells stopped after an internal error: {why}");
+                for r in self.python.docs.values_mut() {
+                    r.forget_cells();
+                }
+                self.python.env.note_failure(Diagnostic::new("connect.failed", format!("an internal error stopped Python cells: {why}"), None));
+                true
+            }
         }
     }
 

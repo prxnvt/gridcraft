@@ -20,8 +20,8 @@ use super::runner::Inflight;
 use super::{PythonCalculation, PythonRun, PythonStats, python_order_of_sheet};
 use crate::{DocState, Trust};
 
-/// A cell of a result or of an edit that compares this many changed positions one by one; past it
-/// the box around them decides. A false hit only costs reading the area again.
+/// How many changed positions a reference is compared with one by one; past it the box around them
+/// decides. A false hit only costs reading the area again.
 const EXACT_CHECK: usize = 1024;
 /// How many times a result may send cells before it back to run, in one go. A cell that reads a
 /// later cell settles in a pass or two; cells that feed each other never do, and are left stale.
@@ -632,6 +632,13 @@ impl DocRun {
         }
         self.seen = Some(d.wb.clone());
         !writes.is_empty()
+    }
+
+    /// Forgets the worker and the cells, as if the workbook had just been opened here, and keeps what
+    /// the person chose. The next plan starts over.
+    pub fn forget_cells(&mut self) {
+        let (switch, mode, log) = (self.switch, self.mode, std::mem::take(&mut self.log));
+        *self = DocRun { switch, mode, log, ..DocRun::default() };
     }
 
     /// With Python off here, only clears what can arrive from elsewhere: a cell that was waiting,

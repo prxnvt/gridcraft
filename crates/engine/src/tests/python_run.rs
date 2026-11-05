@@ -896,6 +896,7 @@ fn too_many_cells_and_bad_references_do_not_run() {
     let other = s.doc().unwrap().wb.sheet(1).unwrap().name.clone();
     set(&mut s, "XFD1048575", "1");
     s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    const { assert!(26 * 50_000 > MAX_ARRAY_CELLS) };
     py(&mut s, "A1", &format!("say xl(\"{other}!A1:Z50000\")"));
     py(&mut s, "A2", &format!("say xl(\"{other}!A:XFD\")"));
     py(&mut s, "A3", "say xl(\"Nowhere!A1\")");
@@ -904,7 +905,6 @@ fn too_many_cells_and_bad_references_do_not_run() {
     py(&mut s, "A6", "say xl(\"SUM(A1)\")");
     py(&mut s, "A8", "ret 8");
     settle(&mut s);
-    assert!(26 * 50_000 > MAX_ARRAY_CELLS);
     for cell in ["A1", "A2"] {
         assert_eq!(v(&s, cell), Value::Error(CellError::Python), "{cell}");
         assert_eq!(diagnostic(&s, cell), Some("xl.tooLarge"), "{cell}");
@@ -1244,4 +1244,29 @@ fn a_reference_can_name_a_formulas_spill() {
     set(&mut s, "A1", "=SEQUENCE(4)");
     settle(&mut s);
     assert_eq!(v(&s, "C1"), NUM(10.0), "it follows the spill as it grows");
+}
+
+#[test]
+fn a_panic_in_python_work_stops_python_and_keeps_the_workbook() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.set_python_capability(PythonCapability {
+        enabled: true,
+        transport: Some(Arc::new(|| panic!("the worker's transport broke"))),
+        ..PythonCapability::default()
+    });
+    set(&mut s, "A1", "1");
+    py(&mut s, "B1", "ret 2");
+    assert!(s.python_poll(Duration::ZERO), "the panic stays here");
+    assert!(!s.python_busy());
+    let env = s.python_environment();
+    assert_eq!(env.state, PythonState::NotSetUp);
+    assert!(env.diagnostic.unwrap().detail.contains("transport broke"));
+    assert_eq!(v(&s, "A1"), NUM(1.0));
+    // The session goes on, and the cell isn't left waiting.
+    set(&mut s, "A2", "2");
+    s.python_poll(Duration::ZERO);
+    assert_eq!(v(&s, "A2"), NUM(2.0));
+    assert_eq!(v(&s, "B1"), Value::Error(CellError::Blocked));
+    assert!(!s.python_busy());
 }
