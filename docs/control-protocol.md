@@ -178,8 +178,18 @@ operates the real mouse and keyboard or the system's accessibility interface.
 
 `ui.inspect` reports `python`: `{state: off|notSetUp|ready|running|blocked, reason?, enabled,
 workbookEnabled, hasCells, enableBar, calculation, interpreter?, running? {sheet, cell, ms},
-optionsPage, panes: {environment, packages, problems, runLog, permissions}}`. `state` is what the
+findings: {formulaBar, editor}, optionsPage, panes: {environment, packages, problems, runLog, permissions}}`. `state` is what the
 Python tab's button shows; `reason` is a diagnostic's id from `python.diagnostics`' vocabulary.
+`findings` lists what the checks found in the code being edited in the formula bar's Python mode and
+in the editor window: `{kind, severity, message, detail, line?, start?, end?}`, the last run's
+diagnostic first when there is one, then the static checks in order of position, with `start` and
+`end` byte offsets into the current text. They come from the current text, and `line` and the offsets
+of the last run only while the text is the code that ran. A list is empty when that editor isn't open
+or its code is hidden on a protected sheet. Static checks need no Python, so they work with Python off
+and with no sandbox; a missing package is only reported once the package list is known.
+`python.diagnostics` also reports `packages.missing` with the module as `detail`, the first cell that
+imports it as `cell` and the name to install as `install`, and `packages.noPandas`.
+
 The Python tab is contextual: `ui.ribbon {tab: "Python"}` shows it only while the active cell is a
 Python cell or Python code is being edited, and otherwise the ribbon goes back to Home. Its panes open
 by their commands either way.

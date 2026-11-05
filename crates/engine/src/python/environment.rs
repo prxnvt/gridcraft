@@ -82,6 +82,9 @@ pub(super) struct Environment {
     pending: Option<Receiver<PythonEnvironment>>,
     /// Workers come from the test seam: no interpreter is looked for.
     seam: bool,
+    /// Moves on each time the report is replaced, so what is worked out from its package list
+    /// knows when to work it out again.
+    pub generation: u64,
 }
 
 impl Environment {
@@ -102,6 +105,7 @@ impl Environment {
     /// Starts over for this capability. Without a sandbox the answer is there at once; otherwise
     /// the check starts on its own thread. No Python starts without an enabled capability.
     pub fn restart(&mut self, capability: Option<&PythonCapability>) {
+        self.generation = self.generation.wrapping_add(1);
         self.pending = None;
         self.seam = capability.is_some_and(|c| c.transport.is_some() || c.report.is_some());
         self.report = match capability {
@@ -161,6 +165,7 @@ impl Environment {
             }
         };
         self.pending = None;
+        self.generation = self.generation.wrapping_add(1);
         self.report = got.unwrap_or_else(|| {
             let sandbox = std::mem::take(&mut self.report.sandbox);
             PythonEnvironment { sandbox, ..PythonEnvironment::state(PythonState::NotSetUp, "connect.failed", "the check of Python stopped") }

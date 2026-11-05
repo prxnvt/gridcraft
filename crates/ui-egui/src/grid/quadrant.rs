@@ -97,6 +97,8 @@ pub(crate) struct QuadrantPaint<'a> {
     pub(crate) painter: &'a Painter,
     pub(crate) geo: &'a Geo,
     pub(crate) workbook: &'a Workbook,
+    /// What the PY tags ask about their cells.
+    pub(crate) session: &'a gridcraft_engine::Session,
     pub(crate) sheet_index: usize,
     pub(crate) sheet: &'a Sheet,
     pub(crate) rows: (u32, u32),
@@ -315,11 +317,10 @@ fn paint_checkbox(p: &egui::Painter, rect: Rect, z: f32, on: bool) {
 /// A Python cell carries a PY tag at its start, and its text goes in the rest of the cell: paints
 /// the tag when there is room and moves `text_left` past it. Whether the cell is a Python cell.
 fn paint_python_tag(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Look, text_left: &mut f32) -> bool {
-    if !q.sheet.cell(c).is_some_and(|x| x.py.is_some()) {
-        return false;
-    }
+    let Some((cell, py)) = q.sheet.cell(c).and_then(|x| x.py.as_deref().map(|py| (x, py))) else { return false };
     if let Some(tag) = crate::python_card::tag_rect(rect, *text_left, q.geo.z, lk.style.align.v) {
-        crate::python_card::paint_tag(q.painter, tag, q.tokens);
+        let state = crate::python_card::tag_state(q.session, q.sheet_index, c, py, &cell.value);
+        crate::python_card::paint_tag(q.painter, tag, q.tokens, state);
         *text_left = tag.right();
     }
     true

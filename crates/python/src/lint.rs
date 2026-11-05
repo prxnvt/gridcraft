@@ -891,6 +891,12 @@ pub fn missing_modules(code: &str, installed: &[String]) -> Vec<String> {
     imported_modules(code).into_iter().filter(|m| is_missing(m, &installed)).collect()
 }
 
+/// [`missing_modules`] for each of `codes`, reading the package list once.
+pub fn missing_modules_each<'a>(codes: impl IntoIterator<Item = &'a str>, installed: &[String]) -> Vec<Vec<String>> {
+    let installed = Installed::new(installed);
+    codes.into_iter().map(|code| imported_modules(code).into_iter().filter(|m| is_missing(m, &installed)).collect()).collect()
+}
+
 // What runs into the sandbox.
 
 /// What a module needs that Python cells don't have.

@@ -111,7 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Diagnostics",
             [],
             None,
-            "→ what is wrong or worth saying about Python in this workbook, as a list of {kind, severity, scope, message, action, detail, line?, cell?}, with `cell` as Sheet!A1 where it is about one cell. Read-only",
+            "→ what is wrong or worth saying about Python in this workbook, as a list of {kind, severity, scope, message, action, detail, line?, cell?, install?}, with `cell` as Sheet!A1 where it is about one cell, and `install`, for packages.missing, the name to install. Read-only",
             has_doc,
             diagnostics
         ),

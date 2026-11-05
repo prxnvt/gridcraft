@@ -1581,3 +1581,109 @@ fn a_worker_that_keeps_going_away_between_cells_ends_with_the_rest_stale() {
     let said = diagnostic(&s, "A2");
     assert!(matches!(said, Some("state.stale" | "worker.lost")), "{said:?}");
 }
+
+fn with_packages(names: &[&str]) -> Session {
+    let t = worker();
+    let report = crate::python::PythonEnvironment {
+        state: PythonState::Ready,
+        diagnostic: None,
+        packages: names.iter().map(|n| ((*n).to_string(), "1.0".to_string())).collect(),
+        ..crate::python::PythonEnvironment::default()
+    };
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.set_python_capability(PythonCapability {
+        enabled: true,
+        report: Some(report),
+        transport: Some(Arc::new(move || Box::new(t.sharing()))),
+        ..PythonCapability::default()
+    });
+    s
+}
+
+fn workbook_kinds(s: &Session) -> Vec<(&'static str, String)> {
+    s.python_workbook_diagnostics().into_iter().map(|e| (e.diagnostic.kind.id, e.diagnostic.detail)).collect()
+}
+
+/// A module is missing once, with the first cell that imports it, and goes when the code does.
+#[test]
+fn what_the_code_imports_is_checked_against_the_package_list() {
+    let mut s = with_packages(&["numpy", "pandas"]);
+    py(&mut s, "A1", "import numpy\nret 1");
+    settle(&mut s);
+    assert_eq!(workbook_kinds(&s), [], "numpy is there, and pandas");
+    py(&mut s, "A2", "from sklearn.linear_model import X\nret 1");
+    py(&mut s, "B7", "import sklearn\nimport json\nret 1");
+    settle(&mut s);
+    assert_eq!(workbook_kinds(&s), [("packages.missing", "sklearn".to_string())], "the standard library isn't missing");
+    let entries = s.python_workbook_diagnostics();
+    assert_eq!(entries[0].cell, Some((0, c("A2"))));
+    let row = &s.execute("python.diagnostics", json!({})).unwrap()[0];
+    assert_eq!(
+        (row["kind"].as_str(), row["install"].as_str(), row["cell"].as_str()),
+        (Some("packages.missing"), Some("scikit-learn"), Some("Sheet1!A2"))
+    );
+    s.execute("cell.set", json!({"cell": "A2", "input": ""})).unwrap();
+    assert_eq!(workbook_kinds(&s).len(), 1, "B7 still imports it");
+    assert_eq!(s.python_workbook_diagnostics()[0].cell, Some((0, c("B7"))));
+    s.execute("cell.set", json!({"cell": "B7", "input": ""})).unwrap();
+    assert_eq!(workbook_kinds(&s), []);
+}
+
+#[test]
+fn an_empty_package_list_reports_nothing_missing() {
+    let mut s = with_packages(&[]);
+    py(&mut s, "A1", "import sklearn\nret 1");
+    settle(&mut s);
+    assert_eq!(workbook_kinds(&s), [], "the list isn't known");
+    assert!(s.python_diagnostics().iter().all(|e| !e.diagnostic.kind.id.starts_with("packages.")));
+}
+
+#[test]
+fn no_pandas_is_said_once_and_only_for_a_workbook_with_python_cells() {
+    let mut s = with_packages(&["numpy"]);
+    assert_eq!(workbook_kinds(&s), [], "nothing to say it about");
+    py(&mut s, "A1", "ret 1");
+    settle(&mut s);
+    assert_eq!(workbook_kinds(&s), [("packages.noPandas", String::new())]);
+    assert_eq!(s.python_diagnostics().iter().filter(|e| e.diagnostic.kind.id == "packages.noPandas").count(), 1);
+}
+
+/// Reading code is what costs: code already read isn't read again, until the package list changes.
+#[test]
+fn the_package_check_reads_only_what_changed() {
+    let mut s = with_packages(&["pandas"]);
+    py(&mut s, "A1", "import nope\nret 1");
+    settle(&mut s);
+    assert_eq!(s.python_stats().code_reads, 1);
+    for _ in 0..5 {
+        s.python_poll(Duration::ZERO);
+    }
+    set(&mut s, "C1", "5");
+    settle(&mut s);
+    assert_eq!(s.python_stats().code_reads, 1, "polling and other edits read nothing");
+    py(&mut s, "A2", "ret 2");
+    settle(&mut s);
+    assert_eq!(s.python_stats().code_reads, 2, "the new cell alone");
+    py(&mut s, "A3", "ret 2");
+    settle(&mut s);
+    assert_eq!(s.python_stats().code_reads, 2, "the same code isn't read twice");
+    assert_eq!(workbook_kinds(&s).len(), 1);
+    // A new list: "nope" is installed now.
+    let t = worker();
+    let report = crate::python::PythonEnvironment {
+        state: PythonState::Ready,
+        diagnostic: None,
+        packages: vec![("pandas".to_string(), "1.0".to_string()), ("nope".to_string(), "1.0".to_string())],
+        ..crate::python::PythonEnvironment::default()
+    };
+    s.set_python_capability(PythonCapability {
+        enabled: true,
+        report: Some(report),
+        transport: Some(Arc::new(move || Box::new(t.sharing()))),
+        ..PythonCapability::default()
+    });
+    settle(&mut s);
+    assert_eq!(workbook_kinds(&s), []);
+    assert!(s.python_stats().code_reads >= 4, "everything is read again: {}", s.python_stats().code_reads);
+}

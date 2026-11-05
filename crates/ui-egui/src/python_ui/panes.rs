@@ -14,7 +14,7 @@ use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
 const PACKAGE_ROW: f32 = 20.0;
-const PROBLEM_ROW: f32 = 40.0;
+const PROBLEM_ROW: f32 = 46.0;
 const RUN_ROW: f32 = 38.0;
 /// The most characters of one line a row lays out, whatever a run printed or a package is called:
 /// what comes from Python is capped per field, far above what fits in a pane.
@@ -127,7 +127,7 @@ fn environment(app: &mut SheetApp, ui: &mut Ui) {
             let detail: String = d.detail.chars().take(DETAIL_CHARS).collect();
             ui.add(egui::Label::new(RichText::new(detail).monospace()).wrap());
         }
-        super::action_button(app, ui, d.kind.action);
+        super::action_button(app, ui, &d, None);
     }
     ui.horizontal_wrapped(|ui| {
         if ui.button(lang.tr("Check Again")).clicked() {
@@ -282,6 +282,7 @@ fn problems(app: &mut SheetApp, ui: &mut Ui) {
         return;
     }
     let mut go: Option<(usize, String)> = None;
+    let mut copy: Option<Vec<String>> = None;
     let mut drawn = 0;
     ScrollArea::vertical().id_salt("python_problems").auto_shrink([false, false]).show_rows(ui, PROBLEM_ROW, rows.len(), |ui, range| {
         for row in range {
@@ -310,15 +311,26 @@ fn problems(app: &mut SheetApp, ui: &mut Ui) {
                         }
                         ui.add(egui::Label::new(lang.tr(diagnostic.kind.message)).truncate());
                     });
-                    if !diagnostic.detail.is_empty() {
-                        let line = first_line(&diagnostic.detail);
-                        ui.add(egui::Label::new(RichText::new(line).font(theme::ui_font(11.5)).color(t.text_dim)).truncate());
-                    }
+                    ui.horizontal(|ui| {
+                        let packages = super::packages_for(diagnostic);
+                        if !packages.is_empty() && ui.small_button(lang.tr("Copy Install Command")).clicked() {
+                            copy = Some(packages);
+                        }
+                        if !diagnostic.detail.is_empty() {
+                            let line = first_line(&diagnostic.detail);
+                            ui.add(egui::Label::new(RichText::new(line).font(theme::ui_font(11.5)).color(t.text_dim)).truncate());
+                        }
+                    });
                 }
             }
         }
     });
     app.python.panes.rows_drawn = drawn;
+    if let Some(packages) = copy {
+        let names: Vec<&str> = packages.iter().map(String::as_str).collect();
+        let command = super::install_command(app.session.python_report().interpreter.as_ref(), &names);
+        super::copy_command(app, ui.ctx(), &command);
+    }
     if let Some((sheet, cell)) = go {
         go_to(app, sheet, &cell);
     }
@@ -387,7 +399,7 @@ fn run_log(app: &mut SheetApp, ui: &mut Ui) {
     );
     if let Some(run) = detail {
         ui.separator();
-        if ui.button(lang.tr("Go to Cell")).clicked() {
+        if ui.button(lang.tr("Go To Cell")).clicked() {
             go = Some((run.sheet.clone(), run.cell.a1()));
         }
         ScrollArea::vertical().id_salt("python_run_output").auto_shrink([false, false]).show(ui, |ui| {

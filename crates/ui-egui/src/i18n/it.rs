@@ -173,9 +173,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Excel Value" => "Valore di Excel",
         "Convert to Normal Cell" => "Converti in cella normale",
         "Show Card" => "Mostra scheda",
-        "This version of GridCraft stores Python code but does not run it." => {
-            "Questa versione di GridCraft salva il codice Python ma non lo esegue."
-        }
         "Insert\nPython" => "Inserisci\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Inserisci Python (Ctrl+Alt+Shift+P)",
         "Python Editor" => "Editor Python",
@@ -1105,7 +1102,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Packages: {count}" => "Pacchetti: {count}",
         "No problems." => "Nessun problema.",
         "No runs yet." => "Ancora nessuna esecuzione.",
-        "Go to Cell" => "Vai alla cella",
+        "Go To Cell" => "Vai alla cella",
         "This run printed nothing." => "Questa esecuzione non ha stampato nulla.",
         "Python cells can" => "Le celle Python possono",
         "Read cells through xl()" => "Leggere celle tramite xl()",
@@ -1278,6 +1275,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This Python doesn't have this package." => "Questo Python non ha questo pacchetto.",
         "Python cells can't open windows or ask for input." => "Le celle Python non possono aprire finestre né richiedere input.",
         "Python cells don't see your environment variables." => "Le celle Python non vedono le tue variabili d'ambiente.",
+        "Open Settings" => "Apri impostazioni",
+        "Show Printed Output" => "Mostra output stampato",
+        "Hide Printed Output" => "Nascondi output stampato",
+        "Line {line}" => "Riga {line}",
+        "Line {line}: {message}" => "Riga {line}: {message}",
+        "Python {version}, ready" => "Python {version}, pronto",
+        "Python {version}, running" => "Python {version}, in esecuzione",
         _ => return None,
     })
 }

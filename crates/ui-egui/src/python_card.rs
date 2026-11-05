@@ -1,11 +1,13 @@
-//! Python cells on the sheet: the PY tag at the start of every Python cell, and the card that a
-//! click on the tag (or Ctrl+Shift+F5) opens, with the cell's cached result (its Python type and a
-//! preview) or the reason it shows `#BLOCKED!`, and Convert to Normal Cell (`python.clear`) on the
-//! card and the cell menu.
+//! Python cells on the sheet: the PY tag at the start of every Python cell, which shows the cell's
+//! state in its shape as well as its colour, and the card that a click on the tag (or Ctrl+Shift+F5)
+//! opens: the cell's result (its Python type and a preview), what the catalog says about it with one
+//! action, and Convert to Normal Cell (`python.clear`) on the card and the cell menu.
 
-use egui::{Align2, FontId, Painter, Rect, pos2, vec2};
+use egui::{Align2, FontId, Painter, Rect, Stroke, pos2, vec2};
+use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellError, CellRef, Value};
 use gridcraft_engine::model::{PyCode, Sheet, VAlign, Workbook};
+use gridcraft_engine::python::{Diagnostic, Severity};
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
@@ -18,9 +20,6 @@ pub const MAX_TITLE_CHARS: usize = 80;
 /// file makes it, and the card is laid out every frame.
 pub const MAX_PREVIEW_CHARS: usize = 600;
 pub const MAX_PREVIEW_LINES: usize = 12;
-
-/// What the card says of a cell this build can't calculate.
-pub const NOT_RUN: &str = "This version of GridCraft stores Python code but does not run it.";
 
 /// The labels of a Python cell's return type, as Excel names them.
 pub const PYTHON_OBJECT: &str = "Python Object";
@@ -50,11 +49,85 @@ pub fn tag_rect(rect: Rect, left: f32, z: f32, v: VAlign) -> Option<Rect> {
     (h >= 6.0 && rect.right() - left >= w + 12.0 * z).then(|| Rect::from_min_size(pos2(left + 2.0 * z, top), vec2(w, h)))
 }
 
-/// Paints a PY tag. The sheet stays white in both themes, so the tag's colours follow it.
-pub fn paint_tag(p: &Painter, tag: Rect, t: &Tokens) {
-    p.rect_filled(tag, tag.height() * 0.2, t.sheet_py_tag);
-    let font = FontId::new((tag.height() * 0.72).max(4.0), theme::ui_bold(8.0).family);
-    p.text(tag.center(), Align2::CENTER_CENTER, "PY", font, t.on_sheet_py_tag);
+/// What a PY tag says about its cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TagState {
+    /// Its result is up to date.
+    Ready,
+    /// It is running or about to.
+    Running,
+    /// It keeps a value it didn't just work out: stale, stopped, or Python isn't on.
+    NotRunning,
+    Error,
+    /// Python can't run here at all.
+    Blocked,
+}
+
+/// The state of a Python cell. A few lookups, so it can be asked for every cell in view.
+pub fn tag_state(session: &Session, sheet: usize, cell: CellRef, py: &PyCode, value: &Value) -> TagState {
+    if py.busy {
+        return TagState::Running;
+    }
+    match session.python_diagnostic(sheet, cell).map(|d| d.kind) {
+        Some(k) if k.id == "state.busy" => TagState::Running,
+        Some(k) if k.id.starts_with("off.") || matches!(k.id, "state.stale" | "state.stopped") => TagState::NotRunning,
+        Some(k) if k.severity == Severity::Blocked => TagState::Blocked,
+        Some(k) if k.severity == Severity::Error => TagState::Error,
+        _ if py.stale || matches!(value, Value::Error(CellError::Blocked)) => TagState::NotRunning,
+        _ if matches!(value, Value::Error(CellError::Python | CellError::Timeout | CellError::Connect)) => TagState::Error,
+        _ => TagState::Ready,
+    }
+}
+
+/// Paints a PY tag. The sheet stays white in both themes, so the tag's colours follow it. Each state
+/// has a shape of its own: plain and filled when ready, hollow when not running, and with a mark
+/// beside a smaller PY when it runs (an open ring), failed (an exclamation mark) or is blocked (a
+/// lock). On a right-to-left sheet the shapes are mirrored with the rest of the cell.
+pub fn paint_tag(p: &Painter, tag: Rect, t: &Tokens, state: TagState) {
+    let h = tag.height();
+    let corner = h * 0.2;
+    let (fill, ink) = match state {
+        TagState::Ready | TagState::Running => (t.sheet_py_tag, t.on_sheet_py_tag),
+        TagState::NotRunning => (t.on_sheet_py_tag, t.sheet_py_tag),
+        TagState::Error => (t.sheet_py_tag_error, t.on_sheet_py_tag),
+        TagState::Blocked => (t.sheet_py_tag_blocked, t.on_sheet_py_tag),
+    };
+    p.rect_filled(tag, corner, fill);
+    if state == TagState::NotRunning {
+        p.rect_stroke(tag, corner, Stroke::new((h * 0.1).max(0.9), t.sheet_py_tag), egui::StrokeKind::Inside);
+    }
+    let family = theme::ui_bold(8.0).family;
+    if matches!(state, TagState::Ready | TagState::NotRunning) {
+        p.text(tag.center(), Align2::CENTER_CENTER, "PY", FontId::new((h * 0.72).max(4.0), family), ink);
+        return;
+    }
+    let text_at = pos2(tag.left() + tag.width() * 0.33, tag.center().y);
+    p.text(text_at, Align2::CENTER_CENTER, "PY", FontId::new((h * 0.6).max(4.0), family), ink);
+    let mark = pos2(tag.right() - tag.width() * 0.18, tag.center().y);
+    paint_tag_mark(p, mark, h, state, ink);
+}
+
+/// The mark of a tag that has one, centred on `c`.
+fn paint_tag_mark(p: &Painter, c: egui::Pos2, h: f32, state: TagState, ink: egui::Color32) {
+    let stroke = Stroke::new((h * 0.11).max(0.9), ink);
+    let arc = |c: egui::Pos2, r: f32, from: f32, to: f32| -> Vec<egui::Pos2> {
+        (0..=8).map(|i| from + (to - from) * i as f32 / 8.0).map(|a| c + vec2(r * a.cos(), r * a.sin())).collect()
+    };
+    match state {
+        TagState::Running => {
+            p.add(egui::epaint::PathShape::line(arc(c, h * 0.22, -1.2, 3.7), stroke));
+        }
+        TagState::Error => {
+            p.line_segment([c + vec2(0.0, -h * 0.3), c + vec2(0.0, h * 0.08)], stroke);
+            p.circle_filled(c + vec2(0.0, h * 0.27), (h * 0.075).max(0.7), ink);
+        }
+        TagState::Blocked => {
+            let body = Rect::from_center_size(c + vec2(0.0, h * 0.13), vec2(h * 0.42, h * 0.3));
+            p.rect_filled(body, h * 0.04, ink);
+            p.add(egui::epaint::PathShape::line(arc(c + vec2(0.0, -h * 0.03), h * 0.13, std::f32::consts::PI, std::f32::consts::TAU), stroke));
+        }
+        TagState::Ready | TagState::NotRunning => {}
+    }
 }
 
 /// The Python cell's area on the sheet: the cell, or the merged area it starts.
@@ -107,7 +180,7 @@ pub struct CardText {
     pub title: String,
     /// The return type, as Excel labels it (untranslated).
     pub output: &'static str,
-    /// A preview of the result, or why there is none.
+    /// A preview of the result, empty when there is none.
     pub body: String,
 }
 
@@ -123,7 +196,6 @@ pub fn card_text(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<CardText> {
             let body = if o.preview.is_empty() { shown() } else { capped(&o.preview, MAX_PREVIEW_CHARS, MAX_PREVIEW_LINES) };
             (capped(&o.type_name, MAX_TITLE_CHARS, 1), body)
         }
-        (_, Value::Error(CellError::Blocked)) => (CellError::Blocked.as_str().to_string(), NOT_RUN.to_string()),
         _ => (capped(&gridcraft_engine::display::cell_text(wb, sh, c), MAX_TITLE_CHARS, 1), String::new()),
     };
     Some(CardText { title, output, body })
@@ -167,9 +239,17 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
     let refusal = gridcraft_engine::cmd::python::clear_refusal(&app.session, card.sheet, card.cell);
+    let said = app.session.python_diagnostic(card.sheet, card.cell).cloned();
+    let state = app.session.active().and_then(|d| d.wb.sheet(card.sheet)).and_then(|sh| {
+        let cell = sh.cell(card.cell)?;
+        cell.py.as_deref().map(|py| tag_state(&app.session, card.sheet, card.cell, py, &cell.value))
+    });
+    let printed = said.as_ref().filter(|d| d.kind.severity == Severity::Error).and_then(|_| last_printed(app, sh, card.cell));
     let mut convert = false;
     let (at, pivot) = if geo.rtl { (screen.right_bottom(), Align2::RIGHT_TOP) } else { (screen.left_bottom(), Align2::LEFT_TOP) };
     let mut close = false;
+    let mut toggle_output = false;
+    let output_open = app.python.card_output == Some(card);
     let area = egui::Area::new(egui::Id::unique("python_card"))
         .order(egui::Order::Foreground)
         .pivot(pivot)
@@ -180,7 +260,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
             ui.set_width(360.0);
             ui.horizontal(|ui| {
                 let (tag, _) = ui.allocate_exact_size(vec2(22.0, 15.0), egui::Sense::hover());
-                paint_tag(ui.painter(), tag, &t);
+                paint_tag(ui.painter(), tag, &t, state.unwrap_or(TagState::Ready));
                 ui.label(egui::RichText::new(&text.title).font(theme::ui_bold(13.0)).color(t.text));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, lang.tr("Close"), vec2(18.0, 18.0)).clicked() {
@@ -189,27 +269,64 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
                 });
             });
             ui.label(egui::RichText::new(lang.tr(text.output)).font(theme::ui_font(11.5)).color(t.text_dim));
+            if let Some(d) = &said {
+                ui.add_space(4.0);
+                close |= says(app, ui, d, (card.sheet, card.cell), &t);
+                if let Some(run) = printed.as_deref() {
+                    if ui.button(lang.tr(if output_open { "Hide Printed Output" } else { "Show Printed Output" })).clicked() {
+                        toggle_output = true;
+                    }
+                    if output_open {
+                        egui::ScrollArea::both().id_salt("python_card_output").max_height(140.0).auto_shrink([false, true]).show(ui, |ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(run).font(crate::code_editor::font()).color(t.text)).extend());
+                        });
+                    }
+                }
+            }
             if !text.body.is_empty() {
                 ui.add_space(4.0);
-                if text.body == NOT_RUN {
-                    ui.add(egui::Label::new(egui::RichText::new(lang.tr(NOT_RUN)).font(theme::ui_font(12.5)).color(t.text)).wrap());
-                } else {
-                    // A repr keeps its lines (a table's columns line up): it scrolls rather than wraps.
-                    egui::ScrollArea::both().max_height(220.0).min_scrolled_height(160.0).auto_shrink([false, true]).show(ui, |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(&text.body).font(crate::code_editor::font()).color(t.text)).extend());
-                    });
-                }
+                // A repr keeps its lines (a table's columns line up): it scrolls rather than wraps.
+                egui::ScrollArea::both().max_height(220.0).min_scrolled_height(160.0).auto_shrink([false, true]).show(ui, |ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(&text.body).font(crate::code_editor::font()).color(t.text)).extend());
+                });
             }
             ui.add_space(6.0);
             convert = convert_button(ui, lang, refusal.as_deref(), true, vec2(0.0, 22.0));
         });
     });
+    if toggle_output {
+        app.python.card_output = if output_open { None } else { Some(card) };
+    }
     if convert {
         app.run_or_alert("python.clear", json!({"sheet": card.sheet, "cell": card.cell.a1()}));
     }
     if convert || close || popup_dismissed(&resp.response, was_open) {
         app.grid.py_card = None;
+        app.python.card_output = None;
     }
+}
+
+/// What the catalog says about the cell: its message, the detail as it came with the line when
+/// there is one, and the kind's action. Returns whether the action means the card is done.
+fn says(app: &mut SheetApp, ui: &mut egui::Ui, d: &Diagnostic, cell: (usize, CellRef), t: &Tokens) -> bool {
+    let lang = app.ui.language;
+    ui.add(egui::Label::new(egui::RichText::new(lang.tr(d.kind.message)).font(theme::ui_font(12.5)).color(t.text)).wrap());
+    if let Some(line) = d.line {
+        let text = lang.tr("Line {line}").replace("{line}", &line.to_string());
+        ui.label(egui::RichText::new(text).font(theme::ui_font(11.5)).color(t.text_dim));
+    }
+    if !d.detail.is_empty() {
+        let detail = capped(&d.detail, MAX_PREVIEW_CHARS, MAX_PREVIEW_LINES);
+        ui.add(egui::Label::new(egui::RichText::new(detail).font(crate::code_editor::font()).color(t.text_dim)).wrap());
+    }
+    ui.add_space(2.0);
+    crate::python_ui::action_button(app, ui, d, Some(cell))
+}
+
+/// What the cell's last run printed, when it printed something.
+fn last_printed(app: &SheetApp, sh: &Sheet, cell: CellRef) -> Option<String> {
+    let run = app.session.python_run_log().filter(|r| r.cell == cell && r.sheet == sh.name).last()?;
+    (!run.stdout.is_empty()).then(|| capped(&run.stdout, MAX_PREVIEW_CHARS * 8, MAX_PREVIEW_LINES * 8))
 }
 
 /// Esc, the window losing focus, or a click outside a card that was already open.

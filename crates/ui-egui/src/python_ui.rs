@@ -23,8 +23,9 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use egui::{Label, RichText, Sense, Ui};
+use gridcraft_engine::core::CellRef;
 use gridcraft_engine::python::{
-    self, Action, Diagnostic, Interpreter, InterpreterKind, Limits, MAX_TIMEOUT, MIN_VERSION, TransportFactory, pip_install_command,
+    self, Action, Diagnostic, Interpreter, InterpreterKind, Limits, MAX_TIMEOUT, MIN_VERSION, TransportFactory, install_name, pip_install_command,
     uv_install_commands, uv_setup_commands,
 };
 use gridcraft_engine::{FoundPython, PythonCapability, PythonEnvironment, PythonSearch, PythonState};
@@ -36,6 +37,7 @@ use crate::i18n::Language;
 use crate::icons::Icon;
 use crate::theme::{self, Tokens};
 
+pub mod checks;
 pub mod panes;
 
 /// How often the app wakes while Python works, so results appear without input. An idle app stays
@@ -125,6 +127,15 @@ pub struct PythonUi {
     bar_dismissed: HashSet<u64>,
     /// What each pane keeps between frames.
     pub(crate) panes: panes::PaneState,
+    /// The checks of the code in the formula bar and in the editor window.
+    #[doc(hidden)]
+    pub bar_checks: checks::CodeChecks,
+    #[doc(hidden)]
+    pub window_checks: checks::CodeChecks,
+    /// The names of the installed packages, for the package list it was made from.
+    pub(crate) installed: Option<(u64, Option<std::sync::Arc<Vec<String>>>)>,
+    /// The card whose printed output is showing.
+    pub(crate) card_output: Option<crate::python_card::Card>,
     /// Workers from this factory instead of a real interpreter (tests).
     #[doc(hidden)]
     pub transport: Option<TransportFactory>,
@@ -605,6 +616,10 @@ pub fn inspect(app: &SheetApp) -> Json {
     let pane = app.grid.pane.as_deref();
     let d = reason(app);
     let running = app.session.python_running().map(|r| json!({"sheet": r.sheet, "cell": r.cell.a1(), "ms": r.elapsed.as_secs_f64() * 1000.0}));
+    // What the checks found in code being edited, unless that code is out of view.
+    let bar_shown = app.editor.as_ref().is_some_and(|e| e.python && !crate::control::draft_hidden(app, e));
+    let window_shown = app.py_window.is_some() && crate::python_window::state(app).get("hidden").and_then(Json::as_bool) != Some(true);
+    let findings = |shown: bool, checks: &checks::CodeChecks| if shown { checks.json() } else { json!([]) };
     json!({
         "state": state(app),
         "reason": d.as_ref().map(|d| d.kind.id),
@@ -615,6 +630,7 @@ pub fn inspect(app: &SheetApp) -> Json {
         "calculation": app.session.python_calculation(),
         "interpreter": report.interpreter.as_ref().map(|i| i.path.display().to_string()),
         "running": running,
+        "findings": {"formulaBar": findings(bar_shown, &app.python.bar_checks), "editor": findings(window_shown, &app.python.window_checks)},
         "optionsPage": app.backstage.as_ref().is_some_and(|b| b.page == crate::backstage::Page::Options && b.options_tab == crate::backstage::OptionsTab::Python),
         "panes": {
             "environment": pane == Some(ENVIRONMENT),
@@ -650,34 +666,157 @@ pub enum Guard {
     Environment,
 }
 
-/// What a diagnostic's action offers here, as a button; pressing it does it.
-pub(crate) fn action_button(app: &mut SheetApp, ui: &mut Ui, action: Action) {
+/// The packages a diagnostic is asking for, by the names to install them under.
+pub fn packages_for(d: &Diagnostic) -> Vec<String> {
+    match d.kind.id {
+        "packages.noPandas" => vec!["pandas".to_string()],
+        "packages.missing" => vec![install_name(&d.detail)],
+        // A finding's detail is the name to install already.
+        "lint.importMissing" => vec![d.detail.clone()],
+        "module.missing" => module_named(&d.detail).map(|m| install_name(&m)).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The module Python's message names: `No module named 'x.y'`, or the detail when it is one word.
+fn module_named(detail: &str) -> Option<String> {
+    let quoted = detail.split('\'').nth(1).filter(|m| !m.is_empty());
+    let word = (!detail.is_empty() && !detail.contains(char::is_whitespace)).then_some(detail);
+    quoted.or(word).map(str::to_string)
+}
+
+/// The cell a diagnostic points at: `(sheet name, cell)`, the sheet when it names one.
+pub fn cell_it_points_at(d: &Diagnostic) -> Option<(Option<String>, String)> {
+    let place = match d.kind.id {
+        "python.nameOrder" => d.detail.rsplit_once(" is assigned in ")?.1,
+        "result.spill" => d.detail.split_whitespace().next()?,
+        _ => return None,
+    };
+    match place.rsplit_once('!') {
+        Some((sheet, cell)) => CellRef::parse(cell).map(|_| (Some(gridcraft_engine::core::unquote_sheet(sheet)), cell.to_string())),
+        None => CellRef::parse(place).map(|_| (None, place.to_string())),
+    }
+}
+
+/// The button for what a diagnostic's kind offers, when there is something to do: Open Settings,
+/// Choose Interpreter, Copy Install Command with pip behind a collapsed section, Enable, Run Again,
+/// Reset, Go To Cell. `cell` is the cell it is about, for what runs. Returns whether it was pressed.
+pub(crate) fn action_button(app: &mut SheetApp, ui: &mut Ui, d: &Diagnostic, cell: Option<(usize, CellRef)>) -> bool {
     let lang = app.ui.language;
     let ctx = ui.ctx().clone();
-    let label = match action {
-        Action::None | Action::GoToCell => return,
-        Action::OpenSettings => "Open Python Settings",
-        Action::ChooseInterpreter => "Choose Interpreter",
-        Action::CopyInstallCommand => "Copy Install Command",
-        Action::EnableWorkbook => "Enable",
-        Action::RunAgain => "Run Again",
-        Action::Reset => "Reset",
-    };
-    if !ui.button(lang.tr(label)).clicked() {
-        return;
-    }
-    match action {
-        Action::OpenSettings | Action::ChooseInterpreter => open_options(app),
+    match d.kind.action {
+        Action::None => false,
+        Action::OpenSettings => {
+            let pressed = ui.button(lang.tr("Open Settings")).clicked();
+            if pressed {
+                open_options(app);
+            }
+            pressed
+        }
+        Action::ChooseInterpreter => {
+            let pressed = ui.button(lang.tr("Choose Interpreter")).clicked();
+            if pressed {
+                open_options(app);
+            }
+            pressed
+        }
         Action::CopyInstallCommand => {
-            let command = install_command(app.session.python_report().interpreter.as_ref(), &["pandas"]);
-            copy_command(app, &ctx, &command);
+            let packages = packages_for(d);
+            if packages.is_empty() {
+                return false;
+            }
+            let names: Vec<&str> = packages.iter().map(String::as_str).collect();
+            let interpreter = app.session.python_report().interpreter.clone();
+            let pressed = ui.button(lang.tr("Copy Install Command")).clicked();
+            if pressed {
+                copy_command(app, &ctx, &install_command(interpreter.as_ref(), &names));
+            }
+            egui::CollapsingHeader::new(lang.tr("Other package managers")).id_salt(("python_action_other", d.kind.id)).default_open(false).show(
+                ui,
+                |ui| {
+                    command_row(app, ui, &pip_command(interpreter.as_ref(), &names));
+                },
+            );
+            false
         }
         Action::EnableWorkbook => {
-            set_workbook(app, &ctx, true);
+            let pressed = ui.button(lang.tr("Enable")).clicked();
+            if pressed {
+                set_workbook(app, &ctx, true);
+            }
+            pressed
         }
-        Action::RunAgain => app.run_or_alert("python.runAll", json!({})),
-        Action::Reset => app.run_or_alert("python.reset", json!({})),
-        Action::None | Action::GoToCell => {}
+        Action::RunAgain => {
+            let pressed = ui.button(lang.tr("Run Again")).clicked();
+            if pressed {
+                match cell {
+                    Some((sheet, at)) => app.run_or_alert("python.run", json!({"cell": at.a1(), "sheet": sheet})),
+                    None => app.run_or_alert("python.runAll", json!({})),
+                }
+            }
+            pressed
+        }
+        Action::Reset => {
+            let pressed = ui.button(lang.tr("Reset")).clicked();
+            if pressed {
+                app.run_or_alert("python.reset", json!({}));
+            }
+            pressed
+        }
+        Action::GoToCell => {
+            let Some((sheet, target)) = cell_it_points_at(d) else { return false };
+            let pressed = ui.button(lang.tr("Go To Cell")).clicked();
+            if pressed {
+                let on = sheet.map(Json::from).or(cell.map(|(s, _)| Json::from(s))).unwrap_or(Json::Null);
+                app.run_or_alert("selection.set", json!({"range": target, "sheet": on}));
+                app.grid.ensure_visible = true;
+            }
+            pressed
+        }
+    }
+}
+
+/// What the state chip says: the Python version with its state when one is known, or the state.
+pub fn chip_text(app: &SheetApp) -> String {
+    let lang = app.ui.language;
+    let shown = state(app);
+    let version = app.session.python_report().interpreter.as_ref().map(|i| format!("{}.{}", i.version.major, i.version.minor));
+    match (shown, version) {
+        (PythonState::Ready, Some(v)) => lang.tr("Python {version}, ready").replace("{version}", &v),
+        (PythonState::Running, Some(v)) => lang.tr("Python {version}, running").replace("{version}", &v),
+        _ => lang.tr(state_label(shown)).to_string(),
+    }
+}
+
+const CHIP_FONT: f32 = 11.5;
+/// The chip's icon, and its margins.
+const CHIP_CHROME: f32 = 26.0;
+
+/// The state chip's width, for the row it goes in.
+pub fn chip_width(app: &SheetApp, ui: &Ui) -> f32 {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().layout_no_wrap(chip_text(app), theme::ui_font(CHIP_FONT), t.text).size().x + CHIP_CHROME
+}
+
+/// A small chip with Python's state, in the editors: a click opens the Environment pane.
+pub fn state_chip(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
+    let shown = state(app);
+    let text = chip_text(app);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(chip_width(app, ui), 20.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &text));
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(rect, 4.0, t.hover);
+    }
+    p.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
+    let icon = egui::Rect::from_center_size(egui::pos2(rect.left() + 12.0, rect.center().y), egui::vec2(14.0, 14.0));
+    crate::icons::paint(p, icon, state_icon(shown), t.text);
+    p.text(egui::pos2(rect.left() + 22.0, rect.center().y), egui::Align2::LEFT_CENTER, &text, theme::ui_font(CHIP_FONT), t.text);
+    let tip = reason(app).map_or_else(|| lang.tr("Open the Python environment").to_string(), |d| sentence(lang, &d));
+    if resp.on_hover_text(tip).clicked() {
+        open_pane(app, ENVIRONMENT);
     }
 }
 
@@ -751,7 +890,14 @@ mod tests {
         "This workbook",
         "Clear",
         "No runs yet.",
-        "Go to Cell",
+        "Go To Cell",
+        "Open Settings",
+        "Show Printed Output",
+        "Hide Printed Output",
+        "Line {line}",
+        "Line {line}: {message}",
+        "Python {version}, ready",
+        "Python {version}, running",
         "This run printed nothing.",
         "Python cells can",
         "Read cells through xl()",
@@ -861,7 +1007,7 @@ mod tests {
                 assert!(!language.tr(key).contains('|'), "{code} shows a context prefix for {key:?}");
                 let label = key.rsplit_once('|').map_or(*key, |(_, label)| label);
                 assert_eq!(label.contains('\n'), language.tr(key).contains('\n'), "{code}: the lines of {key:?}");
-                for placeholder in ["{cell}", "{seconds}", "{state}", "{count}", "{version}"] {
+                for placeholder in ["{cell}", "{seconds}", "{state}", "{count}", "{version}", "{line}", "{message}"] {
                     assert_eq!(key.contains(placeholder), language.tr(key).contains(placeholder), "{code}: {placeholder} in {key:?}");
                 }
             }

@@ -482,10 +482,11 @@ pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, 
     let lang = crate::i18n::current(ui.ctx());
     let (title, hint) = match problem {
         CellProblem::NumberAsText => (lang.tr("Number Stored as Text").to_string(), lang.tr("Number Stored as Text").to_string()),
-        // Only #BLOCKED! comes from this version not running the code; another error (a file's
-        // cached #PYTHON!) is named without that reason.
-        CellProblem::Python(CellError::Blocked) => (CellError::Blocked.as_str().to_string(), lang.tr(crate::python_card::NOT_RUN).to_string()),
-        CellProblem::Python(e) => (e.as_str().to_string(), e.as_str().to_string()),
+        // What the catalog says about the cell, or the error's name when it says nothing.
+        CellProblem::Python(e) => {
+            let said = app.session.python_diagnostic(app.session.active().map_or(0, |d| d.wb.active_sheet()), active);
+            (e.as_str().to_string(), said.map_or_else(|| e.as_str().to_string(), |d| lang.tr(d.kind.message).to_string()))
+        }
     };
     let resp = ui.interact(tag, egui::Id::unique("gridcraft.error_check_tag"), Sense::click()).on_hover_text(hint.as_str());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, lang.tr("Error checking options")));

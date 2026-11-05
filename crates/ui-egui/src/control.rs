@@ -176,14 +176,18 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
 /// draft's own, found by identity: a sheet inserted, deleted or moved in the same batch puts
 /// another at its index. With its sheet gone, such a draft is left out too.
 fn editor_json(app: &SheetApp, e: &crate::editor::EditState) -> Json {
-    let code = e.python || e.py_cell;
-    let hidden = code
+    let hidden = draft_hidden(app, e);
+    let text = if hidden { Json::Null } else { json!(e.text) };
+    json!({"cell": e.cell.a1(), "text": text, "hidden": hidden, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})
+}
+
+/// Whether a draft of Python code is out of view: see [`editor_json`].
+pub(crate) fn draft_hidden(app: &SheetApp, e: &crate::editor::EditState) -> bool {
+    (e.python || e.py_cell)
         && app.session.documents().iter().find(|d| d.uid == e.doc).is_some_and(|d| match e.sheet_in(&d.wb).and_then(|i| d.wb.sheet(i)) {
             Some(sh) => gridcraft_engine::display::formula_hidden(&d.wb, sh, e.cell),
             None => true,
-        });
-    let text = if hidden { Json::Null } else { json!(e.text) };
-    json!({"cell": e.cell.a1(), "text": text, "hidden": hidden, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})
+        })
 }
 
 /// `ui.dialog.cancel`: closes the open dialog as its Cancel button does, going back to the sheet

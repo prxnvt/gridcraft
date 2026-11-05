@@ -86,6 +86,9 @@ pub struct EditorInfo {
     pub caret: Option<Rect>,
 }
 
+/// The room the bar's right part needs before it takes the Python state chip.
+const CHIP_NEEDS: f32 = 360.0;
+
 /// Draws the formula bar: line-count-driven height, Name Box, cancel/enter/Fx buttons, the editable field, muted read-only spill text and the expansion chevron.
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -130,8 +133,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     layout.buttons = layout.buttons.union(button);
                 }
                 ui.add_space(4.0);
+                // In Python mode, Python's state at the right, while the field has room.
+                let chip = app.editor.as_ref().is_some_and(|e| e.python) && ui.available_width() > CHIP_NEEDS;
+                let chip_width = if chip { crate::python_ui::chip_width(app, ui) + 6.0 } else { 0.0 };
                 // The formula field fills the rest, as tall as the bar.
-                let avail = ui.available_width() - 24.0;
+                let avail = ui.available_width() - 24.0 - chip_width;
                 let field = Rect::from_min_size(ui.cursor().min, vec2(avail, ui.available_height()));
                 ui.painter().rect_filled(field, 4.0, t.input_bg);
                 ui.painter().rect_stroke(field, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
@@ -174,6 +180,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 layout.visible_lines = ((inner.height() / row_h).floor() as usize).max(1);
                 layout.caret = info.caret;
                 ui.allocate_space(vec2(avail, field.height()));
+                if chip {
+                    ui.add_space(2.0);
+                    crate::python_ui::state_chip(app, ui);
+                }
                 let chevron = if app.ui.formula_bar_expanded { Icon::ChevronUp } else { Icon::Chevron };
                 if crate::widgets::icon_button(ui, chevron, t.text_dim, "Expand formula bar", vec2(20.0, 24.0)).clicked() {
                     app.ui.formula_bar_expanded = !app.ui.formula_bar_expanded;
@@ -844,6 +854,9 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
     }
     let before = ed.point.is_some().then(|| ed.text.clone());
     let name = app.ui.language.tr("Formula Bar").to_string();
+    let mut checks = std::mem::take(&mut app.python.bar_checks);
+    let sheet = app.session.documents().iter().find(|d| d.uid == ed.doc).and_then(|d| ed.sheet_in(&d.wb));
+    crate::python_ui::checks::update(app, &mut checks, &ed.text, ed.doc, sheet, ed.cell);
     let stop = |ev: &egui::Event| python_key(ev).is_some();
     let options = FieldOptions {
         width,
@@ -853,9 +866,15 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
         keep_escape: true,
         caret,
         name: &name,
+        marks: &checks.marks,
         ..FieldOptions::new(Lang::Python)
     };
     let out = code_editor::code_field(ui, id, &mut ed.text, &options);
+    app.python.bar_checks = checks;
+    // The marks catch up with this edit in the next frame.
+    if out.response.changed() {
+        ui.ctx().request_repaint();
+    }
     if !blocked && caret.is_none() {
         (ed.caret, ed.anchor) = out.selection;
     }

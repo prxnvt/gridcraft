@@ -1,6 +1,6 @@
 # Python in cells
 
-> **Last updated:** 2026-11-05 · **Change:** minor (the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
+> **Last updated:** 2026-11-05 · **Change:** minor (what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
 
 A Python cell runs code you write, in your own Python, on your computer. GridCraft never downloads
 Python and never installs packages. It finds the Python you have, and it runs your code in a sandbox
@@ -115,6 +115,40 @@ anywhere, and each pane has its own command.
 
 The status bar shows the state when you have Python on or the workbook has Python cells, and while a
 cell runs, the cell and how long it has run. A click on it opens the Environment pane.
+
+## When something is wrong
+
+**The PY tag** at the start of a Python cell shows its state, in its shape as well as its colour:
+
+- filled, the plain tag: the result is up to date;
+- filled, with an open ring: it is running or waiting its turn;
+- hollow: it keeps a value it didn't just work out, because what it reads changed, it was stopped, or
+  Python isn't on;
+- red, with an exclamation mark: it failed;
+- grey, with a lock: Python can't run here.
+
+**The card** opens from the tag, or with Ctrl+Shift+F5. It says what happened in one sentence, then
+Python's own message with its line, and has one button for what to do: Open Settings, Choose
+Interpreter, Copy Install Command, Enable, Run Again, Reset or Go To Cell. A failed run that printed
+something has Show Printed Output. A result keeps its type and preview. Copy Install Command gives
+the uv command; pip is behind **Other package managers**.
+
+**In the editors**, the formula bar in Python mode and the Python editor window check your code as
+you type, with Python off too and on systems with no sandbox. They need nothing to run:
+
+- a wavy underline on what the sandbox will refuse (a file, the network, another program, a plot, an
+  `xl()` whose reference is computed) and on a package this Python doesn't have, with the reason when
+  you hover over it;
+- a chip with Python's state, which opens the Environment pane;
+- in the editor window, a mark beside each such line, and a strip under the code that lists these
+  and what the last run said. A click on a row goes to its line. The last run's line is marked only
+  while the code is what ran.
+
+A package is only called missing once GridCraft knows what this Python has.
+
+**Problems** on the Python tab also lists, for the whole workbook, each package the code imports that
+this Python doesn't have, with its install command, and says when pandas is missing, which makes
+ranges come back as lists of rows.
 
 ## For agents
 
