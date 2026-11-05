@@ -46,9 +46,10 @@ impl Policy {
                     self.exec.push(dir.into());
                 }
             }
-            for file in ["/etc/ld.so.cache", "/etc/localtime"] {
-                if Path::new(file).exists() {
-                    self.read.push(file.into());
+            // What the C library and Python's `zoneinfo` read for the time zone.
+            for path in ["/etc/ld.so.cache", "/etc/localtime", "/usr/share/zoneinfo"] {
+                if Path::new(path).exists() {
+                    self.read.push(path.into());
                 }
             }
         }
