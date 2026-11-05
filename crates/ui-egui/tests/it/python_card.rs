@@ -345,3 +345,16 @@ fn the_card_converts_its_python_cell_to_a_normal_cell() {
     assert!(is_python(&mut h, "C4"));
     assert_eq!(value(&h, "C4"), Value::text("DataFrame"));
 }
+
+/// The card belongs to its cell: moving the selection away closes it, whichever way it moves.
+#[test]
+fn moving_the_selection_away_closes_the_card() {
+    let mut h = harness(session(false));
+    select(&mut h, "B2");
+    h.state_mut().run("ui.pythonCard", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(card(&h).is_some());
+    select(&mut h, "A1");
+    h.run_steps(2);
+    assert!(card(&h).is_none());
+}

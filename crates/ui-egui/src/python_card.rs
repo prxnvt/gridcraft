@@ -225,9 +225,13 @@ pub fn command(app: &mut SheetApp, p: &Json) -> Result<Json, String> {
 
 /// Draws the open card under its cell (beside it on the screen's side the cell starts on, so it is
 /// mirrored on a right-to-left sheet), and closes it when its cell is no longer a Python cell in
-/// view, an edit starts, or the user clicks elsewhere or presses Esc.
+/// view, the selection leaves the cell, an edit starts, or the user clicks elsewhere or presses Esc.
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_open: bool) {
     let Some(card) = app.grid.py_card else { return };
+    if active_python_cell(app).is_none_or(|(_, _, at, _)| at != card.cell) {
+        app.grid.py_card = None;
+        return;
+    }
     let here = app.session.active().map(|d| (d.uid, d.wb.active_sheet()));
     let text = app.session.active().filter(|_| here == Some((card.uid, card.sheet))).and_then(|d| card_text(&d.wb, sh, card.cell));
     let screen = geo.mirror_rect(area(geo, sh, card.cell));
