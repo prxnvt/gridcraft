@@ -16,6 +16,7 @@
 //! mouse and keyboard or the system's accessibility interface, acts as the person does, and nothing
 //! here can tell the difference.
 
+use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -106,6 +107,8 @@ pub struct PythonUi {
     search: Search,
     /// The frame the switches stay refused until, after synthetic input.
     locked_until: Option<u64>,
+    /// Workbooks whose Enable bar was dismissed.
+    bar_dismissed: HashSet<u64>,
     /// Workers from this factory instead of a real interpreter (tests).
     #[doc(hidden)]
     pub transport: Option<TransportFactory>,
@@ -204,6 +207,16 @@ pub(crate) fn write_settings(app: &mut SheetApp, ctx: &egui::Context, write: imp
     }
     write(&mut app.ui.python);
     sync(app);
+    true
+}
+
+/// The active workbook's switch, by widget code only. Refused while [`locked`]. Returns whether it
+/// was set.
+pub(crate) fn set_workbook(app: &mut SheetApp, ctx: &egui::Context, on: bool) -> bool {
+    if locked(app, ctx) {
+        return false;
+    }
+    app.session.set_python_workbook_enabled(on);
     true
 }
 
@@ -463,6 +476,33 @@ pub(crate) fn sandbox_lines(app: &mut SheetApp, ui: &mut Ui) {
 pub(crate) fn dim(ui: &mut Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(text).font(theme::ui_font(12.0)).color(t.text_dim));
+}
+
+/// Whether the Enable bar shows: Python is on in Settings on a system that can run it, and this
+/// workbook has Python cells and isn't enabled.
+pub fn bar_shows(app: &SheetApp) -> bool {
+    app.ui.python.enabled
+        && app.python.no_sandbox().is_none()
+        && !app.session.python_workbook_enabled()
+        && app.session.active().is_some_and(|d| !app.python.bar_dismissed.contains(&d.uid))
+        && app.session.python_has_cells()
+}
+
+/// The message bar of a workbook with Python cells that isn't enabled.
+pub fn enable_bar(app: &mut SheetApp, ui: &mut Ui) {
+    if !bar_shows(app) {
+        return;
+    }
+    let ctx = ui.ctx().clone();
+    let lang = app.ui.language;
+    let text = lang.tr("This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file.");
+    let (clicked, dismissed) = crate::widgets::message_bar(ui, "python_enable_bar", crate::NoticeKind::Warning, text, Some(lang.tr("Enable")));
+    if clicked {
+        set_workbook(app, &ctx, true);
+    }
+    if dismissed && let Some(uid) = app.session.active().map(|d| d.uid) {
+        app.python.bar_dismissed.insert(uid);
+    }
 }
 
 /// `python.refreshEnvironment` from the interface: Check Sandbox and Check Again.

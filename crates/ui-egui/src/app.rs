@@ -232,6 +232,7 @@ impl SheetApp {
         } else {
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
+            crate::python_ui::enable_bar(self, ui);
             // Python mode edits only in the formula bar: it shows while a Python edit is open,
             // also when the preference hides it.
             if self.session.prefs.formula_bar || self.editor.as_ref().is_some_and(|e| e.python) {
