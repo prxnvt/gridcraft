@@ -331,6 +331,8 @@ pub(super) struct DocRun {
     pub due: usize,
     pub passes: u32,
     pub replays: u32,
+    /// How many times in a row a worker didn't start.
+    pub start_tries: u32,
     /// Cells that stopped the worker, with what they were then and the error they show. They don't
     /// run again, and can't stop it again, until that changes or someone asks.
     pub refused: HashMap<(u64, CellRef), (u64, CellError)>,

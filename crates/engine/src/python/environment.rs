@@ -227,7 +227,14 @@ fn list_packages(mut report: PythonEnvironment, capability: &PythonCapability) -
     let Some(interpreter) = report.interpreter.as_ref() else { return report };
     let limits = Limits { timeout: PACKAGES_TIMEOUT, ..capability.limits.clone() };
     let mut client = Client::new(Box::new(ProcessTransport::confined(interpreter, capability.launcher.clone())), limits);
-    let outcome = match client.run(LIST_PACKAGES, BTreeMap::new()) {
+    let mut outcome = client.run(LIST_PACKAGES, BTreeMap::new());
+    for _ in 0..super::runner::START_RETRIES {
+        if !matches!(outcome, Ok(Outcome::FailedToStart(_))) {
+            break;
+        }
+        outcome = client.run(LIST_PACKAGES, BTreeMap::new());
+    }
+    let outcome = match outcome {
         Ok(outcome) => outcome,
         Err(busy) => return report.failed(PythonState::NotSetUp, "connect.failed", busy.to_string()),
     };

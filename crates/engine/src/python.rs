@@ -614,3 +614,6 @@ pub(crate) fn run_json(r: &PythonRun) -> Json {
 pub(crate) fn assigned_names_for_test(code: &str) -> Vec<&str> {
     runner::assigned_names(code)
 }
+
+#[cfg(test)]
+pub(crate) const START_RETRIES_FOR_TEST: u32 = runner::START_RETRIES;

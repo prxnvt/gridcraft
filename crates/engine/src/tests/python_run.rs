@@ -543,6 +543,45 @@ fn failing(message: &'static str) -> Session {
     s
 }
 
+/// A worker that doesn't start the first few times, as when another thread's start leaked a
+/// descriptor to the launcher.
+struct StartsLate {
+    left: Arc<std::sync::atomic::AtomicU32>,
+    then: FakeTransport,
+}
+
+impl Transport for StartsLate {
+    fn start(&mut self) -> Result<Pipes, String> {
+        let left = self.left.load(std::sync::atomic::Ordering::SeqCst);
+        if left > 0 {
+            self.left.store(left - 1, std::sync::atomic::Ordering::SeqCst);
+            return Err("Python stopped: gridcraft-sandbox: refused: descriptors other than standard input, output and error are open".into());
+        }
+        self.then.start()
+    }
+    fn kill(&mut self) {
+        self.then.kill();
+    }
+}
+
+#[test]
+fn a_launch_refused_for_a_moment_is_tried_again() {
+    let t = worker();
+    let left = Arc::new(std::sync::atomic::AtomicU32::new(crate::python::START_RETRIES_FOR_TEST));
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.set_python_capability(PythonCapability {
+        enabled: true,
+        transport: Some(Arc::new(move || Box::new(StartsLate { left: left.clone(), then: t.sharing() }))),
+        ..PythonCapability::default()
+    });
+    py(&mut s, "A1", "ret 1");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), NUM(1.0), "the worker started on a later try");
+    assert_eq!(s.python_environment().state, PythonState::Ready);
+    assert_eq!(s.python_run_log().count(), 1, "the tries that didn't start aren't runs");
+}
+
 #[test]
 fn a_refusal_by_the_launcher_shows_blocked_and_stops_trying() {
     let mut s = failing("Python stopped: gridcraft-sandbox: refused: the sandbox is not enforced");
