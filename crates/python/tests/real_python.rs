@@ -229,11 +229,11 @@ fn big_results_stay_within_the_caps() {
 fn the_interpreter_is_isolated() {
     let Some(py) = python() else { return };
     let mut c = client(py);
-    // Only the variables the shim sets itself, a fresh empty working directory, no site module,
+    // Only the variable the shim sets itself, a fresh empty working directory, no site module,
     // isolated flags. Python adds LC_CTYPE when it coerces the C locale to UTF-8, and macOS adds its
     // text encoding, both inside the worker.
     let env = value(run(&mut c, "import os\n','.join(sorted(k for k in os.environ if k not in ('LC_CTYPE', '__CF_USER_TEXT_ENCODING')))"));
-    assert_eq!(env, Value::text("MPLBACKEND,MPLCONFIGDIR,OPENBLAS_NUM_THREADS,TMPDIR"));
+    assert_eq!(env, Value::text("OPENBLAS_NUM_THREADS"));
     assert_eq!(value(run(&mut c, "import os\nos.listdir('.')")), Value::Error(CellError::Calc), "an empty list");
     assert_eq!(value(run(&mut c, "import sys\n'site' in sys.modules")), Value::Bool(false));
     assert_eq!(
@@ -308,6 +308,9 @@ fn errors_say_what_kind_they_are() {
     assert_eq!(kind(&mut c, "not_a_name"), (k("python.name"), k("not_a_name")));
     assert_eq!(kind(&mut c, "1 / 0"), (k("python.exception"), None));
     assert_eq!(kind(&mut c, "r = 'A1'\nxl(r)"), (k("xl.notLiteral"), None));
+    // Plots aren't drawn, whether the package is installed or not.
+    assert_eq!(kind(&mut c, "plt.plot([1, 2])"), (k("plot.unsupported"), None));
+    assert_eq!(kind(&mut c, "sns.lineplot([1, 2])"), (k("plot.unsupported"), None));
     // A default name of Excel's initialization only matters once it is used.
     assert_eq!(value(run(&mut c, "x = 1\nx")), Value::Number(1.0));
     let fake = fake_pandas("lazy");

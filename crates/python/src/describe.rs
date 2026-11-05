@@ -199,8 +199,9 @@ fn outermost(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     out
 }
 
-/// Packages to suggest for a new environment: what Excel's Python makes available first.
-pub const STARTER_PACKAGES: [&str; 5] = ["numpy", "pandas", "matplotlib", "seaborn", "statsmodels"];
+/// Packages to suggest for a new environment: what Excel's Python makes available first, without
+/// plotting: Python cells don't draw plots, the data goes to a sheet and charts are built from it.
+pub const STARTER_PACKAGES: [&str; 3] = ["numpy", "pandas", "statsmodels"];
 /// Installs uv, for a person who doesn't have it.
 pub const UV_INSTALL: &str = "curl -LsSf https://astral.sh/uv/install.sh | sh";
 

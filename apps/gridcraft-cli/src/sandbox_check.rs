@@ -1,4 +1,4 @@
-//! `gridcraft-cli sandbox-check [--read PATH]... [--scratch PATH]... [--exec PATH]... [-- PROGRAM ARGS...]`: whether
+//! `gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]`: whether
 //! this system confines programs, for a person or a reviewer checking a machine.
 //!
 //! Without a program it starts a confined copy of itself that tries what the sandbox must deny
@@ -33,7 +33,6 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--read" => policy = policy.read(it.next().ok_or("--read needs a path")?),
-            "--scratch" => policy = policy.scratch(it.next().ok_or("--scratch needs a path")?),
             "--exec" => policy = policy.exec(it.next().ok_or("--exec needs a path")?),
             "--" => {
                 let p = it.next().ok_or("a program follows `--`")?;
