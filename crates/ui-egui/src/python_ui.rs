@@ -680,3 +680,52 @@ pub(crate) fn check_again(app: &mut SheetApp) {
     app.run_or_alert("python.refreshEnvironment", json!({}));
     search_again(app);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_settings_are_read_leniently_and_python_stays_off() {
+        // Nothing in a file that isn't what this writes turns Python on, or loses the rest.
+        for bad in [r#"{"dark": true, "python": 7}"#, r#"{"dark": true, "python": {"enabled": "yes"}}"#, r#"{"dark": true, "python": null}"#] {
+            let ui: crate::UiState = serde_json::from_str(bad).unwrap();
+            assert!(ui.dark, "{bad}");
+            assert_eq!(ui.python, PythonPrefs::default(), "{bad}");
+        }
+        let ui: crate::UiState = serde_json::from_str("{}").unwrap();
+        assert!(!ui.python.enabled, "off by default");
+        let ui: crate::UiState = serde_json::from_str(r#"{"python": {"enabled": true, "timeLimitSecs": 5}}"#).unwrap();
+        assert_eq!((ui.python.enabled, ui.python.time_limit_secs, ui.python.memory_limit_mb), (true, 5, 1024));
+        let again: crate::UiState = serde_json::from_str(&serde_json::to_string(&ui).unwrap()).unwrap();
+        assert_eq!(again.python, ui.python);
+    }
+
+    #[test]
+    fn limits_stay_within_what_the_fields_take() {
+        let limits = |time_limit_secs, memory_limit_mb| PythonPrefs { time_limit_secs, memory_limit_mb, ..PythonPrefs::default() }.limits();
+        assert_eq!(limits(0, 0).timeout, Duration::from_secs(1));
+        assert_eq!(limits(0, 0).memory_bytes, 128 * MIB);
+        assert_eq!(limits(u64::MAX, u64::MAX).timeout, MAX_TIMEOUT);
+        assert_eq!(limits(u64::MAX, u64::MAX).memory_bytes, 262_144 * MIB);
+        assert_eq!(PythonPrefs::default().limits(), Limits::default());
+    }
+
+    #[test]
+    fn a_too_old_python_says_so_and_a_python_not_asked_says_nothing() {
+        let v = |minor| Some(python::Version { major: 3, minor, patch: 0 });
+        let row = |version, kind| FoundPython { path: "/p".into(), version, kind };
+        assert_eq!(found_note(Language::En, &row(None, None)), None);
+        assert_eq!(found_note(Language::En, &row(v(12), Some(InterpreterKind::UvEnvironment))).unwrap(), "3.12.0, uv environment");
+        assert!(found_note(Language::En, &row(v(9), Some(InterpreterKind::System))).unwrap().contains("too old"));
+    }
+
+    #[test]
+    fn install_commands_speak_uv_first() {
+        assert_eq!(
+            install_command(None, &["pandas"]),
+            "uv venv ~/.gridcraft/python --python 3.12 && uv pip install --python ~/.gridcraft/python pandas"
+        );
+        assert_eq!(pip_command(None, &["pandas"]), "python3 -m pip install pandas");
+    }
+}
