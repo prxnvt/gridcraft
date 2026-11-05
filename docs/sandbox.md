@@ -20,12 +20,14 @@ other programs. The sandbox's job is that it can do none of these:
   workbooks are out of reach.
 - **Programs:** it can execute only the programs its policy lists, and it can't start a new
   process at all, so even those only replace itself.
-- **Network:** no network sockets, no connections and no listeners.
+- **Network:** no sockets, no connections and no listeners.
 - **Other processes and the system:** no debugging or reading another process, no mounts or
   namespaces, no kernel modules, BPF, keyrings or performance counters.
 
 Data reaches the code only through its command-line arguments (which the parent chooses), its
-standard input and output (which the parent holds), and the files its policy lets it read. The
+standard input and output (which the parent holds), and the files its policy lets it read. Nothing
+else is open: a descriptor left open by the parent stops the launch, because the confinement
+doesn't revoke what is already open. The
 program inherits no environment: the launcher clears it and keeps only the locale and time zone
 (`LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`), with `PATH` set to `/usr/bin:/bin`, so tokens and credentials
 in the parent's environment don't reach it.
@@ -41,9 +43,13 @@ use the CPU while it runs.
    the application's own executable again, with `--sandbox-launch` and the policy.
 2. The application hands its arguments to `gridcraft_sandbox::handle_args` before anything else,
    so a launcher run opens no window and writes no log.
-3. The launcher confines itself (Linux) or already runs confined (macOS: `sandbox-exec` started it
-   with the profile).
-4. **The enforcement check.** Before the program runs, each of these must be refused by the
+3. The launcher lists its open descriptors and refuses when any besides standard input, output and
+   error is open.
+4. The launcher confines itself (Linux) or runs itself again under `sandbox-exec` with the profile
+   (macOS, `--sandbox-confined`). On macOS the descriptors are checked first because, under a
+   deny-by-default profile, the system's libraries hold a close-on-exec socket of their own that
+   safe code can't tell from an inherited one.
+5. **The enforcement check.** Before the program runs, each of these must be refused by the
    system with a permission error:
    - reading the canary;
    - creating a file next to it, and in the temporary directory;
@@ -51,7 +57,7 @@ use the CPU while it runs.
    - starting a process (a copy of itself that would exit at once).
    An attempt that works, or fails for another reason (a missing file, a refused connection),
    doesn't count as a denial.
-5. Only then does the launcher replace itself with the program (`exec`), which inherits the
+6. Only then does the launcher replace itself with the program (`exec`), which inherits the
    confinement. When any step fails, the program never runs: the launcher prints
    `gridcraft-sandbox: refused: <reason>` on standard error and exits with code 97.
 
@@ -73,26 +79,31 @@ The launcher applies two layers, then runs the check.
     - device ioctls (ABI 5);
     - signals and abstract Unix sockets outside the sandbox (ABI 6).
   - **`no_new_privs`** is set, so no program can gain privileges.
-- **seccomp**, two filters.
+- **seccomp**, three filters.
   - **`clone3`** fails with `ENOSYS`. The C library then uses `clone`, whose flags the filter can
     read.
   - **Refused with `EPERM`:**
     - `clone` without `CLONE_THREAD` (a new process; threads still work), plus `fork` and
       `vfork`;
-    - `socket` for every family but `AF_UNIX`, and `socketpair`, `connect`, `bind`, `listen`,
-      `accept` and `accept4`;
+    - `socket` of every family (a Unix datagram socket can send without `connect`), and
+      `socketpair`, `connect`, `bind`, `listen`, `accept` and `accept4`;
     - io_uring (it runs operations outside the filter);
     - `ptrace`, `process_vm_readv`/`writev`, `pidfd_getfd`;
     - mounts, namespaces and file handles (`mount`, `umount2`, `pivot_root`, `chroot`,
       `unshare`, `setns`, `open_by_handle_at`, `name_to_handle_at`, the new mount API);
     - `bpf`, `perf_event_open`, `userfaultfd`, keyrings, kernel modules, `kexec`, swap,
       `reboot`, and port I/O on x86_64.
+  - **x32 calls (x86_64 only)** fail with `EPERM`. They report the x86_64 architecture value with
+    other numbers, so the rules above wouldn't match them.
 
   Filters are built for x86_64 and aarch64; other architectures are refused.
 
+  Because no socket can be made, Python's `asyncio` doesn't work in the sandbox: its event loop
+  needs a local socket pair.
+
 ## macOS
 
-`sandbox-exec` runs the launcher with a profile built from the policy:
+The launcher runs itself again under `sandbox-exec` with a profile built from the policy:
 - `(deny default)`;
 - the base system profile (`system.sb`: the system libraries, the dynamic loader's cache and a few
   system services a process needs to start);
