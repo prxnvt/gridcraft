@@ -308,6 +308,9 @@ fn errors_say_what_kind_they_are() {
     assert_eq!(kind(&mut c, "not_a_name"), (k("python.name"), k("not_a_name")));
     assert_eq!(kind(&mut c, "1 / 0"), (k("python.exception"), None));
     assert_eq!(kind(&mut c, "r = 'A1'\nxl(r)"), (k("xl.notLiteral"), None));
+    // Plots aren't drawn, whether the package is installed or not.
+    assert_eq!(kind(&mut c, "plt.plot([1, 2])"), (k("plot.unsupported"), None));
+    assert_eq!(kind(&mut c, "sns.lineplot([1, 2])"), (k("plot.unsupported"), None));
     // A default name of Excel's initialization only matters once it is used.
     assert_eq!(value(run(&mut c, "x = 1\nx")), Value::Number(1.0));
     let fake = fake_pandas("lazy");

@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use gridcraft_python::describe::{self, Interpreter};
+use gridcraft_python::diagnostics;
 use gridcraft_python::interp::{self, Detection, SearchEnv};
 use gridcraft_python::process::ProcessTransport;
 use gridcraft_python::{Client, Limits, Outcome, Output};
@@ -140,7 +141,8 @@ fn run_code(client: &mut Client, code: &str) -> bool {
             true
         }
         Ok(other) => {
-            outln!("failed: {}", describe_outcome(&other));
+            let kind = diagnostics::for_outcome(&other).map_or("", |d| d.kind.id);
+            outln!("failed ({kind}): {}", describe_outcome(&other));
             false
         }
         Err(_) => false,

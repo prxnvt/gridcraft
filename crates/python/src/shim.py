@@ -57,7 +57,7 @@ def _gridcraft_worker():
             sys.path.append(p)
 
     # The sandbox lets nothing be written, so bytecode caches aren't tried. Numerical libraries stay
-    # on one thread, and matplotlib draws without a window, which the sandbox couldn't open.
+    # on one thread.
     sys.dont_write_bytecode = True
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
@@ -173,7 +173,24 @@ def _gridcraft_worker():
         def __repr__(self):
             return repr(importlib.import_module(object.__getattribute__(self, "_module")))
 
-    DEFAULT_IMPORTS = {"np": "numpy", "pd": "pandas", "plt": "matplotlib.pyplot", "sns": "seaborn", "sm": "statsmodels.api"}
+    DEFAULT_IMPORTS = {"np": "numpy", "pd": "pandas", "sm": "statsmodels.api"}
+
+    # Python cells don't draw plots: the data goes to a sheet and charts are built from it. The
+    # names Excel's initialization gives its plotting modules say so when they are used.
+    class NoPlots(Exception):
+        pass
+
+    NoPlots.__name__ = "RuntimeError"
+    NoPlots.__qualname__ = "RuntimeError"
+    PLOT_MESSAGE = "Python cells don't draw plots. Return the data to a sheet and build a chart from it."
+    PLOT_MODULES = ("matplotlib", "seaborn")
+    PLOT_NAMES = ("plt", "sns")
+
+    class Plotting:
+        __slots__ = ()
+
+        def __getattr__(self, name):
+            raise NoPlots(PLOT_MESSAGE)
 
     def table(rows, headers):
         # A range is a pandas DataFrame, as in Excel; `headers=True` makes its first row the column
@@ -419,13 +436,28 @@ def _gridcraft_worker():
             return "denied.network"
         return "denied.file"
 
+    def through_plotting(e):
+        """Whether an error came from a plotting package, or pandas's way into one."""
+        for link in chain(e):
+            tb = link.__traceback__
+            while tb is not None:
+                parts = tb.tb_frame.f_code.co_filename.replace("\\", "/").split("/")
+                if any(m in parts for m in PLOT_MODULES) or ("pandas" in parts and "plotting" in parts):
+                    return True
+                tb = tb.tb_next
+        return False
+
     def classify(e, code):
         """The catalog's kind for an error, and what it was about."""
         if isinstance(e, SyntaxError):
             return "python.syntax", None
         if isinstance(e, XlReference):
             return "xl.notLiteral", None
+        if isinstance(e, NoPlots) or through_plotting(e):
+            return "plot.unsupported", None
         if isinstance(e, ModuleNotFoundError):
+            if (e.name or "").split(".")[0] in PLOT_MODULES:
+                return "plot.unsupported", None
             return "module.missing", e.name
         if isinstance(e, ImportError):
             text = str(e)
@@ -465,6 +497,8 @@ def _gridcraft_worker():
         main.__dict__["xl"] = xl
         for name, module in DEFAULT_IMPORTS.items():
             main.__dict__[name] = Lazy(module)
+        for name in PLOT_NAMES:
+            main.__dict__[name] = Plotting()
         sys.modules["__main__"] = main
         namespace["globals"] = main.__dict__
 

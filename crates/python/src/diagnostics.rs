@@ -147,6 +147,7 @@ pub const CATALOG: &[Kind] = &[
     k("denied.file", Error, Cell, "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl().", A::None),
     k("denied.network", Error, Cell, "Python cells can't use the network. Put the data on a sheet and read it with xl().", A::None),
     k("denied.process", Error, Cell, "Python cells can't start other programs or processes.", A::None),
+    k("plot.unsupported", Error, Cell, "Python cells don't draw plots. Return the data to a sheet and build a chart from it.", A::None),
     k("xl.notLiteral", Error, Cell, "xl() needs its reference written as text in the code, such as xl(\"A1:B5\").", A::None),
     k("xl.tooLarge", Error, Cell, "This range is too large to send to Python.", A::None),
     k("limit.time", Error, Cell, "The code ran past the time limit. Python was restarted, so its variables were cleared.", A::RunAgain),
@@ -176,6 +177,7 @@ pub const CATALOG: &[Kind] = &[
         "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl().",
         A::None,
     ),
+    k("lint.plotting", Warning, Line, "Python cells don't draw plots. Return the data to a sheet and build a chart from it.", A::None),
     k("lint.window", Warning, Line, "Python cells can't open windows or ask for input.", A::None),
     k("lint.environ", Info, Line, "Python cells don't see your environment variables.", A::None),
 ];
