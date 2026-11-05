@@ -17,7 +17,7 @@ use gridcraft_python::fake::{FakeHandle, FakeTransport};
 use gridcraft_python::protocol::{Output, PyError, Reply, Request};
 use gridcraft_ui_egui::control::{self, Outcome};
 use gridcraft_ui_egui::keytips::keytip_table;
-use gridcraft_ui_egui::ribbon::{RibbonOverflow, TABS};
+use gridcraft_ui_egui::ribbon::{PYTHON_TAB, RibbonOverflow, TABS, contextual_tabs};
 use gridcraft_ui_egui::{Services, SheetApp, python_ui};
 use serde_json::{Value as Json, json};
 
@@ -100,9 +100,22 @@ struct Setup {
 }
 
 impl Setup {
+    /// The active cell is a Python cell, so the Python tab is up.
     fn new() -> Setup {
         let mut session = Session::new();
         session.new_workbook();
+        session.execute("python.set", json!({"cell": "A1", "code": "ret 1"})).unwrap();
+        Setup::on(session)
+    }
+
+    /// A workbook with no Python cells: the tab isn't up, and the ribbon opens on Home.
+    fn plain() -> Setup {
+        let mut session = Session::new();
+        session.new_workbook();
+        Setup::on(session)
+    }
+
+    fn on(session: Session) -> Setup {
         Setup {
             session,
             enabled: true,
@@ -150,6 +163,7 @@ impl Setup {
         let mut h = crate::common::harness_with(crate::common::builder().with_size(self.size), app, 3);
         h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
         h.run_steps(2);
+        settle(&mut h);
         (h, handle)
     }
 }
@@ -186,6 +200,12 @@ fn until_running(h: &mut Harness) {
         std::thread::sleep(Duration::from_millis(5));
     }
     panic!("no cell started");
+}
+
+/// Shows the Python tab, as a click on it does.
+fn show_tab(h: &mut Harness) {
+    h.state_mut().ui.ribbon_tab = PYTHON_TAB.into();
+    h.run_steps(3);
 }
 
 fn button<'a>(h: &'a Harness, label: &'a str) -> egui_kittest::Node<'a> {
@@ -435,13 +455,6 @@ fn the_enable_bar_can_be_dismissed_and_leaves_the_workbook_off() {
 // ---------------------------------------------------------------- the ribbon tab
 
 #[test]
-fn the_tab_comes_after_formulas_on_every_system() {
-    let formulas = TABS.iter().position(|t| *t == "Formulas").unwrap();
-    assert_eq!(TABS.get(formulas + 1), Some(&"Python"));
-    assert_eq!(keytip_table::tab_sequence("Python"), Some("Y"));
-}
-
-#[test]
 fn the_state_button_shows_each_state() {
     let blocked = PythonEnvironment {
         state: PythonState::Blocked,
@@ -563,7 +576,10 @@ fn insert_python_starts_python_mode() {
 
 #[test]
 fn the_buttons_for_a_cell_say_when_there_is_none() {
-    let (mut h, _) = Setup::new().build();
+    // A draft on a plain cell brings the tab up with no Python cell to act on.
+    let (mut h, _) = Setup::plain().build();
+    h.state_mut().run("ui.pythonMode", json!({"on": true})).unwrap();
+    show_tab(&mut h);
     let run = button(&h, "Run Cell");
     assert!(run.accesskit_node().is_disabled());
     run.hover();
@@ -647,6 +663,203 @@ fn formulas_gives_up_the_labels_before_it_scrolls() {
     eprintln!("Formulas at 1440: {narrow:?}; at 1560: {wide:?}");
     assert!(narrow_reset < wide_reset, "only the icon: {narrow_reset} and {wide_reset}");
     assert!(narrow.content + 60.0 < wide.content, "{narrow:?} and {wide:?}");
+}
+
+// ---------------------------------------------------------------- the tab comes and goes
+
+fn select(h: &mut Harness, cell: &str) {
+    h.state_mut().run("selection.set", json!({"range": cell})).unwrap();
+    h.run_steps(3);
+}
+
+fn tabs(h: &Harness) -> Vec<&'static str> {
+    contextual_tabs(h.state())
+}
+
+/// A plain cell at A1 and a Python cell at A2.
+fn python_at_a2() -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("python.set", json!({"cell": "A2", "code": "ret 1"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s
+}
+
+#[test]
+fn the_tab_is_only_there_on_a_python_cell_however_it_is_reached() {
+    assert!(!TABS.contains(&PYTHON_TAB), "it isn't a permanent tab");
+    let (mut h, _) = Setup::on(python_at_a2()).build();
+    assert!(tabs(&h).is_empty(), "a plain cell");
+    assert_eq!(h.state().ui.ribbon_tab, "Home");
+    assert!(h.query_by_role_and_label(Role::Tab, "Python").is_none());
+    select(&mut h, "A2");
+    assert_eq!(tabs(&h), [PYTHON_TAB], "by a command");
+    assert!(h.query_by_role_and_label(Role::Tab, "Python").is_some());
+    press(&mut h, egui::Key::ArrowUp);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A1");
+    assert!(tabs(&h).is_empty(), "the keyboard, away");
+    press(&mut h, egui::Key::ArrowDown);
+    assert_eq!(tabs(&h), [PYTHON_TAB], "the keyboard, back");
+    select(&mut h, "C5");
+    assert!(control_request(&mut h, "ui.cell.click", json!({"cell": "A2"})).is_some_and(|r| r["ok"] == true));
+    assert_eq!(tabs(&h), [PYTHON_TAB], "a click");
+}
+
+#[test]
+fn the_tab_is_there_while_python_code_is_being_edited() {
+    let (mut h, _) = Setup::plain().build();
+    assert!(tabs(&h).is_empty());
+    h.state_mut().run("ui.pythonMode", json!({"on": true})).unwrap();
+    h.run_steps(3);
+    assert_eq!(tabs(&h), [PYTHON_TAB], "a draft in the formula bar");
+    h.state_mut().cancel_edit();
+    h.run_steps(3);
+    assert!(tabs(&h).is_empty());
+    h.state_mut().run("ui.pythonEditor", json!({"on": true})).unwrap();
+    h.run_steps(3);
+    assert_eq!(tabs(&h), [PYTHON_TAB], "the editor window");
+    h.state_mut().run("ui.pythonEditor", json!({"on": false})).unwrap();
+    h.run_steps(3);
+    assert!(tabs(&h).is_empty());
+}
+
+/// Like Table Design and Chart Design: selecting a Python cell adds the tab and leaves the ribbon on
+/// the tab it was on, so arrowing across a Python cell doesn't flip the ribbon.
+#[test]
+fn the_tab_doesnt_take_over_when_it_comes_up() {
+    let (mut h, _) = Setup::on(python_at_a2()).build();
+    select(&mut h, "A2");
+    assert_eq!(h.state().ui.ribbon_tab, "Home");
+    select(&mut h, "A1");
+    h.state_mut().ui.ribbon_tab = "Formulas".into();
+    h.run_steps(2);
+    click(&mut h, "Insert Python");
+    assert!(h.state().editor.as_ref().is_some_and(|e| e.python), "Formulas › Python is the way in");
+    assert_eq!(tabs(&h), [PYTHON_TAB]);
+    assert_eq!(h.state().ui.ribbon_tab, "Formulas");
+    // A click on it shows it.
+    h.get_by_role_and_label(Role::Tab, "Python").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.ribbon_tab, PYTHON_TAB);
+    let o = RibbonOverflow::get(&h.ctx);
+    assert!(o.content_height <= o.visible_height + 0.5, "{o:?}");
+}
+
+#[test]
+fn the_tab_is_the_rightmost_beside_the_other_contextual_tabs() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+    s.execute("python.set", json!({"cell": "B2", "code": "ret 1"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    let (mut h, _) = Setup::on(s).build();
+    assert_eq!(tabs(&h), ["Table Design", PYTHON_TAB]);
+    let table = h.get_by_role_and_label(Role::Tab, "Table Design").rect();
+    let python = h.get_by_role_and_label(Role::Tab, "Python").rect();
+    assert!(python.left() >= table.right(), "{table:?} then {python:?}");
+    h.check_accessibility();
+    // Chart Design comes before it too.
+    h.state_mut().run("insert.chart", json!({"type": "column", "range": "A1:B3"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(tabs(&h), ["Table Design", "Chart Design", PYTHON_TAB]);
+}
+
+#[test]
+fn leaving_the_cell_takes_the_tab_away_and_leaves_its_pane() {
+    let (mut h, _) = Setup::on(python_at_a2()).build();
+    select(&mut h, "A2");
+    show_tab(&mut h);
+    click(&mut h, "What Python Can Do");
+    assert_eq!(pane(&h).as_deref(), Some(python_ui::PERMISSIONS));
+    select(&mut h, "A1");
+    assert_eq!(h.state().ui.ribbon_tab, "Home", "the ribbon doesn't stay on a tab that is gone");
+    assert!(tabs(&h).is_empty());
+    assert_eq!(pane(&h).as_deref(), Some(python_ui::PERMISSIONS), "the pane stays open");
+}
+
+#[test]
+fn what_is_reachable_without_the_tab_stays_reachable() {
+    let (mut h, _) = Setup::plain().build();
+    assert!(tabs(&h).is_empty());
+    for (id, name) in [
+        ("ui.pythonEnvironment", python_ui::ENVIRONMENT),
+        ("ui.pythonPackages", python_ui::PACKAGES),
+        ("ui.pythonProblems", python_ui::PROBLEMS),
+        ("ui.pythonRunLog", python_ui::RUN_LOG),
+        ("ui.pythonPermissions", python_ui::PERMISSIONS),
+    ] {
+        h.state_mut().run(id, json!({"on": true})).unwrap();
+        h.run_steps(2);
+        assert_eq!(pane(&h).as_deref(), Some(name));
+    }
+    h.get_by_label("Python: Ready").click();
+    h.run_steps(3);
+    assert_eq!(pane(&h).as_deref(), Some(python_ui::ENVIRONMENT), "the status bar item");
+    open_options(&mut h);
+    assert!(h.query_by_label("Enable Python in cells").is_some(), "File › Options › Python");
+    h.state_mut().backstage = None;
+    h.run_steps(2);
+    h.state_mut().ui.ribbon_tab = "Formulas".into();
+    h.run_steps(2);
+    click(&mut h, "Diagnostics");
+    assert_eq!(pane(&h).as_deref(), Some(python_ui::PROBLEMS), "Formulas › Python");
+}
+
+#[test]
+fn on_a_system_with_no_sandbox_it_comes_and_goes_the_same_way_and_says_blocked() {
+    let mut setup = Setup::on(python_at_a2()).off();
+    setup.sandbox = Err("no sandbox".into());
+    let (mut h, _) = setup.build();
+    assert!(tabs(&h).is_empty());
+    select(&mut h, "A2");
+    assert_eq!(tabs(&h), [PYTHON_TAB]);
+    show_tab(&mut h);
+    assert!(h.query_by_role_and_label(Role::Button, "Blocked").is_some());
+    select(&mut h, "A1");
+    assert!(tabs(&h).is_empty());
+}
+
+#[test]
+fn the_tab_stays_reachable_in_a_narrow_window() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+    s.execute("python.set", json!({"cell": "B2", "code": "ret 1"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    let mut setup = Setup::on(s);
+    setup.tab = "Home";
+    setup.size = vec2(640.0, 460.0);
+    let (mut h, _) = setup.build();
+    let python = h.get_by_role_and_label(Role::Tab, "Python").rect();
+    assert!(python.right() <= 640.0 && python.width() > 30.0, "{python:?}");
+    let table = h.get_by_role_and_label(Role::Tab, "Table Design").rect();
+    assert!(table.left() >= 0.0 && table.right() <= python.left(), "{table:?}");
+    h.get_by_role_and_label(Role::Tab, "Python").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.ribbon_tab, PYTHON_TAB);
+    assert!(h.query_by_role_and_label(Role::Button, "Ready").is_some());
+    h.check_accessibility();
+}
+
+#[test]
+fn the_key_tip_answers_only_while_the_tab_is_up() {
+    assert_eq!(keytip_table::tab_sequence(PYTHON_TAB), Some("Y"));
+    let (mut h, _) = Setup::on(python_at_a2()).build();
+    press(&mut h, egui::Key::F10);
+    press(&mut h, egui::Key::Y);
+    assert_eq!(h.state().ui.ribbon_tab, "Home", "no tab to go to");
+    assert_eq!(h.state().keytips.prefix(), Some(""), "the letter leads nowhere, and key tips stay armed");
+    press(&mut h, egui::Key::M);
+    assert_eq!(h.state().ui.ribbon_tab, "Formulas");
+    press(&mut h, egui::Key::Escape);
+    press(&mut h, egui::Key::Escape);
+    select(&mut h, "A2");
+    press(&mut h, egui::Key::F10);
+    press(&mut h, egui::Key::Y);
+    assert_eq!(h.state().ui.ribbon_tab, PYTHON_TAB);
+    assert_eq!(h.state().keytips.prefix(), Some("Y"));
 }
 
 // ---------------------------------------------------------------- a system with no sandbox
@@ -827,7 +1040,7 @@ fn problems_are_grouped_by_kind_and_a_click_goes_to_the_cell() {
 
 #[test]
 fn the_problems_list_handles_having_none_and_having_many() {
-    let (mut h, _) = Setup::new().build();
+    let (mut h, _) = Setup::plain().build();
     h.state_mut().run("ui.pythonProblems", json!({})).unwrap();
     h.run_steps(3);
     assert!(h.query_by_label("No problems.").is_some());
@@ -844,7 +1057,7 @@ fn the_problems_list_handles_having_none_and_having_many() {
 
 #[test]
 fn the_run_log_shows_each_run_and_clears_through_a_command() {
-    let (mut h, _) = Setup::new().build();
+    let (mut h, _) = Setup::plain().build();
     h.state_mut().run("ui.pythonRunLog", json!({})).unwrap();
     h.run_steps(3);
     assert!(h.query_by_label("No runs yet.").is_some());
@@ -852,6 +1065,7 @@ fn the_run_log_shows_each_run_and_clears_through_a_command() {
         h.state_mut().run("python.set", json!({"cell": cell, "code": code})).unwrap();
     }
     settle(&mut h);
+    show_tab(&mut h);
     let run = h.state().session.python_run_log().next().unwrap().clone();
     assert_eq!(run.stdout, "hello\n");
     assert!(h.query_by_role_and_label(Role::Button, "Sheet1!A1").is_some());
@@ -898,7 +1112,7 @@ fn what_python_can_do_lists_both_and_names_what_enforces_each() {
 
 #[test]
 fn the_status_bar_has_no_item_for_a_person_with_neither() {
-    let (h, _) = Setup::new().off().build();
+    let (h, _) = Setup::plain().off().build();
     assert!(h.query_by_label_contains("Python: ").is_none());
 }
 

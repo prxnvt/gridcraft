@@ -44,7 +44,7 @@ pub use title_bar::{MAC_CONTENT_LEFT, MAC_TITLE_BAR, TITLE_LEFT_PAD, title_bar};
 use title_bar::{TITLE_BAR_H, TITLE_CONTROL_H};
 use view::view;
 
-pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Python", "Data", "Review", "View", "Automate"];
+pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
 /// Draws the ribbon tabs and the active tab's horizontally scrollable card, resetting an unavailable contextual tab to Home.
@@ -127,7 +127,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Draw" => draw(app, ui),
                             "Page Layout" => page_layout(app, ui),
                             "Formulas" => formulas(app, ui),
-                            "Python" => python(app, ui),
+                            PYTHON_TAB => python(app, ui),
                             "Data" => data(app, ui),
                             "Review" => review(app, ui),
                             "View" => view(app, ui),
@@ -303,7 +303,10 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-const CONTEXTUAL_TABS: [&str; 3] = ["Table Design", "Chart Design", crate::paper_view::TAB];
+/// The Python tab: up while the person is on or working with a Python cell ([`crate::python_ui::tab_shows`]).
+pub const PYTHON_TAB: &str = "Python";
+
+const CONTEXTUAL_TABS: [&str; 4] = ["Table Design", "Chart Design", crate::paper_view::TAB, PYTHON_TAB];
 
 /// Whether a key tip can show this tab now: every tab can, except a contextual one that isn't up.
 pub(crate) fn tab_is_up(app: &SheetApp, tab: &str) -> bool {
@@ -325,6 +328,10 @@ pub fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if app.grid.hf_edit.is_some() {
             v.push(crate::paper_view::TAB);
         }
+    }
+    // Last, so that it is always the rightmost.
+    if crate::python_ui::tab_shows(app) {
+        v.push(PYTHON_TAB);
     }
     v
 }

@@ -450,7 +450,7 @@ fn renders_every_ribbon_tab_without_panicking() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();
     let mut h = harness(s);
-    for tab in ["Home", "Insert", "Draw", "Page Layout", "Formulas", "Python", "Data", "Review", "View", "Automate"] {
+    for tab in ["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"] {
         h.state_mut().ui.ribbon_tab = tab.into();
         h.run_steps(2);
         h.check_accessibility();
