@@ -1270,3 +1270,22 @@ fn a_panic_in_python_work_stops_python_and_keeps_the_workbook() {
     assert_eq!(v(&s, "B1"), Value::Error(CellError::Blocked));
     assert!(!s.python_busy());
 }
+
+#[test]
+fn code_that_differs_only_in_what_its_references_spell_still_runs() {
+    // It reads the same values, so its fingerprint is the same; but new code keeps no result.
+    let (mut s, h) = session();
+    set(&mut s, "A1", "5");
+    set(&mut s, "B1", "5");
+    py(&mut s, "C1", "say xl(\"A1\")");
+    settle(&mut s);
+    let before = runs(&h).len();
+    py(&mut s, "C1", "say xl(\"B1\")");
+    settle(&mut s);
+    assert_eq!(v(&s, "C1"), NUM(5.0));
+    assert_eq!(runs(&h).len(), before + 1);
+    // It reads B1 now.
+    set(&mut s, "B1", "6");
+    settle(&mut s);
+    assert_eq!(v(&s, "C1"), NUM(6.0));
+}
