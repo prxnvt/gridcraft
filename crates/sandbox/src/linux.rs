@@ -89,8 +89,9 @@ fn arch() -> Option<TargetArch> {
 /// System calls that fail with `EPERM` in the sandbox, unconditionally.
 fn denied_calls() -> Vec<libc::c_long> {
     let calls = vec![
-        // Network (sockets of every family but AF_UNIX are refused below; these make a
-        // connection or a listener of any kind).
+        // Network: no socket of any family (a Unix datagram socket can send without
+        // `connect`), and no connection or listener on one the program might hold.
+        libc::SYS_socket,
         libc::SYS_socketpair,
         libc::SYS_connect,
         libc::SYS_bind,
@@ -146,8 +147,7 @@ fn denied_calls() -> Vec<libc::c_long> {
 
 /// Two filters: the first answers `clone3` with `ENOSYS`, so the C library falls back to `clone`,
 /// whose flags a filter can read (a thread passes `CLONE_THREAD`; a new process doesn't); the
-/// second refuses with `EPERM` the calls above, `clone` without `CLONE_THREAD`, and `socket` for
-/// every family but `AF_UNIX`.
+/// second refuses with `EPERM` the calls above and `clone` without `CLONE_THREAD`.
 fn seccomp() -> Result<()> {
     let arch = arch().ok_or_else(|| SandboxError::Unsupported(format!("no seccomp filter for {}", std::env::consts::ARCH)))?;
     let program = |rules: BTreeMap<i64, Vec<SeccompRule>>, errno: i32| -> Result<BpfProgram> {
@@ -161,8 +161,6 @@ fn seccomp() -> Result<()> {
     };
     let clone_thread = u64::try_from(libc::CLONE_THREAD).map_err(not_enforced)?;
     rules.insert(libc::SYS_clone, vec![flag(0, SeccompCmpArgLen::Qword, SeccompCmpOp::MaskedEq(clone_thread), 0)?]);
-    let af_unix = u64::try_from(libc::AF_UNIX).map_err(not_enforced)?;
-    rules.insert(libc::SYS_socket, vec![flag(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, af_unix)?]);
     let main = program(rules, libc::EPERM)?;
     // Landlock already set no_new_privs, which installing a filter without privileges needs.
     seccompiler::apply_filter(&clone3).map_err(not_enforced)?;
