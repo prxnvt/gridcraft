@@ -18,6 +18,7 @@
 
 pub mod diagnostics;
 pub mod interp;
+mod interpreter;
 pub mod protocol;
 pub mod run;
 
@@ -29,6 +30,11 @@ pub mod client;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod describe;
+/// The web build finds no interpreter, and only has the types.
+#[cfg(target_arch = "wasm32")]
+pub mod describe {
+    pub use crate::interpreter::{Interpreter, Kind};
+}
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fake;
 #[cfg(not(target_arch = "wasm32"))]
