@@ -23,6 +23,13 @@ fn blank() -> Session {
     s
 }
 
+/// The active cell is a Python cell, so the Python tab is up.
+fn python_cell() -> Session {
+    let mut s = blank();
+    s.execute("python.set", serde_json::json!({"cell": "A1", "code": "1"})).unwrap();
+    s
+}
+
 fn key_event(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
     Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }
 }
@@ -96,7 +103,7 @@ fn keytip_m_() {
 
 #[test]
 fn keytip_y_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "Y", false);
     assert_eq!(h.state().ui.ribbon_tab, "Python", "Y must switch to the Python tab");
 }
@@ -1942,14 +1949,14 @@ fn keytip_mzd_() {
 
 #[test]
 fn keytip_ya_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YA", false);
     assert!(h.state().message.is_some() || h.state().toast.is_some(), "YA must invoke python.runAll and surface its missing-params error");
 }
 
 #[test]
 fn keytip_yb_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YB", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YB must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -1957,14 +1964,14 @@ fn keytip_yb_() {
 
 #[test]
 fn keytip_yc_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YC", false);
     assert!(h.state().message.is_some() || h.state().toast.is_some(), "YC must invoke python.run and surface its missing-params error");
 }
 
 #[test]
 fn keytip_ye_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YE", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YE must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -1972,7 +1979,7 @@ fn keytip_ye_() {
 
 #[test]
 fn keytip_yi_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YI", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YI must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -1980,7 +1987,7 @@ fn keytip_yi_() {
 
 #[test]
 fn keytip_yk_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YK", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YK must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -1988,7 +1995,7 @@ fn keytip_yk_() {
 
 #[test]
 fn keytip_yl_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YL", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YL must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -1996,7 +2003,7 @@ fn keytip_yl_() {
 
 #[test]
 fn keytip_ym_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YM", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YM must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -2004,7 +2011,7 @@ fn keytip_ym_() {
 
 #[test]
 fn keytip_yn_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YN", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YN must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -2012,7 +2019,7 @@ fn keytip_yn_() {
 
 #[test]
 fn keytip_yo_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YO", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YO must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -2020,7 +2027,7 @@ fn keytip_yo_() {
 
 #[test]
 fn keytip_yp_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YP", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YP must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -2028,21 +2035,21 @@ fn keytip_yp_() {
 
 #[test]
 fn keytip_yr_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YR", false);
     assert!(h.state().message.is_some() || h.state().toast.is_some(), "YR must invoke python.reset and surface its missing-params error");
 }
 
 #[test]
 fn keytip_ys_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YS", false);
     assert!(h.state().session.journal.iter().any(|(id, _)| id == "python.stop"), "YS must journal python.stop");
 }
 
 #[test]
 fn keytip_yv_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YV", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YV must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -2050,7 +2057,7 @@ fn keytip_yv_() {
 
 #[test]
 fn keytip_yw_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YW", false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "YW must route to its control without an error box");
     assert_eq!(h.state().keytips.prefix(), None);
@@ -2058,7 +2065,7 @@ fn keytip_yw_() {
 
 #[test]
 fn keytip_yx_() {
-    let mut h = harness(blank());
+    let mut h = harness(python_cell());
     sequence(&mut h, "YX", false);
     assert!(h.state().session.journal.iter().any(|(id, _)| id == "python.clearRunLog"), "YX must journal python.clearRunLog");
 }

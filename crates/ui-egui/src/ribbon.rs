@@ -305,6 +305,11 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
 
 const CONTEXTUAL_TABS: [&str; 3] = ["Table Design", "Chart Design", crate::paper_view::TAB];
 
+/// Whether a key tip can show this tab now: every tab can, except a contextual one that isn't up.
+pub(crate) fn tab_is_up(app: &SheetApp, tab: &str) -> bool {
+    !CONTEXTUAL_TABS.contains(&tab) || contextual_tabs(app).contains(&tab)
+}
+
 /// The contextual tabs showing now, left to right. They follow the regular tabs.
 pub fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     let mut v = Vec::new();
