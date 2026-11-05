@@ -532,6 +532,16 @@ impl Session {
         Ok(r.run_everything(d, fresh))
     }
 
+    /// Calculate Now (F9): Python cells marked stale run. Nothing happens where Python isn't running
+    /// or none is stale; F9 isn't a Python command, so it reports no error about Python.
+    pub(crate) fn python_calculate_now(&mut self) {
+        let Some(d) = self.docs.get(self.active) else { return };
+        let stale = d.wb.sheets.iter().any(|sh| sh.cells.iter().any(|(_, c)| c.py.as_deref().is_some_and(|py| py.stale)));
+        if stale {
+            let _ = self.python_run_all(false);
+        }
+    }
+
     /// Brings the list up to date for a command that asks cells to run. A worker that failed to
     /// start gets another try.
     fn python_ready_to_run(&mut self) -> Result<()> {

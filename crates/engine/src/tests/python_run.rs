@@ -1390,3 +1390,28 @@ fn code_that_differs_only_in_what_its_references_spell_still_runs() {
     settle(&mut s);
     assert_eq!(v(&s, "C1"), NUM(6.0));
 }
+
+/// F9 is how a person runs waiting cells under manual calculation, as in Excel.
+#[test]
+fn calculate_now_runs_python_cells_that_wait() {
+    let (mut s, h) = session();
+    set(&mut s, "A1", "1");
+    py(&mut s, "C1", "say xl(\"A1\")");
+    settle(&mut s);
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    set(&mut s, "A1", "5");
+    settle(&mut s);
+    assert_eq!(diagnostic(&s, "C1"), Some("state.stale"));
+    assert_eq!(v(&s, "C1"), NUM(1.0));
+    let before = runs(&h).len();
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "C1"), NUM(5.0));
+    assert_eq!(diagnostic(&s, "C1"), None);
+    assert!(runs(&h).len() > before);
+    // With nothing waiting, F9 runs nothing.
+    let before = runs(&h).len();
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(runs(&h).len(), before);
+}
