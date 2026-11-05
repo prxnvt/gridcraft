@@ -2186,6 +2186,7 @@ version = "0.16.0"
 dependencies = [
  "landlock",
  "libc",
+ "nix",
  "seccompiler",
  "thiserror 2.0.21",
 ]

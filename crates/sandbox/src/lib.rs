@@ -6,8 +6,9 @@
 //! runs the application itself again with [`LAUNCH_FLAG`]; the application hands its arguments to
 //! [`handle_args`] before anything else, and the launcher:
 //!
-//! 1. refuses when a descriptor besides standard input, output and error is open: the confinement
-//!    doesn't revoke what is already open;
+//! 1. closes every descriptor besides standard input, output and error, and refuses if one stays
+//!    open: the confinement doesn't revoke what is already open, and an app's system libraries leave
+//!    files open that a child inherits;
 //! 2. confines itself: on Linux with Landlock (read-only access to the policy's paths, execute
 //!    access only to its programs, no writes) and seccomp (no new processes, no sockets, none of
 //!    the calls that escape or inspect a sandbox); on macOS it runs itself again under
@@ -21,8 +22,8 @@
 //! [`REFUSED_EXIT_CODE`]. Other platforms (Windows, FreeBSD, the web) have no confinement here:
 //! [`support`] says so and [`launch_command`] refuses, so callers show `#BLOCKED!`.
 //!
-//! The crate has no `unsafe` code: the system calls sit behind the `landlock` and `seccompiler`
-//! crates on Linux, and behind `/usr/bin/sandbox-exec` on macOS.
+//! The crate has no `unsafe` code: the system calls sit behind the `landlock`, `seccompiler` and
+//! `nix` crates, and behind `/usr/bin/sandbox-exec` on macOS.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -130,8 +131,8 @@ pub fn handle_args(args: &[OsString]) -> Option<i32> {
 fn launch(args: &[OsString]) -> Result<std::convert::Infallible> {
     // First, before the launcher opens anything itself. On macOS this is also before the sandbox:
     // under a deny-by-default profile the system's libraries hold a socket of their own, which
-    // closes at `exec` and which safe code can't tell from one that was inherited.
-    no_inherited_descriptors()?;
+    // closes at `exec` and which must not be taken for an inherited one.
+    close_inherited_descriptors()?;
     let (checked, _) = policy::Checked::from_args(args)?;
     platform::confine(&checked, args)?;
     confined(args)
@@ -180,33 +181,45 @@ mod unsupported {
     }
 }
 
-/// Refuses the launch when a descriptor besides standard input, output and error is open: one the
-/// parent leaked (a file outside the policy, a connected socket) would survive `exec`, and the
-/// confinement doesn't revoke what is already open. Only the listing's own directory descriptor
-/// may be there. A listing that can't be read refuses too.
+/// Closes every descriptor besides standard input, output and error, and refuses the launch if one
+/// stays open or the list can't be read. One left open (a file outside the policy, a connected
+/// socket) would survive `exec`, and the confinement doesn't revoke what is already open. Refusing
+/// alone wouldn't do: in a desktop app the system's own libraries (Metal's shader cache on macOS)
+/// leave files open without close-on-exec, and they reach every child.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn no_inherited_descriptors() -> Result<()> {
+fn close_inherited_descriptors() -> Result<()> {
+    for fd in descriptors_above_stdio()? {
+        // The listing's own descriptor is on the list and is closed already; that error is fine.
+        let _ = nix::unistd::close(fd);
+    }
+    let left = descriptors_above_stdio()?;
+    // The second listing holds its own directory open, so one above stdio is expected.
+    if left.len() > 1 {
+        return Err(SandboxError::NotEnforced(format!("descriptors other than standard input, output and error stayed open ({left:?})")));
+    }
+    Ok(())
+}
+
+/// The open descriptors above standard error, the listing's own included.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn descriptors_above_stdio() -> Result<Vec<i32>> {
     let dir = if cfg!(target_os = "linux") { "/proc/self/fd" } else { "/dev/fd" };
     let listing = std::fs::read_dir(dir).map_err(|e| SandboxError::NotEnforced(format!("can't list open descriptors ({dir}): {e}")))?;
     let mut above_stdio = Vec::new();
     for entry in listing {
         let entry = entry.map_err(|e| SandboxError::NotEnforced(format!("can't list open descriptors ({dir}): {e}")))?;
-        match entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) {
+        match entry.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) {
             Some(fd) if fd > 2 => above_stdio.push(fd),
             Some(_) => {}
             None => return Err(SandboxError::NotEnforced(format!("unexpected entry in {dir}"))),
         }
     }
-    // The listing holds its own directory open, so one descriptor above stdio is expected.
-    if above_stdio.len() > 1 {
-        above_stdio.sort_unstable();
-        return Err(SandboxError::NotEnforced(format!("descriptors other than standard input, output and error are open ({above_stdio:?})")));
-    }
-    Ok(())
+    above_stdio.sort_unstable();
+    Ok(above_stdio)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn no_inherited_descriptors() -> Result<()> {
+fn close_inherited_descriptors() -> Result<()> {
     Ok(())
 }
 

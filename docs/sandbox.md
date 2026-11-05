@@ -29,8 +29,8 @@ other programs. The sandbox's job is that it can do none of these:
 
 Data reaches the code only through its command-line arguments (which the parent chooses), its
 standard input and output (which the parent holds), and the files its policy lets it read. Nothing
-else is open: a descriptor left open by the parent stops the launch, because the confinement
-doesn't revoke what is already open. The
+else is open: the launcher closes every descriptor it inherited, because the confinement doesn't
+revoke what is already open. The
 program inherits no environment: the launcher clears it and keeps only the locale and time zone
 (`LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`), with `PATH` set to `/usr/bin:/bin`, so tokens and credentials
 in the parent's environment don't reach it.
@@ -46,12 +46,13 @@ use the CPU while it runs.
    the application's own executable again, with `--sandbox-launch` and the policy.
 2. The application hands its arguments to `gridcraft_sandbox::handle_args` before anything else,
    so a launcher run opens no window and writes no log.
-3. The launcher lists its open descriptors and refuses when any besides standard input, output and
-   error is open.
+3. The launcher closes every open descriptor besides standard input, output and error, and refuses
+   if one stays open. A desktop app's system libraries (Metal's shader cache on macOS) leave files
+   open without close-on-exec, so these reach every child. `nix` holds the system call.
 4. The launcher confines itself (Linux) or runs itself again under `sandbox-exec` with the profile
-   (macOS, `--sandbox-confined`). On macOS the descriptors are checked first because, under a
-   deny-by-default profile, the system's libraries hold a close-on-exec socket of their own that
-   safe code can't tell from an inherited one.
+   (macOS, `--sandbox-confined`). On macOS the descriptors are closed first because, under a
+   deny-by-default profile, the system's libraries hold a close-on-exec socket of their own, which
+   must not be taken for an inherited one.
 5. **The enforcement check.** Before the program runs, each of these must be refused by the
    system with a permission error:
    - reading the canary;

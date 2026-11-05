@@ -190,25 +190,27 @@ fn a_confined_program_inherits_no_secrets() {
     assert!(out.contains("PATH=/usr/bin:/bin"), "{out}");
 }
 
-/// A descriptor the parent leaves open (here fd 3, opened by a shell on a file outside any
-/// policy) would survive `exec` with access the sandbox doesn't revoke, so the launcher refuses
-/// before the program runs, on Linux as on macOS.
+/// A descriptor the parent leaves open (here fd 9, opened by a shell on a file outside any policy)
+/// would survive `exec` with access the sandbox doesn't revoke, so the launcher closes it: the
+/// program runs, and can't read through it. (A desktop app's system libraries leave such files open,
+/// so refusing to run would block Python there.)
 #[test]
-fn an_inherited_descriptor_stops_the_launch() {
+fn an_inherited_descriptor_never_reaches_the_program() {
     if !confines() {
         return;
     }
     let outside = scratch("leak");
     let leaked = outside.join("allowed.txt").to_string_lossy().into_owned();
-    let echo = if Path::new("/bin/echo").exists() { "/bin/echo" } else { "/usr/bin/echo" };
     let cli = env!("CARGO_BIN_EXE_gridcraft-cli");
-    // `sandbox-check` builds a full policy; the shell opens fd 3 (not close-on-exec) and then
-    // becomes the command, which inherits it.
-    let script = format!("exec 3<'{leaked}'; exec '{cli}' sandbox-check -- '{echo}' 'the program ran'");
+    // The shell opens fd 9 (not close-on-exec) and then becomes the command, which inherits it. The
+    // confined shell then tries to read through it, with a built-in: starting `cat` is refused. Not
+    // fd 3: on macOS the system's libraries hold a socket of their own there under the sandbox.
+    let bash = if cfg!(target_os = "macos") { "--exec /bin/bash" } else { "" };
+    let program = "read line <&9 && echo \"leaked: $line\"; echo finished";
+    let script = format!("exec 9<'{leaked}'; exec '{cli}' sandbox-check {bash} -- /bin/sh -c '{program}'");
     let o = Command::new("/bin/sh").args(["-c", &script]).output().unwrap();
     let out = text(&o);
-    assert!(!o.status.success(), "{out}");
-    assert!(!String::from_utf8_lossy(&o.stdout).contains("the program ran"), "{out}");
-    assert!(out.contains("descriptors other than standard input, output and error are open"), "{out}");
+    assert!(out.contains("finished"), "the program ran:\n{out}");
+    assert!(!out.contains("leaked:"), "the program read through the descriptor:\n{out}");
     std::fs::remove_dir_all(outside).unwrap();
 }
