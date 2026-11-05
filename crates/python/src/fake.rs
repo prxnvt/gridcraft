@@ -88,6 +88,12 @@ impl FakeTransport {
     pub fn handle(&self) -> FakeHandle {
         FakeHandle { starts: self.starts.clone(), rss: self.rss.clone(), seen: self.seen.clone() }
     }
+
+    /// Another transport with the same script and counters, for a caller that makes one per
+    /// workbook.
+    pub fn sharing(&self) -> FakeTransport {
+        FakeTransport { script: self.script.clone(), starts: self.starts.clone(), rss: self.rss.clone(), seen: self.seen.clone(), current: None }
+    }
 }
 
 impl Transport for FakeTransport {

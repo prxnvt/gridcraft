@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (`python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -20,7 +20,7 @@ including tests, 2026-10-10.
 | L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings, protection |
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
-| L0 | `sandbox` | ~0.6k | Confined launcher for helper processes: Landlock and seccomp on Linux, `sandbox-exec` on macOS, refused elsewhere; checks the confinement before the program runs ([sandbox.md](sandbox.md)); used only by the apps |
+| L0 | `sandbox` | ~0.6k | Confined launcher for helper processes: Landlock and seccomp on Linux, `sandbox-exec` on macOS, refused elsewhere; checks the confinement before the program runs ([sandbox.md](sandbox.md)); used by the `python` crate and the apps |
 | L2 | `python` | ~1k | Python in cells: the JSON-lines protocol between GridCraft and the worker that runs the user's Python, with a cap on every field, and the limits, outcomes and transport trait a client uses; starts no process; depends only on `core` |
 | L2 | `python` | ~2.1k | Python in cells: interpreter detection, the worker shim (`shim.py`, the one non-Rust source file, run by the user's Python), the JSON-lines protocol with its caps, the limits and outcomes of a request, and the process launch (not in the web build); depends only on `core` |
 | L2 | `python` | ~3.1k | Python in cells, off wasm (the web build has a stand-in that reports Python as unavailable): interpreter detection, the worker shim (`shim.py`, the one non-Rust source file, run by the user's Python), the JSON-lines protocol with its caps, the client with deadlines and kills, the process launch and a fake worker for tests; depends only on `core` |
@@ -182,9 +182,9 @@ through the same code as a formula's. The xlsx reader and writer map Python cell
 `_xlfn._xlws.PY(index,n)` formulas with cached values and the workbook's Python part, which holds
 the code (`xlsx::python_part`, [MS-XLSX] 2.3.10); `io::adopt_python` and `io::enforce_python_limits`
 bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
-size). This build runs no Python: `python.set` stores code, and new or changed code shows
-`#BLOCKED!`. `python.output` switches a cell's return type; as with a new return type through `python.set`,
-a cached result of the old type goes, so the cell shows `#BLOCKED!` until it runs. `python.clear`
+size). `python.set` stores code; where Python doesn't run (see Running Python cells below) new or
+changed code shows `#BLOCKED!`. `python.output` switches a cell's return type; as with a new return type through `python.set`,
+a cached result of the old type goes, so the cell has no result until it runs. `python.clear`
 (Convert to Normal Cell) removes the code and keeps the cell's value; the values its result spilled
 become plain values (`Sheet::settle_spill`). A Python-only error (`#BLOCKED!`, `#BUSY!`,
 `#PYTHON!`, `#TIMEOUT!`) is no result and no ordinary cell's value, so a cell that shows one is left
@@ -229,6 +229,60 @@ windows, where each window draws the app with its own workbook active, the edito
 its workbook's window (`PyWindow::window`), and a question or an opening brings that window
 forward.
 
+## Running Python cells
+
+The engine can run Python cells; the app doesn't turn that on yet. `engine::python` needs a
+`PythonCapability` from `Session::set_python_capability`, a setter for the app, and no app calls it
+and no interface offers it, so today only tests run cells: the app, the CLI and MCP all behave as a
+session without one, where cells keep their saved values or show `#BLOCKED!` and the commands that
+run cells say why not. No command, control method, preference or file content can give a capability
+or choose the interpreter (`no_command_turns_python_on_or_chooses_an_interpreter` walks the command
+catalog). A workbook made in the app is on when the capability is; one opened from a file is off
+until `Session::set_python_workbook_enabled` turns it on, and Python code pasted from a file turns a
+workbook off again, even one the person had turned on, as other content from a file only changes its
+`Trust`.
+
+Nothing blocks the caller. A command only marks what is due, at the end of the outermost `execute`;
+`Session::python_poll`, called each frame, takes at most one finished result, writes it through the
+normal commit path with no undo step, recalculates and submits the next cell. Each open workbook has
+one `Client`, made when first needed and dropped with the workbook, which stops its worker.
+
+- **Order.** `python_order`: sheets in tab order, each row by row, as in Excel.
+- **What is due** (`python/plan.rs`). The run state is a list of cells in run order. After a change
+  it is updated from `CellStore::diff` and the spill maps, so a workbook without Python cells pays
+  for comparing the bands the edit touched. Each cell has a fingerprint of its code, return type
+  and inputs, and the one it last ran with; the first cell where they differ, or whose place in the
+  order is new, is due, with every cell after it, since cells share variables. The hash leaves out
+  what a reference spells and where the values are, so moving cells around runs nothing. Only a
+  reference the change reaches is read again, and an area several cells read is read once.
+- **Busy and stale.** `PyCode::busy` (never saved) makes a due cell show `#BUSY!` through any
+  recalculation while its kept result, and what that result spilled, stay; a save writes the kept
+  result. `PyCode::failed` (never saved) keeps the error of a run that left no result, for the same
+  wait. Under manual calculation (`python.calculation`, or the workbook's own manual mode) due
+  cells are marked stale instead, and keep their value until `python.run` or `python.runAll`.
+- **Inputs** (`python/inputs.rs`). Each literal `xl("…")` is resolved by the parent as a formula's
+  reference would be (`calc::evaluate_reference`): cells, ranges, a spill, other sheets, names and
+  tables; a range running to the sheet's edge stops at the used range. Over
+  `protocol::MAX_ARRAY_CELLS` cells in all, or with a reference that names nothing, the cell doesn't
+  run (`#PYTHON!` with `xl.tooLarge`, `#REF!` with `xl.badReference`).
+- **Workers** (`python/runner.rs`). A cell only runs in a worker that has run every cell before it, so
+  a fresh worker runs those first. A cell that stopped its worker (a limit, a crash, `python.stop`)
+  doesn't run again until its code or inputs change or someone asks. After more than three lost
+  workers in one go the cells still waiting are left stale. A result that changes what an earlier cell
+  reads sends that cell back to run, for eight passes at most; past that those cells stay as they are,
+  marked stale, so cells that feed each other end. On such a pass a cell shows `#BUSY!` only when its
+  turn comes, and until then reads as what it last gave, so a formula over a later cell gives the
+  earlier one its result rather than `#BUSY!`. A worker that doesn't start is tried three more
+  times, as a thread starting another process can leak a descriptor that makes the launcher refuse.
+- **What is said.** `Session::python_diagnostic` gives one diagnostic per cell, from the catalog in
+  `gridcraft_python::diagnostics`; `python.diagnostics` lists them. Each workbook keeps its last 200
+  runs (`python.runLog`), with printed output cut to 64 KiB.
+- **The environment** (`python/environment.rs`). `Session::python_environment` reports the state,
+  the sandbox, uv, the interpreter and the packages. Working it out starts Python, so it runs on a
+  thread of its own; `python_poll` picks up the answer, and it runs again when the capability changes
+  and on `python.refreshEnvironment`. While it is out, due cells wait showing `#BUSY!`. On the web and
+  on systems without a sandbox the answer, `blocked.platform`, is there at once.
+
 ## Sandbox
 
 `crates/sandbox` runs a helper process confined. The parent spawns `launch_command`, which runs the
@@ -239,7 +293,7 @@ already runs confined (macOS: `sandbox-exec` with a deny-by-default profile buil
 then must be refused reading the canary, writing, a TCP connection and starting a process before
 it `exec`s the program; otherwise it exits with code 97 and the program never runs. Other systems
 report `Support::Unsupported`. The crate has no `unsafe` code (the system calls are behind the
-`landlock` and `seccompiler` crates) and nothing calls it in production yet.
+`landlock` and `seccompiler` crates). `gridcraft_python::process` runs cells' workers through it.
 `gridcraft-cli sandbox-check` runs the same checks on a machine. Details: [sandbox.md](sandbox.md).
 
 ## Equations
@@ -256,7 +310,7 @@ so a file with thousands of equations opens in bounded time. The equation editor
 only other callers, through the same guarded entry points. The gate that admitted RaTeX is
 recorded in [`decisions.md`](decisions.md) and re-run by `crates/math/tests/gate.rs`.
 
-`gridcraft-python` (L2, used by no other crate) holds the worker. `interp` finds an interpreter:
+`gridcraft-python` (L2, used by the engine and the CLI) holds the worker. `interp` finds an interpreter:
 `$VIRTUAL_ENV/bin`, `$CONDA_PREFIX/bin`, then `python3` and `python` on `PATH`, absolute paths to
 existing files only, Python 3.11 or newer, each asked its version with `<python> -I -S -E -c
 <script>` under a deadline and a bounded read. `process::ProcessTransport` starts `<python> -I -S -E
@@ -303,6 +357,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | The engine runs Python cells: `engine::python`, `PythonCapability`, `python_poll` and the commands that run and report; `PyCode::busy`; `calc::evaluate_reference`. The app doesn't turn it on yet |
 | 2026-11-02 | minor | `python.clear` (Convert to Normal Cell) and `cmd::python::clear_refusal` |
 | 2026-11-02 | minor | Python cells in the interface: `python_card.rs` (PY tags, the card, the return-type items) and `python.output` |
 | 2026-11-02 | minor | Python mode: `xl()` pointing through the shared point mode (`EditState::can_point`, `insert_ref`, `editor::python_xl`) |

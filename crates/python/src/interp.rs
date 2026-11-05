@@ -40,6 +40,9 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Bytes a version probe may print.
 #[cfg(not(target_arch = "wasm32"))]
 const PROBE_BYTES: usize = 64;
+/// A cell's code that lists what is installed in the interpreter that runs it, as rows of name and
+/// version: run through the confined worker, so it sees what cells see.
+pub const LIST_PACKAGES: &str = "import importlib.metadata as m\nsorted(([d.metadata['Name'] or '', d.version or ''] for d in m.distributions()), key=lambda r: r[0].lower()) or None";
 /// The probe's script: the version, on a Python that may be too old for anything newer.
 pub const VERSION_SCRIPT: &str = "import sys; sys.stdout.write('%d.%d.%d\\n' % tuple(sys.version_info[:3]))";
 

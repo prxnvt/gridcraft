@@ -161,3 +161,11 @@ rejected without changing earlier settings. `ui.printSubmit` explicitly submits 
 print-ready PDF without opening a dialog; inspect `ui.printSettings` until `busy` becomes false
 and check `status`/`detail`. The browser keeps its own print hook. PDF export remains separate.
 GridCraft accepts the existing `file.print` sheet/pagination params on `ui.printSubmit`; the engine `file.print` command returns the PDF without spooling.
+
+## Python cells
+
+`engine.execute` reaches the `python.*` commands: `python.set`, `python.run`, `python.runAll`,
+`python.stop`, `python.reset`, `python.calculation`, `python.diagnostics`, `python.runLog`,
+`python.environment` and `python.refreshEnvironment`. None opens a dialog. Python runs only in a session
+the app gave the capability, which no method here can give, and no method can choose the interpreter;
+the app doesn't give it yet, so these commands report that Python doesn't run here.

@@ -9,7 +9,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, trust (local|fromFile), history", has_doc, inspect),
         cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool} → rows of values", has_doc, read),
-        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link, python {code, output, typeName, preview, stale}", has_doc, cell_get),
+        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link, python {code, output, typeName, preview, stale, busy}", has_doc, cell_get),
         cmd!(query "selection.stats", "Selection Statistics", [], None, "{} → count, sum, average, min, max", has_doc, sel_stats),
         cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels, grouping (an undo group is open)", has_doc, history),
         cmd!(query "app.commands", "List Commands", [], None, "{search?} → ids, labels, params", always, list_commands),
@@ -143,6 +143,7 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
             "typeName": py.output.as_ref().map(|o| o.type_name.as_str()),
             "preview": py.output.as_ref().map(|o| o.preview.as_str()),
             "stale": py.stale,
+            "busy": py.busy,
         })),
     }))
 }

@@ -49,6 +49,9 @@ pub const MAX_TYPE_NAME_BYTES: usize = 256;
 pub const MAX_PREVIEW_CHARS: usize = 255;
 /// Bytes of printed output kept per run.
 pub const MAX_STDOUT_BYTES: usize = 1024 * 1024;
+/// What the worker puts at the end of printed output it cut at [`MAX_STDOUT_BYTES`] (`shim.py`
+/// writes the same text).
+pub const OUTPUT_CUT: &str = "\n[output cut off]\n";
 /// Cells in one array.
 pub const MAX_ARRAY_CELLS: usize = 1_000_000;
 /// Bytes in the self-test's detail.

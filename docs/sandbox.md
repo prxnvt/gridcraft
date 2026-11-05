@@ -1,11 +1,12 @@
 # The sandbox for helper processes
 
-> **Last updated:** 2026-11-04 · **Change:** major (first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
+> **Last updated:** 2026-11-05 · **Change:** minor (the engine runs Python cells through the sandbox, when the app turns that on; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
 
 The sandbox is the layer GridCraft is to run code it doesn't trust in, such as a workbook's
-Python cells: a separate process that confines itself before the code starts. Nothing uses it yet:
-this version of GridCraft doesn't run Python cells, and no production code calls the `sandbox`
-crate (`crates/sandbox`, layer 0). This page describes what the confinement denies, how it is
+Python cells: a separate process that confines itself before the code starts. The engine runs
+Python cells through it, once the app gives a session the capability; the app doesn't do that yet
+([architecture.md](architecture.md), Running Python cells). The crate is `crates/sandbox`, layer 0.
+This page describes what the confinement denies, how it is
 checked, and where it is available.
 
 ## Threat model

@@ -19,6 +19,7 @@
 
 pub mod diagnostics;
 pub mod interp;
+mod interpreter;
 pub mod lint;
 pub mod protocol;
 pub mod run;
@@ -31,6 +32,11 @@ pub mod client;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod describe;
+/// The web build finds no interpreter, and only has the types.
+#[cfg(target_arch = "wasm32")]
+pub mod describe {
+    pub use crate::interpreter::{Interpreter, Kind};
+}
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fake;
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,3 +48,18 @@ pub use run::{Busy, Limits, Outcome, RunResult, Transport};
 
 /// Whether this build can run Python at all (the web build can't).
 pub const AVAILABLE: bool = cfg!(not(target_arch = "wasm32"));
+
+/// Whether this system can confine a worker: what provides the sandbox, or why there is none.
+pub fn sandbox_support() -> Result<String, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match gridcraft_sandbox::support() {
+            gridcraft_sandbox::Support::Available(how) => Ok(how),
+            gridcraft_sandbox::Support::Unsupported(why) => Err(why),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Err("the web version has no sandbox".into())
+    }
+}

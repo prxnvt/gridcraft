@@ -32,13 +32,21 @@ pub struct PyCode {
     /// The cell's inputs changed while calculation was manual: its value is out of date until
     /// the workbook is calculated.
     pub stale: bool,
+    /// The cell is waiting to run or running: it shows `#BUSY!` while its kept result, and what that
+    /// result spilled, stay until the new one arrives. A state of this session, never saved.
+    #[serde(skip)]
+    pub busy: bool,
+    /// The error its last run ended with, when that run left no result: what it reads as, and shows
+    /// again, while it waits for another run. A state of this session, never saved.
+    #[serde(skip)]
+    pub failed: Option<CellError>,
 }
 
 /// A Python result kept on the cell.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PyOutput {
-    /// The result as cells (an array spills), or its preview as text when it has no cell form.
+    /// The result as cells (an array spills); a result with no cell form shows its type's name.
     pub value: Value,
     /// Python's name for the result's type.
     pub type_name: String,
