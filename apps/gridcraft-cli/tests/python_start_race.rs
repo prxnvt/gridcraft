@@ -1,6 +1,6 @@
-//! Workers started at the same moment on many threads, each with a memory watcher, all pass the
-//! launcher's check of what they inherited. In a test program of its own: a process another test
-//! starts outside the worker crate could still leak a descriptor to a launcher.
+//! Workers started at the same moment on many threads, each with a memory watcher: a process
+//! started on another thread can inherit a pipe in the moment before it is close-on-exec, and the
+//! launcher closes it instead of being stopped by it.
 
 use std::collections::BTreeMap;
 

@@ -26,9 +26,8 @@ const LOCAL_PER_POLL: usize = 32;
 /// How many workers one go may lose before the cells still waiting are left stale: every lost
 /// worker makes the cells before it run again.
 const MAX_REPLAYS: u32 = 3;
-/// How many times a cell tries again when its worker doesn't start. The launcher refuses when a
-/// descriptor it inherited is open, and a thread starting another process at that moment can leak
-/// one to it; that passes on the next try, and what doesn't pass is answered a moment later.
+/// How many times a cell tries again when its worker doesn't start: a passing failure gets past
+/// it, and what doesn't pass is answered a moment later.
 pub(super) const START_RETRIES: u32 = 3;
 
 /// The request a worker is running.
