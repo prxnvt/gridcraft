@@ -622,6 +622,120 @@ pub fn code_editor_marked(ui: &mut Ui, id: egui::Id, text: &mut String, lang: La
     response.unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()))
 }
 
+/// How serious a mark in the code is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkLevel {
+    Error,
+    Warning,
+    Info,
+}
+
+/// A place in the code to point at: a wavy underline on the span, with a tooltip, and a mark beside
+/// its line in the gutter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mark {
+    /// Char indices into the text. A mark worked out before this frame's edit lands a little off
+    /// for one frame, and can't split a character.
+    pub chars: Range<usize>,
+    /// The 1-based line of its start.
+    pub line: u32,
+    pub level: MarkLevel,
+    pub tip: String,
+}
+
+fn mark_color(level: MarkLevel, t: &Tokens) -> egui::Color32 {
+    match level {
+        MarkLevel::Error => t.danger,
+        MarkLevel::Warning => t.warning,
+        MarkLevel::Info => t.text_dim,
+    }
+}
+
+/// Paints the wavy underline of `mark`, on each row it crosses, when it is in view.
+fn paint_mark(painter: &egui::Painter, galley: &egui::Galley, galley_pos: egui::Pos2, clip: egui::Rect, mark: &Mark, color: egui::Color32) {
+    let end = mark.chars.end.max(mark.chars.start.saturating_add(1));
+    let first = galley.pos_from_cursor(CCursor::new(mark.chars.start)).translate(galley_pos.to_vec2());
+    let last = galley.pos_from_cursor(CCursor::new(end)).translate(galley_pos.to_vec2());
+    if last.bottom() < clip.top() || first.top() > clip.bottom() {
+        return;
+    }
+    if (first.top() - last.top()).abs() < 1.0 {
+        paint_wave(painter, first.left(), last.right(), first.bottom(), color);
+        return;
+    }
+    for row in &galley.rows {
+        let rect = row.rect().translate(galley_pos.to_vec2());
+        if rect.bottom() < first.top() || rect.top() > last.bottom() {
+            continue;
+        }
+        let from = if rect.top() <= first.top() { first.left() } else { rect.left() };
+        let to = if rect.bottom() >= last.bottom() { last.right() } else { rect.right() };
+        paint_wave(painter, from, to, rect.bottom(), color);
+    }
+}
+
+/// A wavy line from `from` to `to`, its peaks at `y`.
+fn paint_wave(painter: &egui::Painter, from: f32, to: f32, y: f32, color: egui::Color32) {
+    const STEP: f32 = 2.5;
+    let to = to.max(from + STEP * 2.0);
+    let steps = ((to - from) / STEP).ceil() as usize;
+    let points = (0..=steps)
+        .map(|i| {
+            let x = (from + i as f32 * STEP).min(to);
+            egui::pos2(x, if i % 2 == 0 { y } else { y - 2.0 })
+        })
+        .collect();
+    painter.add(egui::epaint::PathShape::line(points, egui::epaint::PathStroke::new(1.0, color)));
+}
+
+/// The mark under `pos` in the text, if any.
+fn mark_at<'a>(marks: &'a [Mark], galley: &egui::Galley, galley_pos: egui::Pos2, pos: egui::Pos2) -> Option<&'a Mark> {
+    if marks.is_empty() {
+        return None;
+    }
+    let at: usize = galley.cursor_from_pos(pos - galley_pos).index.into();
+    marks.iter().find(|m| m.chars.contains(&at))
+}
+
+/// A mark beside each line that has one, the worst kind first, with its tips on hover. Only the rows
+/// in view.
+fn paint_gutter_marks(ui: &Ui, id: egui::Id, laid: (&egui::Galley, egui::Pos2), clip: egui::Rect, left: f32, marks: &[Mark], t: &Tokens) {
+    let (galley, galley_pos) = laid;
+    if marks.is_empty() {
+        return;
+    }
+    let painter = ui.painter();
+    for_each_visible_line(galley, galley_pos, clip, |line, rect| {
+        let here: Vec<&Mark> = marks.iter().filter(|m| m.line == u32::try_from(line).unwrap_or(u32::MAX)).collect();
+        if here.is_empty() {
+            return;
+        }
+        let tips: Vec<&str> = here.iter().map(|m| m.tip.as_str()).collect();
+        let worst = here.iter().map(|m| m.level).fold(MarkLevel::Info, |a, b| match (a, b) {
+            (MarkLevel::Error, _) | (_, MarkLevel::Error) => MarkLevel::Error,
+            (MarkLevel::Warning, _) | (_, MarkLevel::Warning) => MarkLevel::Warning,
+            _ => MarkLevel::Info,
+        });
+        let center = egui::pos2(left + MARK_ROOM / 2.0, rect.center().y);
+        let color = mark_color(worst, t);
+        match worst {
+            MarkLevel::Error => {
+                painter.circle_filled(center, 3.5, color);
+            }
+            MarkLevel::Warning => {
+                let points = vec![center + egui::vec2(0.0, -4.0), center + egui::vec2(4.0, 3.5), center + egui::vec2(-4.0, 3.5)];
+                painter.add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+            }
+            MarkLevel::Info => {
+                painter.circle_stroke(center, 3.0, egui::Stroke::new(1.0, color));
+            }
+        }
+        let area = egui::Rect::from_center_size(center, egui::vec2(MARK_ROOM, rect.height()));
+        let hover = ui.interact(area, id.with(("gutter_mark", line)), egui::Sense::hover());
+        hover.on_hover_text(tips.join("\n"));
+    });
+}
+
 /// How a [`code_field`] is laid out, and the keys its caller takes.
 pub struct FieldOptions<'a> {
     pub lang: Lang,
@@ -649,6 +763,9 @@ pub struct FieldOptions<'a> {
     pub name: &'a str,
     /// A byte range underlined in the error colour (see [`underline`]).
     pub mark: Option<Range<usize>>,
+    /// Places to point at in the code, each with a wavy underline and a tooltip, and in a gutter a
+    /// mark beside its line.
+    pub marks: &'a [Mark],
 }
 
 impl FieldOptions<'_> {
@@ -668,6 +785,7 @@ impl FieldOptions<'_> {
             // strings unless the caller gives one.
             name: "Code Editor",
             mark: None,
+            marks: &[],
         }
     }
 }
@@ -778,12 +896,16 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
                     let caret = out.galley.pos_from_cursor(CCursor::new(e.caret)).translate(out.galley_pos.to_vec2());
                     ui.scroll_to_rect(caret, None);
                 }
+                let clip = ui.clip_rect();
+                for mark in options.marks {
+                    paint_mark(ui.painter(), &out.galley, out.galley_pos, clip, mark, mark_color(mark.level, &t));
+                }
                 if gutter > 0.0 {
                     let right = gutter_left + gutter - GUTTER_GAP;
                     let rule = egui::Stroke::new(1.0, t.separator);
-                    let clip = ui.clip_rect();
                     ui.painter().vline(right + GUTTER_GAP / 2.0, clip.y_range(), rule);
                     paint_line_numbers(ui.painter(), &out.galley, out.galley_pos, clip, right, &font, t.text_dim);
+                    paint_gutter_marks(ui, id, (&out.galley, out.galley_pos), clip, gutter_left, options.marks, &t);
                 }
                 out
             })
@@ -808,6 +930,9 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
     if edited.is_some() {
         response.mark_changed();
     }
+    if let Some(mark) = response.hover_pos().and_then(|pos| mark_at(options.marks, &out.galley, out.galley_pos, pos)) {
+        response = response.on_hover_text_at_pointer(mark.tip.as_str());
+    }
     let selection = out.cursor_range.map(|r| (r.primary.index.into(), r.secondary.index.into())).unwrap_or((count, count));
     let caret = out
         .cursor_range
@@ -819,6 +944,8 @@ pub fn code_field(ui: &mut Ui, id: egui::Id, text: &mut String, options: &FieldO
 
 /// Space between the line numbers and the code, with the gutter's rule in the middle.
 const GUTTER_GAP: f32 = 10.0;
+/// Space in the gutter for the marks beside the line numbers.
+const MARK_ROOM: f32 = 11.0;
 
 /// Lines of `text`: one more than its line breaks.
 pub fn line_count(text: &str) -> usize {
@@ -831,11 +958,11 @@ pub fn gutter_digits(lines: usize) -> usize {
 }
 
 /// The width of a line-number gutter for `lines` lines: as many digits of the code font as the
-/// last line's number has, a margin, and the gap before the code. It grows when the number of
-/// lines gains a digit (10, 100, 1000).
+/// last line's number has, room for a mark, and the gap before the code. It grows when the number
+/// of lines gains a digit (10, 100, 1000).
 pub fn gutter_width(ui: &Ui, lines: usize) -> f32 {
     let digit = ui.fonts_mut(|f| f.glyph_width(&font(), '0'));
-    digit * gutter_digits(lines) as f32 + 6.0 + GUTTER_GAP
+    digit * gutter_digits(lines) as f32 + MARK_ROOM + GUTTER_GAP
 }
 
 /// Paints line numbers right-aligned at `right`, beside `galley` laid out at `galley_pos`: one per
@@ -850,6 +977,14 @@ pub fn paint_line_numbers(
     font: &FontId,
     color: egui::Color32,
 ) {
+    for_each_visible_line(galley, galley_pos, clip, |line, rect| {
+        painter.text(egui::pos2(right, rect.top()), egui::Align2::RIGHT_TOP, line.to_string(), font.clone(), color);
+    });
+}
+
+/// Calls `f` with the 1-based number and the first row's rect of each line of `galley` in view. The
+/// work is the rows in view, and a count of the line breaks above them.
+fn for_each_visible_line(galley: &egui::Galley, galley_pos: egui::Pos2, clip: egui::Rect, mut f: impl FnMut(usize, egui::Rect)) {
     // Rows are in order from the top: skip the ones above the view without laying anything out.
     let first = galley.rows.partition_point(|row| galley_pos.y + row.rect().max.y < clip.top());
     let mut line = galley.rows.iter().take(first).filter(|row| row.ends_with_newline).count().saturating_add(1);
@@ -860,7 +995,7 @@ pub fn paint_line_numbers(
             break;
         }
         if starts_line {
-            painter.text(egui::pos2(right, rect.top()), egui::Align2::RIGHT_TOP, line.to_string(), font.clone(), color);
+            f(line, rect);
             line = line.saturating_add(1);
         }
         starts_line = row.ends_with_newline;
