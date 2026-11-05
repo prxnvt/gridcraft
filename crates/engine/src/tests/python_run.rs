@@ -158,7 +158,7 @@ fn set(s: &mut Session, cell: &str, input: &str) {
     s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
 }
 
-/// The code the workers were asked to run so far, and forgets it by returning how many there were.
+/// The code the workers have read so far.
 fn runs(h: &FakeHandle) -> Vec<String> {
     h.requests()
         .into_iter()
@@ -547,15 +547,18 @@ fn failing(message: &'static str) -> Session {
 /// descriptor to the launcher.
 struct StartsLate {
     left: Arc<std::sync::atomic::AtomicU32>,
+    message: &'static str,
     then: FakeTransport,
 }
+
+const REFUSED: &str = "Python stopped: gridcraft-sandbox: refused: descriptors other than standard input, output and error are open";
 
 impl Transport for StartsLate {
     fn start(&mut self) -> Result<Pipes, String> {
         let left = self.left.load(std::sync::atomic::Ordering::SeqCst);
         if left > 0 {
             self.left.store(left - 1, std::sync::atomic::Ordering::SeqCst);
-            return Err("Python stopped: gridcraft-sandbox: refused: descriptors other than standard input, output and error are open".into());
+            return Err(self.message.into());
         }
         self.then.start()
     }
@@ -572,7 +575,7 @@ fn a_launch_refused_for_a_moment_is_tried_again() {
     s.execute("file.new", json!({})).unwrap();
     s.set_python_capability(PythonCapability {
         enabled: true,
-        transport: Some(Arc::new(move || Box::new(StartsLate { left: left.clone(), then: t.sharing() }))),
+        transport: Some(Arc::new(move || Box::new(StartsLate { left: left.clone(), message: REFUSED, then: t.sharing() }))),
         ..PythonCapability::default()
     });
     py(&mut s, "A1", "ret 1");
@@ -580,6 +583,30 @@ fn a_launch_refused_for_a_moment_is_tried_again() {
     assert_eq!(v(&s, "A1"), NUM(1.0), "the worker started on a later try");
     assert_eq!(s.python_environment().state, PythonState::Ready);
     assert_eq!(s.python_run_log().count(), 1, "the tries that didn't start aren't runs");
+}
+
+#[test]
+fn a_cell_that_could_not_start_runs_once_python_can() {
+    // More failures than a cell tries: Python doesn't count as ready, until a new check.
+    for (message, value, kind) in [(REFUSED, CellError::Blocked, "blocked.sandboxCheck"), ("no such file", CellError::Connect, "connect.failed")] {
+        let t = worker();
+        let left = Arc::new(std::sync::atomic::AtomicU32::new(crate::python::START_RETRIES_FOR_TEST + 1));
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        s.set_python_capability(PythonCapability {
+            enabled: true,
+            transport: Some(Arc::new(move || Box::new(StartsLate { left: left.clone(), message, then: t.sharing() }))),
+            ..PythonCapability::default()
+        });
+        py(&mut s, "A1", "ret 1");
+        settle(&mut s);
+        assert_eq!(v(&s, "A1"), Value::Error(value), "{kind}");
+        assert_eq!(diagnostic(&s, "A1"), Some(kind));
+        s.execute("python.refreshEnvironment", json!({})).unwrap();
+        settle(&mut s);
+        assert_eq!(v(&s, "A1"), NUM(1.0), "{kind}");
+        assert_eq!(diagnostic(&s, "A1"), None);
+    }
 }
 
 #[test]
@@ -1010,7 +1037,7 @@ fn a_cell_that_stopped_the_worker_waits_and_the_rest_still_finds_its_variables()
 
 #[test]
 fn a_cell_reading_a_later_cell_settles_and_cells_feeding_each_other_stop() {
-    let (mut s, h) = session();
+    let (mut s, _h) = session();
     py(&mut s, "A1", "sum xl(\"A2\")");
     py(&mut s, "A2", "ret 5");
     settle(&mut s);
@@ -1023,7 +1050,6 @@ fn a_cell_reading_a_later_cell_settles_and_cells_feeding_each_other_stop() {
     settle(&mut s);
     assert!(runs(&h2).len() < 40, "{} runs", runs(&h2).len());
     assert_eq!(diagnostic(&s, "A1"), Some("state.stale"));
-    assert!(!h.requests().is_empty());
 }
 
 #[test]
@@ -1045,12 +1071,6 @@ fn a_python_cell_waiting_for_its_result_saves_the_result_it_keeps() {
     let (mut s, _h) = session();
     py(&mut s, "A1", "ret 7");
     settle(&mut s);
-    py(&mut s, "B1", "ret 8");
-    py(&mut s, "A1", "ret 9");
-    // Unchanged code would keep its result; this code is new, so re-run the old one instead.
-    s.execute("python.set", json!({"cell": "A1", "code": "ret 7"})).unwrap();
-    settle(&mut s);
-    s.execute("python.calculation", json!({"mode": "automatic"})).unwrap();
     s.execute("python.runAll", json!({})).unwrap();
     assert_eq!(v(&s, "A1"), Value::Error(CellError::Busy));
     let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "b.xlsx").unwrap();

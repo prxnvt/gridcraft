@@ -453,6 +453,12 @@ impl DocRun {
         out.wrote |= self.plan(d, cx, Source::Result(flight.index), stats);
         self.give_up_after_losses();
         out.wrote |= self.sync_flags(d);
+        // It didn't run: it is due when Python can run again.
+        if out.env_problem.is_some()
+            && let Some(e) = self.entries.get_mut(flight.index)
+        {
+            e.ran = None;
+        }
         out
     }
 
