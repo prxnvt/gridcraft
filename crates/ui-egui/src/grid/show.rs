@@ -416,6 +416,7 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
             painter: &p,
             geo,
             workbook: wb,
+            session: &app.session,
             sheet_index: si,
             sheet: sh,
             rows: *rows,

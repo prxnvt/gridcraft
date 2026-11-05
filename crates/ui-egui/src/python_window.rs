@@ -958,6 +958,16 @@ fn update_checks(app: &mut SheetApp) {
     app.python.window_checks = checks;
 }
 
+/// The state of the window's cell, for its PY tag.
+fn tag_state(app: &SheetApp, w: &PyWindow) -> crate::python_card::TagState {
+    let d = app.session.active().filter(|d| d.uid == w.doc);
+    let shown = d.and_then(|d| {
+        let cell = d.wb.sheet(w.sheet)?.cell(w.cell)?;
+        cell.py.as_deref().map(|py| crate::python_card::tag_state(&app.session, w.sheet, w.cell, py, &cell.value))
+    });
+    shown.unwrap_or(crate::python_card::TagState::NotRunning)
+}
+
 /// The PY tag, the cell's address, its return type, the interpreter, whether there are unsaved
 /// changes, and Python's state.
 fn header(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
@@ -966,10 +976,11 @@ fn header(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let object = window_cell(app, w).is_some_and(|(_, object)| object);
     let address = w.address();
     let dirty = w.dirty();
+    let state = tag_state(app, w);
     let interpreter = app.session.python_report().interpreter.as_ref().map(|i| i.path.display().to_string());
     ui.horizontal(|ui| {
         let (tag, _) = ui.allocate_exact_size(vec2(22.0, 15.0), egui::Sense::hover());
-        crate::python_card::paint_tag(ui.painter(), tag, t);
+        crate::python_card::paint_tag(ui.painter(), tag, t, state);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             crate::python_ui::state_chip(app, ui);
             if dirty {

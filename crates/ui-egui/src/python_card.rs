@@ -3,9 +3,11 @@
 //! preview) or the reason it shows `#BLOCKED!`, and Convert to Normal Cell (`python.clear`) on the
 //! card and the cell menu.
 
-use egui::{Align2, FontId, Painter, Rect, pos2, vec2};
+use egui::{Align2, FontId, Painter, Rect, Stroke, pos2, vec2};
+use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellError, CellRef, Value};
 use gridcraft_engine::model::{PyCode, Sheet, VAlign, Workbook};
+use gridcraft_engine::python::Severity;
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
@@ -50,11 +52,85 @@ pub fn tag_rect(rect: Rect, left: f32, z: f32, v: VAlign) -> Option<Rect> {
     (h >= 6.0 && rect.right() - left >= w + 12.0 * z).then(|| Rect::from_min_size(pos2(left + 2.0 * z, top), vec2(w, h)))
 }
 
-/// Paints a PY tag. The sheet stays white in both themes, so the tag's colours follow it.
-pub fn paint_tag(p: &Painter, tag: Rect, t: &Tokens) {
-    p.rect_filled(tag, tag.height() * 0.2, t.sheet_py_tag);
-    let font = FontId::new((tag.height() * 0.72).max(4.0), theme::ui_bold(8.0).family);
-    p.text(tag.center(), Align2::CENTER_CENTER, "PY", font, t.on_sheet_py_tag);
+/// What a PY tag says about its cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TagState {
+    /// Its result is up to date.
+    Ready,
+    /// It is running or about to.
+    Running,
+    /// It keeps a value it didn't just work out: stale, stopped, or Python isn't on.
+    NotRunning,
+    Error,
+    /// Python can't run here at all.
+    Blocked,
+}
+
+/// The state of a Python cell. A few lookups, so it can be asked for every cell in view.
+pub fn tag_state(session: &Session, sheet: usize, cell: CellRef, py: &PyCode, value: &Value) -> TagState {
+    if py.busy {
+        return TagState::Running;
+    }
+    match session.python_diagnostic(sheet, cell).map(|d| d.kind) {
+        Some(k) if k.id == "state.busy" => TagState::Running,
+        Some(k) if k.id.starts_with("off.") || matches!(k.id, "state.stale" | "state.stopped") => TagState::NotRunning,
+        Some(k) if k.severity == Severity::Blocked => TagState::Blocked,
+        Some(k) if k.severity == Severity::Error => TagState::Error,
+        _ if py.stale || matches!(value, Value::Error(CellError::Blocked)) => TagState::NotRunning,
+        _ if matches!(value, Value::Error(CellError::Python | CellError::Timeout | CellError::Connect)) => TagState::Error,
+        _ => TagState::Ready,
+    }
+}
+
+/// Paints a PY tag. The sheet stays white in both themes, so the tag's colours follow it. Each state
+/// has a shape of its own: plain and filled when ready, hollow when not running, and with a mark
+/// beside a smaller PY when it runs (an open ring), failed (an exclamation mark) or is blocked (a
+/// lock). On a right-to-left sheet the shapes are mirrored with the rest of the cell.
+pub fn paint_tag(p: &Painter, tag: Rect, t: &Tokens, state: TagState) {
+    let h = tag.height();
+    let corner = h * 0.2;
+    let (fill, ink) = match state {
+        TagState::Ready | TagState::Running => (t.sheet_py_tag, t.on_sheet_py_tag),
+        TagState::NotRunning => (t.on_sheet_py_tag, t.sheet_py_tag),
+        TagState::Error => (t.sheet_py_tag_error, t.on_sheet_py_tag),
+        TagState::Blocked => (t.sheet_py_tag_blocked, t.on_sheet_py_tag),
+    };
+    p.rect_filled(tag, corner, fill);
+    if state == TagState::NotRunning {
+        p.rect_stroke(tag, corner, Stroke::new((h * 0.1).max(0.9), t.sheet_py_tag), egui::StrokeKind::Inside);
+    }
+    let family = theme::ui_bold(8.0).family;
+    if matches!(state, TagState::Ready | TagState::NotRunning) {
+        p.text(tag.center(), Align2::CENTER_CENTER, "PY", FontId::new((h * 0.72).max(4.0), family), ink);
+        return;
+    }
+    let text_at = pos2(tag.left() + tag.width() * 0.33, tag.center().y);
+    p.text(text_at, Align2::CENTER_CENTER, "PY", FontId::new((h * 0.6).max(4.0), family), ink);
+    let mark = pos2(tag.right() - tag.width() * 0.18, tag.center().y);
+    paint_tag_mark(p, mark, h, state, ink);
+}
+
+/// The mark of a tag that has one, centred on `c`.
+fn paint_tag_mark(p: &Painter, c: egui::Pos2, h: f32, state: TagState, ink: egui::Color32) {
+    let stroke = Stroke::new((h * 0.11).max(0.9), ink);
+    let arc = |c: egui::Pos2, r: f32, from: f32, to: f32| -> Vec<egui::Pos2> {
+        (0..=8).map(|i| from + (to - from) * i as f32 / 8.0).map(|a| c + vec2(r * a.cos(), r * a.sin())).collect()
+    };
+    match state {
+        TagState::Running => {
+            p.add(egui::epaint::PathShape::line(arc(c, h * 0.22, -1.2, 3.7), stroke));
+        }
+        TagState::Error => {
+            p.line_segment([c + vec2(0.0, -h * 0.3), c + vec2(0.0, h * 0.08)], stroke);
+            p.circle_filled(c + vec2(0.0, h * 0.27), (h * 0.075).max(0.7), ink);
+        }
+        TagState::Blocked => {
+            let body = Rect::from_center_size(c + vec2(0.0, h * 0.13), vec2(h * 0.42, h * 0.3));
+            p.rect_filled(body, h * 0.04, ink);
+            p.add(egui::epaint::PathShape::line(arc(c + vec2(0.0, -h * 0.03), h * 0.13, std::f32::consts::PI, std::f32::consts::TAU), stroke));
+        }
+        TagState::Ready | TagState::NotRunning => {}
+    }
 }
 
 /// The Python cell's area on the sheet: the cell, or the merged area it starts.
@@ -167,6 +243,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
     let refusal = gridcraft_engine::cmd::python::clear_refusal(&app.session, card.sheet, card.cell);
+    let state = app.session.active().and_then(|d| d.wb.sheet(card.sheet)).and_then(|sh| {
+        let cell = sh.cell(card.cell)?;
+        cell.py.as_deref().map(|py| tag_state(&app.session, card.sheet, card.cell, py, &cell.value))
+    });
     let mut convert = false;
     let (at, pivot) = if geo.rtl { (screen.right_bottom(), Align2::RIGHT_TOP) } else { (screen.left_bottom(), Align2::LEFT_TOP) };
     let mut close = false;
@@ -180,7 +260,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
             ui.set_width(360.0);
             ui.horizontal(|ui| {
                 let (tag, _) = ui.allocate_exact_size(vec2(22.0, 15.0), egui::Sense::hover());
-                paint_tag(ui.painter(), tag, &t);
+                paint_tag(ui.painter(), tag, &t, state.unwrap_or(TagState::Ready));
                 ui.label(egui::RichText::new(&text.title).font(theme::ui_bold(13.0)).color(t.text));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, lang.tr("Close"), vec2(18.0, 18.0)).clicked() {
