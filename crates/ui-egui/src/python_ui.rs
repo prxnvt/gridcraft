@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use egui::{Label, RichText, Ui};
+use egui::{Label, RichText, Sense, Ui};
 use gridcraft_engine::python::{
     self, Action, Diagnostic, Interpreter, InterpreterKind, Limits, MAX_TIMEOUT, MIN_VERSION, TransportFactory, pip_install_command,
     uv_install_commands, uv_setup_commands,
@@ -565,6 +565,31 @@ pub fn enable_bar(app: &mut SheetApp, ui: &mut Ui) {
     }
     if dismissed && let Some(uid) = app.session.active().map(|d| d.uid) {
         app.python.bar_dismissed.insert(uid);
+    }
+}
+
+/// The status bar's item: the state when Python is relevant here, and while a cell runs, the cell
+/// and how long it has run. A person with no Python cells and Python off sees nothing.
+pub fn status_item(app: &mut SheetApp, ui: &mut Ui) {
+    if !(app.ui.python.enabled || app.session.python_has_cells()) {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
+    let shown = state(app);
+    let text = match app.session.python_running() {
+        Some(r) => {
+            let cell = format!("{}!{}", gridcraft_engine::formula::quote_sheet(&r.sheet), r.cell.a1());
+            lang.tr("Python: running {cell}, {seconds} s").replace("{cell}", &cell).replace("{seconds}", &r.elapsed.as_secs().to_string())
+        }
+        None => lang.tr("Python: {state}").replace("{state}", lang.tr(state_label(shown))),
+    };
+    let tip = reason(app).map_or_else(|| lang.tr("Open the Python environment").to_string(), |d| sentence(lang, &d));
+    ui.add_space(12.0);
+    let color = if matches!(shown, PythonState::Blocked) { t.danger } else { t.text_dim };
+    let item = ui.add(Label::new(RichText::new(text).font(theme::ui_font(12.5)).color(color)).sense(Sense::click()).selectable(false));
+    if item.on_hover_text(tip).clicked() {
+        open_pane(app, ENVIRONMENT);
     }
 }
 
