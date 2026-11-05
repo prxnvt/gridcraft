@@ -503,6 +503,208 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "显示",
         "Collapse dialog" => "折叠对话框",
         "Expand dialog" => "展开对话框",
+        "Python|Off" => "关闭",
+        "Python|Not Set Up" => "未设置",
+        "Python|Ready" => "就绪",
+        "Python|Running" => "运行中",
+        "Python|Blocked" => "已阻止",
+        "Enable Python in cells" => "在单元格中启用 Python",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}，版本过旧：Python 单元格需要 3.11 或更高版本",
+        "Looking for Python…" => "正在查找 Python…",
+        "Copied to the clipboard." => "已复制到剪贴板。",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "此工作簿包含 Python 代码。启用后才能运行其单元格；在此之前，单元格保留文件中保存的值。"
+        }
+        "Enable" => "启用",
+        "Python: running {cell}, {seconds} s" => "Python：正在运行 {cell}，{seconds} 秒",
+        "Python: {state}" => "Python：{state}",
+        "Open the Python environment" => "打开 Python 环境",
+        "Nothing on this system: Python doesn't run here" => "此系统上没有可用项：Python 无法在此运行",
+        "GridCraft starts Python with an empty environment" => "GridCraft 使用空环境启动 Python",
+        "macOS sandbox profile" => "macOS 沙盒配置文件",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Linux seccomp 过滤器",
+        "Open Python Settings" => "打开 Python 设置",
+        "Choose Interpreter" => "选择解释器",
+        "Copy Install Command" => "复制安装命令",
+        "Run Again" => "重新运行",
+        "Reset" => "重置",
+        "Python Environment" => "Python 环境",
+        "Python Packages" => "Python 包",
+        "Python Problems" => "Python 问题",
+        "Python Run Log" => "Python 运行日志",
+        "What Python Can Do" => "Python 能做什么",
+        "GridCraft is checking Python." => "GridCraft 正在检查 Python。",
+        "Check Again" => "重新检查",
+        "Interpreter" => "解释器",
+        "Chosen by you:" => "由你选择：",
+        "Automatic found:" => "自动找到：",
+        "What runs:" => "运行的是：",
+        "None found yet." => "尚未找到。",
+        "Sandbox" => "沙盒",
+        "Package folders" => "包文件夹",
+        "What Python can read" => "Python 可读取的内容",
+        "uv manages Python versions and packages. To get it, run:" => "uv 用于管理 Python 版本和包。要获取它，请运行：",
+        "Reading files outside Python: blocked" => "读取 Python 以外的文件：已阻止",
+        "Writing files: blocked" => "写入文件：已阻止",
+        "Using the network: blocked" => "使用网络：已阻止",
+        "Starting other programs: blocked" => "启动其他程序：已阻止",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "每次启动 Python 时，GridCraft 会先逐项尝试这些限制，只要有一项被拒绝，就不会运行 Python。"
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "使用 uv 安装包。GridCraft 只复制命令；请在终端中运行，然后选择“重新检查”。"
+        }
+        "Package name" => "包名称",
+        "Other package managers" => "其他包管理器",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "适用于以其他方式管理 Python 的用户：可在 文件 › 选项 › Python 中按路径选择任意解释器。使用 pip："
+        }
+        "Packages: {count}" => "包：{count}",
+        "No problems." => "没有问题。",
+        "This workbook" => "此工作簿",
+        "No runs yet." => "尚无运行记录。",
+        "Go to Cell" => "转到单元格",
+        "This run printed nothing." => "本次运行没有打印任何内容。",
+        "Python cells can" => "Python 单元格可以",
+        "Read cells through xl()" => "通过 xl() 读取单元格",
+        "GridCraft sends only the cells that xl() names" => "GridCraft 只发送 xl() 指定的单元格",
+        "Import installed packages" => "导入已安装的包",
+        "The sandbox lets Python read its own installation" => "沙盒允许 Python 读取其自身的安装",
+        "Compute" => "计算",
+        "Within the time and memory limits in File › Options › Python" => "在 文件 › 选项 › Python 中设置的时间和内存限制内",
+        "Printed output is kept in the Run Log" => "打印的输出保存在运行日志中",
+        "Use threads" => "使用线程",
+        "Threads stay inside the one Python process" => "线程保留在同一个 Python 进程内",
+        "Python cells cannot" => "Python 单元格不能",
+        "Read your files" => "读取你的文件",
+        "Write files" => "写入文件",
+        "Use the network" => "使用网络",
+        "Start programs" => "启动程序",
+        "See environment variables" => "查看环境变量",
+        "Open windows" => "打开窗口",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => "绘制图表。数据会进入工作表，并据此生成图表。",
+        "Run this workbook's Python cells" => "运行此工作簿的 Python 单元格",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "默认关闭。只有你能在此处开启：任何文件、宏或代理都不能。从文件打开的工作簿还需要单独启用。"
+        }
+        "Limits" => "限制",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Python 关闭时，GridCraft 不会启动任何程序，因此暂时无法说明会使用哪个版本。"
+        }
+        "Automatic would try first:" => "自动将首先尝试：",
+        "Set up Python with uv" => "使用 uv 设置 Python",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "请在终端中按顺序运行这些命令。GridCraft 会先在此环境中查找，因此无需再选择。它只复制命令，从不运行。"
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "可通过“浏览…”按路径选择任何 3.11 或更高版本的 Python。要使用 pip 为其添加包："
+        }
+        "Time limit for one cell" => "单个单元格的时间限制",
+        " seconds" => " 秒",
+        "Memory limit" => "内存限制",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "达到限制时，Python 会重新启动并清除其变量；下次运行将重新开始。"
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => "在 macOS 上，内存限制是每秒检查两次，并非硬性上限。",
+        "Editor" => "编辑器",
+        "Initialization code isn't available yet" => "初始化代码暂不可用",
+        "Initialization" => "初始化",
+        "Select a Python cell first." => "请先选择一个 Python 单元格。",
+        "Output As" => "输出为",
+        "Run\nCell" => "运行\n单元格",
+        "Run the selected Python cell" => "运行所选的 Python 单元格",
+        "Run\nAll" => "运行\n全部",
+        "Run every Python cell in the workbook, in order" => "按顺序运行工作簿中的所有 Python 单元格",
+        "Nothing is running." => "当前没有正在运行的内容。",
+        "Stop the running cell" => "停止正在运行的单元格",
+        "Clear Python's variables and run every cell again" => "清除 Python 的变量并重新运行所有单元格",
+        "Python Calculation" => "Python 计算",
+        "When this workbook's Python cells run" => "此工作簿的 Python 单元格的运行时机",
+        "A Python cell is running." => "有 Python 单元格正在运行。",
+        "Python is ready." => "Python 已就绪。",
+        "Which Python runs cells" => "由哪个 Python 运行单元格",
+        "Packages" => "包",
+        "What this Python has installed" => "此 Python 已安装的内容",
+        "Check Sandbox" => "检查沙盒",
+        "Check Python and the sandbox again, and show the report" => "重新检查 Python 和沙盒，并显示报告",
+        "What Python\nCan Do" => "Python\n能做什么",
+        "What Python cells can and can't do here" => "此处 Python 单元格能做什么、不能做什么",
+        "This Workbook: Enabled" => "此工作簿：已启用",
+        "This Workbook: Disabled" => "此工作簿：已禁用",
+        "Only a person can change this." => "只有用户本人可以更改此项。",
+        "Run Log" => "运行日志",
+        "Each run's cell, time and printed output" => "每次运行的单元格、时间和打印输出",
+        "Clear the Run Log" => "清除运行日志",
+        "Problems" => "问题",
+        "Every Python cell with something to say" => "所有有提示信息的 Python 单元格",
+        "Diagnostics" => "诊断",
+        "uv environment" => "uv 环境",
+        "uv Python" => "uv Python",
+        "virtual environment" => "虚拟环境",
+        "conda environment" => "conda 环境",
+        "system" => "系统",
+        "Python cells need a sandbox, and GridCraft has none for this system." => "Python 单元格需要沙盒，而 GridCraft 在此系统上没有可用的沙盒。",
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => "GridCraft 检查时沙盒未能生效，因此 Python 不会运行。",
+        "Python is off. Turn it on in Settings to run Python cells." => "Python 已关闭。请在设置中开启以运行 Python 单元格。",
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft 找不到 Python 3.11 或更高版本。请使用 uv 设置一个，或自行选择。"
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "此 Python 版本过旧：Python 单元格需要 3.11 或更高版本。",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "这是 Apple 提供的 Python 占位程序，GridCraft 不使用它。请使用 uv 设置 Python，或选择其他解释器。"
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft 无法确定此 Python 运行所需的条件。",
+        "Python didn't start." => "Python 未能启动。",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => "此工作簿未启用 Python，其单元格保留文件中保存的值。",
+        "This session doesn't run Python: cells keep the values saved in the file." => "此会话不运行 Python：单元格保留文件中保存的值。",
+        "This workbook imports packages this Python doesn't have." => "此工作簿导入了此 Python 中没有的包。",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => "此 Python 中未安装 pandas，因此区域会以行列表的形式返回。",
+        "The initialization code failed, so Python cells can't run." => "初始化代码失败，因此 Python 单元格无法运行。",
+        "This code isn't valid Python." => "此代码不是有效的 Python。",
+        "The code raised an error." => "代码引发了错误。",
+        "The code uses a name that isn't defined." => "代码使用了未定义的名称。",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "此名称在后面的单元格中定义。Python 单元格按行顺序逐个工作表运行。"
+        }
+        "This Python doesn't have that package." => "此 Python 中没有该包。",
+        "This package needs a library outside what the sandbox lets Python read." => "此包需要沙盒允许 Python 读取范围之外的库。",
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Python 单元格无法读取或写入你计算机上的文件。请将数据放到工作表中，并用 xl() 读取。"
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Python 单元格无法使用网络。请将数据放到工作表中，并用 xl() 读取。"
+        }
+        "Python cells can't start other programs or processes." => "Python 单元格无法启动其他程序或进程。",
+        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
+            "Python 单元格不能绘制图表。请将数据返回到工作表，并据此创建图表。"
+        }
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => "xl() 的引用必须以文本形式写在代码中，例如 xl(\"A1:B5\")。",
+        "This range is too large to send to Python." => "此区域太大，无法发送给 Python。",
+        "xl() names something that isn't a cell, range, table or defined name here." => "xl() 指定的内容在此处不是单元格、区域、表格或已定义的名称。",
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "代码运行超出时间限制。Python 已重新启动，其变量已清除。"
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "代码超出内存限制。Python 已重新启动，其变量已清除。"
+        }
+        "The result is too large to bring back to the sheet." => "结果太大，无法带回工作表。",
+        "The printed output was cut off at its limit." => "打印的输出已在限制处被截断。",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => "Python 意外停止并已重新启动，其变量已清除。",
+        "The result is empty." => "结果为空。",
+        "The result needs cells that aren't empty." => "结果需要非空的单元格。",
+        "The result isn't a number a cell can hold." => "结果不是单元格可以容纳的数字。",
+        "This cell is running." => "此单元格正在运行。",
+        "What this cell reads has changed since it last ran." => "此单元格读取的内容自上次运行后已更改。",
+        "This cell was stopped before it finished." => "此单元格在完成前已停止。",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() 的引用必须以文本形式写出，例如 xl(\"A1:B5\")。无法读取计算得出的引用。"
+        }
+        "This module needs the network or other programs, which Python cells can't use." => "此模块需要网络或其他程序，而 Python 单元格无法使用。",
+        "This Python doesn't have this package." => "此 Python 中没有这个包。",
+        "Python cells can't open windows or ask for input." => "Python 单元格无法打开窗口或请求输入。",
+        "Python cells don't see your environment variables." => "Python 单元格看不到你的环境变量。",
         _ => return None,
     })
 }

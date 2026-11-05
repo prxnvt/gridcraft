@@ -502,6 +502,232 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Prikaži",
         "Collapse dialog" => "Skupi dijalog",
         "Expand dialog" => "Proširi dijalog",
+        "Python|Off" => "Isključeno",
+        "Python|Not Set Up" => "Nije podešeno",
+        "Python|Ready" => "Spremno",
+        "Python|Running" => "Radi",
+        "Python|Blocked" => "Blokirano",
+        "Enable Python in cells" => "Omogući Python u ćelijama",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, prestara: Python ćelije zahtevaju verziju 3.11 ili noviju",
+        "Looking for Python…" => "Traži se Python…",
+        "Copied to the clipboard." => "Kopirano u privremenu memoriju.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Ova radna sveska sadrži Python kod. Omogućite ga da biste pokrenuli njene ćelije; dotad zadržavaju vrednosti sačuvane u datoteci."
+        }
+        "Enable" => "Omogući",
+        "Python: running {cell}, {seconds} s" => "Python: pokreće se {cell}, {seconds} s",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Otvori Python okruženje",
+        "Nothing on this system: Python doesn't run here" => "Na ovom sistemu nema ničega: Python ovde ne radi",
+        "GridCraft starts Python with an empty environment" => "GridCraft pokreće Python sa praznim okruženjem",
+        "macOS sandbox profile" => "macOS sandbox profil",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Linux seccomp filter",
+        "Open Python Settings" => "Otvori Python podešavanja",
+        "Choose Interpreter" => "Izaberi interpreter",
+        "Copy Install Command" => "Kopiraj komandu za instalaciju",
+        "Run Again" => "Pokreni ponovo",
+        "Reset" => "Resetuj",
+        "Python Environment" => "Python okruženje",
+        "Python Packages" => "Python paketi",
+        "Python Problems" => "Python problemi",
+        "Python Run Log" => "Python dnevnik pokretanja",
+        "What Python Can Do" => "Šta Python može",
+        "GridCraft is checking Python." => "GridCraft proverava Python.",
+        "Check Again" => "Proveri ponovo",
+        "Interpreter" => "Interpreter",
+        "Chosen by you:" => "Vaš izbor:",
+        "Automatic found:" => "Automatski pronađeno:",
+        "What runs:" => "Šta se pokreće:",
+        "None found yet." => "Još ništa nije pronađeno.",
+        "Sandbox" => "Sandbox",
+        "Package folders" => "Fascikle paketa",
+        "What Python can read" => "Šta Python može da čita",
+        "uv manages Python versions and packages. To get it, run:" => "uv upravlja Python verzijama i paketima. Da biste ga dobili, pokrenite:",
+        "Reading files outside Python: blocked" => "Čitanje datoteka van Pythona: blokirano",
+        "Writing files: blocked" => "Pisanje datoteka: blokirano",
+        "Using the network: blocked" => "Korišćenje mreže: blokirano",
+        "Starting other programs: blocked" => "Pokretanje drugih programa: blokirano",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Pri svakom pokretanju Pythona GridCraft prvo pokuša svaku od ovih radnji i ne pokreće Python osim ako sve nisu odbijene."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Instalirajte paket pomoću uv. GridCraft samo kopira komandu; vi je pokrećete u terminalu, a zatim birate Proveri ponovo."
+        }
+        "Package name" => "Naziv paketa",
+        "Other package managers" => "Drugi menadžeri paketa",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Za one koji Python upravljaju na drugi način: izaberite bilo koji interpreter po putanji u Datoteka › Opcije › Python. Uz pip:"
+        }
+        "Packages: {count}" => "Paketi: {count}",
+        "No problems." => "Nema problema.",
+        "This workbook" => "Ova radna sveska",
+        "No runs yet." => "Još nema pokretanja.",
+        "Go to Cell" => "Idi na ćeliju",
+        "This run printed nothing." => "Ovo pokretanje nije ništa ispisalo.",
+        "Python cells can" => "Python ćelije mogu",
+        "Read cells through xl()" => "Čitati ćelije preko xl()",
+        "GridCraft sends only the cells that xl() names" => "GridCraft šalje samo ćelije koje xl() navodi",
+        "Import installed packages" => "Uvoziti instalirane pakete",
+        "The sandbox lets Python read its own installation" => "Sandbox dozvoljava Pythonu da čita sopstvenu instalaciju",
+        "Compute" => "Izračunavati",
+        "Within the time and memory limits in File › Options › Python" => "U okviru ograničenja vremena i memorije u Datoteka › Opcije › Python",
+        "Printed output is kept in the Run Log" => "Ispisani izlaz se čuva u dnevniku pokretanja",
+        "Use threads" => "Koristiti niti",
+        "Threads stay inside the one Python process" => "Niti ostaju unutar jednog Python procesa",
+        "Python cells cannot" => "Python ćelije ne mogu",
+        "Read your files" => "Čitati vaše datoteke",
+        "Write files" => "Pisati datoteke",
+        "Use the network" => "Koristiti mrežu",
+        "Start programs" => "Pokretati programe",
+        "See environment variables" => "Videti promenljive okruženja",
+        "Open windows" => "Otvarati prozore",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => "Crtati grafikone. Podaci idu na list, a iz njih se pravi grafikon.",
+        "Run this workbook's Python cells" => "Pokreni Python ćelije ove radne sveske",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "Podrazumevano isključeno. Samo vi to možete uključiti, ovde: nijedna datoteka, makro ni agent ne može. Radna sveska otvorena iz datoteke takođe treba sopstveno Omogući."
+        }
+        "Limits" => "Ograničenja",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Dok je Python isključen, GridCraft ništa ne pokreće, pa još ne može reći koju bi verziju koristio."
+        }
+        "Automatic would try first:" => "Automatski bi prvo pokušao:",
+        "Set up Python with uv" => "Podesi Python pomoću uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Pokrenite ove komande u terminalu, redom. GridCraft prvo traži u ovom okruženju, pa ne treba ništa više birati. On samo kopira komande, nikada ih ne pokreće."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Bilo koji Python 3.11 ili noviji može se izabrati po putanji preko Pregledaj…. Da mu dodate pakete pomoću pip:"
+        }
+        "Time limit for one cell" => "Vremensko ograničenje za jednu ćeliju",
+        " seconds" => " sekundi",
+        "Memory limit" => "Ograničenje memorije",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "Pri dostizanju ograničenja Python se ponovo pokreće i njegove promenljive se brišu; sledeće pokretanje počinje iznova."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "Na macOS-u se ograničenje memorije proverava dvaput u sekundi i nije tvrda granica."
+        }
+        "Editor" => "Uređivač",
+        "Initialization code isn't available yet" => "Kod za inicijalizaciju još nije dostupan",
+        "Initialization" => "Inicijalizacija",
+        "Select a Python cell first." => "Prvo izaberite Python ćeliju.",
+        "Output As" => "Izlaz kao",
+        "Run\nCell" => "Pokreni\nćeliju",
+        "Run the selected Python cell" => "Pokreni izabranu Python ćeliju",
+        "Run\nAll" => "Pokreni\nsve",
+        "Run every Python cell in the workbook, in order" => "Pokreni sve Python ćelije u radnoj svesci, redom",
+        "Nothing is running." => "Ništa ne radi.",
+        "Stop the running cell" => "Zaustavi ćeliju koja radi",
+        "Clear Python's variables and run every cell again" => "Obriši promenljive Pythona i ponovo pokreni sve ćelije",
+        "Python Calculation" => "Python izračunavanje",
+        "When this workbook's Python cells run" => "Kada se pokreću Python ćelije ove radne sveske",
+        "A Python cell is running." => "Python ćelija radi.",
+        "Python is ready." => "Python je spreman.",
+        "Which Python runs cells" => "Koji Python pokreće ćelije",
+        "Packages" => "Paketi",
+        "What this Python has installed" => "Šta je instalirano u ovom Pythonu",
+        "Check Sandbox" => "Proveri sandbox",
+        "Check Python and the sandbox again, and show the report" => "Ponovo proveri Python i sandbox i prikaži izveštaj",
+        "What Python\nCan Do" => "Šta Python\nmože",
+        "What Python cells can and can't do here" => "Šta Python ćelije ovde mogu i ne mogu",
+        "This Workbook: Enabled" => "Ova radna sveska: omogućeno",
+        "This Workbook: Disabled" => "Ova radna sveska: onemogućeno",
+        "Only a person can change this." => "Samo osoba može ovo da promeni.",
+        "Run Log" => "Dnevnik pokretanja",
+        "Each run's cell, time and printed output" => "Ćelija, vreme i ispisani izlaz svakog pokretanja",
+        "Clear the Run Log" => "Obriši dnevnik pokretanja",
+        "Problems" => "Problemi",
+        "Every Python cell with something to say" => "Svaka Python ćelija sa nekom porukom",
+        "Diagnostics" => "Dijagnostika",
+        "uv environment" => "uv okruženje",
+        "uv Python" => "uv Python",
+        "virtual environment" => "virtuelno okruženje",
+        "conda environment" => "conda okruženje",
+        "system" => "sistem",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Python ćelijama je potreban sandbox, a GridCraft ga nema za ovaj sistem."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "Sandbox nije izdržao proveru GridCraft-a, pa se Python neće pokrenuti."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => {
+            "Python je isključen. Uključite ga u Podešavanjima da biste pokretali Python ćelije."
+        }
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft ne može da pronađe Python 3.11 ili noviji. Podesite ga pomoću uv ili izaberite neki."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "Ovaj Python je prestar: Python ćelije zahtevaju verziju 3.11 ili noviju.",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Ovo je Appleov rezervisani Python, koji GridCraft ne koristi. Podesite Python pomoću uv ili izaberite drugi."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft nije mogao da utvrdi šta ovom Pythonu treba za pokretanje.",
+        "Python didn't start." => "Python se nije pokrenuo.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Python nije uključen za ovu radnu svesku, pa njene ćelije zadržavaju vrednosti sačuvane u datoteci."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Ova sesija ne pokreće Python: ćelije zadržavaju vrednosti sačuvane u datoteci."
+        }
+        "This workbook imports packages this Python doesn't have." => "Ova radna sveska uvozi pakete koje ovaj Python nema.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "pandas nije instaliran u ovom Pythonu, pa se opsezi vraćaju kao liste redova."
+        }
+        "The initialization code failed, so Python cells can't run." => "Kod za inicijalizaciju nije uspeo, pa Python ćelije ne mogu da rade.",
+        "This code isn't valid Python." => "Ovaj kod nije važeći Python.",
+        "The code raised an error." => "Kod je izazvao grešku.",
+        "The code uses a name that isn't defined." => "Kod koristi ime koje nije definisano.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Ovo ime je definisano u kasnijoj ćeliji. Python ćelije se pokreću redom po redovima, list po list."
+        }
+        "This Python doesn't have that package." => "Ovaj Python nema taj paket.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Ovom paketu treba biblioteka van onoga što sandbox dozvoljava Pythonu da čita."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Python ćelije ne mogu da čitaju ili pišu datoteke na vašem računaru. Stavite podatke na list i pročitajte ih pomoću xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Python ćelije ne mogu da koriste mrežu. Stavite podatke na list i pročitajte ih pomoću xl()."
+        }
+        "Python cells can't start other programs or processes." => "Python ćelije ne mogu da pokreću druge programe ili procese.",
+        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
+            "Python ćelije ne crtaju grafikone. Vratite podatke na list i napravite grafikon od njih."
+        }
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() zahteva da njegova referenca bude upisana kao tekst u kodu, na primer xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Ovaj opseg je prevelik za slanje u Python.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() navodi nešto što ovde nije ćelija, opseg, tabela ni definisano ime."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "Kod je prekoračio vremensko ograničenje. Python je ponovo pokrenut, pa su njegove promenljive obrisane."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "Kod je prekoračio ograničenje memorije. Python je ponovo pokrenut, pa su njegove promenljive obrisane."
+        }
+        "The result is too large to bring back to the sheet." => "Rezultat je prevelik da bi se vratio na list.",
+        "The printed output was cut off at its limit." => "Ispisani izlaz je odsečen na ograničenju.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python se neočekivano zaustavio i ponovo je pokrenut, pa su njegove promenljive obrisane."
+        }
+        "The result is empty." => "Rezultat je prazan.",
+        "The result needs cells that aren't empty." => "Rezultatu trebaju ćelije koje nisu prazne.",
+        "The result isn't a number a cell can hold." => "Rezultat nije broj koji ćelija može da sadrži.",
+        "This cell is running." => "Ova ćelija radi.",
+        "What this cell reads has changed since it last ran." => "Ono što ova ćelija čita promenilo se od njenog poslednjeg pokretanja.",
+        "This cell was stopped before it finished." => "Ova ćelija je zaustavljena pre nego što je završila.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() zahteva da njegova referenca bude upisana kao tekst, na primer xl(\"A1:B5\"). Izračunata referenca se ne može pročitati."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Ovom modulu trebaju mreža ili drugi programi, koje Python ćelije ne mogu da koriste."
+        }
+        "This Python doesn't have this package." => "Ovaj Python nema ovaj paket.",
+        "Python cells can't open windows or ask for input." => "Python ćelije ne mogu da otvaraju prozore niti da traže unos.",
+        "Python cells don't see your environment variables." => "Python ćelije ne vide vaše promenljive okruženja.",
         _ => return None,
     })
 }

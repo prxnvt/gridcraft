@@ -462,7 +462,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Quarterly Sales Dashboard" => "Quarterly Sales Dashboard",
         "Gradebook" => "Gradebook",
         "this workbook" => "this workbook",
-        "This workbook" => "This workbook",
+        "This workbook" => "Ця книга",
         "Do you want to save the changes you made to {title}?" => "Do you want to save the changes you made to {title}?",
         "Save a copy as .{format}" => "Save a copy as .{format}",
         "Select a chart first." => "Select a chart first.",
@@ -658,7 +658,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "In-cell dropdown" => "In-cell dropdown",
         "Input message:" => "Input message:",
         "Error style" => "Error style",
-        "Stop" => "Stop",
+        "Stop" => "Зупинити",
         "Warning" => "Warning",
         "Information" => "Information",
         "Error message:" => "Error message:",
@@ -904,7 +904,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Comments pane" => "Comments pane",
         "Convert the last ink stroke to a shape" => "Convert the last ink stroke to a shape",
         "Convert to Range" => "Convert to Range",
-        "Copy" => "Copy",
+        "Copy" => "Копіювати",
         "Custom Sort" => "Custom Sort",
         "Cut" => "Cut",
         "Define Name…" => "Define Name…",
@@ -1033,6 +1033,235 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показати",
         "Collapse dialog" => "Згорнути діалогове вікно",
         "Expand dialog" => "Розгорнути діалогове вікно",
+        "Python|Off" => "Вимкнено",
+        "Python|Not Set Up" => "Не налаштовано",
+        "Python|Ready" => "Готово",
+        "Python|Running" => "Виконується",
+        "Python|Blocked" => "Заблоковано",
+        "Enable Python in cells" => "Увімкнути Python у клітинках",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, надто стара: клітинкам Python потрібна версія 3.11 або новіша",
+        "Looking for Python…" => "Пошук Python…",
+        "Copied to the clipboard." => "Скопійовано до буфера обміну.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Ця книга містить код Python. Увімкніть його, щоб виконувати клітинки; доти вони зберігають значення з файлу."
+        }
+        "Enable" => "Увімкнути",
+        "Python: running {cell}, {seconds} s" => "Python: виконується {cell}, {seconds} с",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Відкрити середовище Python",
+        "Nothing on this system: Python doesn't run here" => "У цій системі нічого немає: Python тут не працює",
+        "GridCraft starts Python with an empty environment" => "GridCraft запускає Python з порожнім середовищем",
+        "macOS sandbox profile" => "Профіль пісочниці macOS",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Фільтр Linux seccomp",
+        "Open Python Settings" => "Відкрити параметри Python",
+        "Choose Interpreter" => "Вибрати інтерпретатор",
+        "Copy Install Command" => "Копіювати команду встановлення",
+        "Run Again" => "Виконати знову",
+        "Reset" => "Скинути",
+        "Python Environment" => "Середовище Python",
+        "Python Packages" => "Пакети Python",
+        "Python Problems" => "Проблеми Python",
+        "Python Run Log" => "Журнал виконання Python",
+        "What Python Can Do" => "Що вміє Python",
+        "GridCraft is checking Python." => "GridCraft перевіряє Python.",
+        "Check Again" => "Перевірити знову",
+        "Interpreter" => "Інтерпретатор",
+        "Chosen by you:" => "Вибрано вами:",
+        "Automatic found:" => "Знайдено автоматично:",
+        "What runs:" => "Що виконується:",
+        "None found yet." => "Поки нічого не знайдено.",
+        "Sandbox" => "Пісочниця",
+        "Package folders" => "Теки пакетів",
+        "What Python can read" => "Що Python може читати",
+        "uv manages Python versions and packages. To get it, run:" => "uv керує версіями та пакетами Python. Щоб отримати його, виконайте:",
+        "Reading files outside Python: blocked" => "Читання файлів поза Python: заблоковано",
+        "Writing files: blocked" => "Запис файлів: заблоковано",
+        "Using the network: blocked" => "Використання мережі: заблоковано",
+        "Starting other programs: blocked" => "Запуск інших програм: заблоковано",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Під час кожного запуску Python GridCraft спочатку пробує кожну з цих дій і не запускає Python, якщо не відхилено всі."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Встановіть пакет за допомогою uv. GridCraft лише копіює команду; ви виконуєте її в терміналі, а потім вибираєте Перевірити знову."
+        }
+        "Package name" => "Назва пакета",
+        "Other package managers" => "Інші менеджери пакетів",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Для тих, хто керує Python інакше: виберіть будь-який інтерпретатор за шляхом у Файл › Параметри › Python. За допомогою pip:"
+        }
+        "Packages: {count}" => "Пакетів: {count}",
+        "No problems." => "Проблем немає.",
+        "No runs yet." => "Запусків поки немає.",
+        "Go to Cell" => "Перейти до клітинки",
+        "This run printed nothing." => "Цей запуск нічого не вивів.",
+        "Python cells can" => "Клітинки Python можуть",
+        "Read cells through xl()" => "Читати клітинки через xl()",
+        "GridCraft sends only the cells that xl() names" => "GridCraft надсилає лише клітинки, названі в xl()",
+        "Import installed packages" => "Імпортувати встановлені пакети",
+        "The sandbox lets Python read its own installation" => "Пісочниця дозволяє Python читати власне встановлення",
+        "Compute" => "Обчислювати",
+        "Within the time and memory limits in File › Options › Python" => "У межах обмежень часу та пам’яті у Файл › Параметри › Python",
+        "Printed output is kept in the Run Log" => "Виведений текст зберігається в журналі виконання",
+        "Use threads" => "Використовувати потоки",
+        "Threads stay inside the one Python process" => "Потоки залишаються в межах одного процесу Python",
+        "Python cells cannot" => "Клітинки Python не можуть",
+        "Read your files" => "Читати ваші файли",
+        "Write files" => "Записувати файли",
+        "Use the network" => "Використовувати мережу",
+        "Start programs" => "Запускати програми",
+        "See environment variables" => "Бачити змінні середовища",
+        "Open windows" => "Відкривати вікна",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "Будувати графіки. Дані потрапляють на аркуш, і з них створюється діаграма."
+        }
+        "Run this workbook's Python cells" => "Виконувати клітинки Python цієї книги",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "За замовчуванням вимкнено. Увімкнути це можете лише ви, тут: жоден файл, макрос чи агент не може. Книзі, відкритій із файлу, також потрібне власне Увімкнути."
+        }
+        "Limits" => "Обмеження",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Поки Python вимкнено, GridCraft нічого не запускає, тому ще не може сказати, яку версію використав би."
+        }
+        "Automatic would try first:" => "Автоматично спочатку спробує:",
+        "Set up Python with uv" => "Налаштувати Python за допомогою uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Виконайте ці команди в терміналі по черзі. GridCraft спершу шукає в цьому середовищі, тож більше нічого вибирати не потрібно. Він лише копіює команди і ніколи їх не виконує."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Будь-який Python 3.11 або новіший можна вибрати за шляхом через Огляд…. Щоб додати до нього пакети за допомогою pip:"
+        }
+        "Time limit for one cell" => "Обмеження часу для однієї клітинки",
+        " seconds" => " секунд",
+        "Memory limit" => "Обмеження пам’яті",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "Після досягнення обмеження Python перезапускається, а його змінні очищуються; наступний запуск починається заново."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "У macOS обмеження пам’яті перевіряється двічі на секунду і не є жорсткою межею."
+        }
+        "Editor" => "Редактор",
+        "Initialization code isn't available yet" => "Код ініціалізації поки недоступний",
+        "Initialization" => "Ініціалізація",
+        "Select a Python cell first." => "Спочатку виберіть клітинку Python.",
+        "Output As" => "Вивід як",
+        "Run\nCell" => "Виконати\nклітинку",
+        "Run the selected Python cell" => "Виконати вибрану клітинку Python",
+        "Run\nAll" => "Виконати\nвсе",
+        "Run every Python cell in the workbook, in order" => "Виконати всі клітинки Python у книзі по черзі",
+        "Nothing is running." => "Нічого не виконується.",
+        "Stop the running cell" => "Зупинити клітинку, що виконується",
+        "Clear Python's variables and run every cell again" => "Очистити змінні Python і знову виконати всі клітинки",
+        "Python Calculation" => "Обчислення Python",
+        "When this workbook's Python cells run" => "Коли виконуються клітинки Python цієї книги",
+        "A Python cell is running." => "Клітинка Python виконується.",
+        "Python is ready." => "Python готовий.",
+        "Which Python runs cells" => "Який Python виконує клітинки",
+        "Packages" => "Пакети",
+        "What this Python has installed" => "Що встановлено в цьому Python",
+        "Check Sandbox" => "Перевірити пісочницю",
+        "Check Python and the sandbox again, and show the report" => "Знову перевірити Python і пісочницю та показати звіт",
+        "What Python\nCan Do" => "Що вміє\nPython",
+        "What Python cells can and can't do here" => "Що клітинки Python можуть і чого не можуть тут",
+        "This Workbook: Enabled" => "Ця книга: увімкнено",
+        "This Workbook: Disabled" => "Ця книга: вимкнено",
+        "Only a person can change this." => "Змінити це може лише людина.",
+        "Run Log" => "Журнал виконання",
+        "Each run's cell, time and printed output" => "Клітинка, час і виведений текст кожного запуску",
+        "Clear the Run Log" => "Очистити журнал виконання",
+        "Problems" => "Проблеми",
+        "Every Python cell with something to say" => "Кожна клітинка Python, про яку є повідомлення",
+        "Diagnostics" => "Діагностика",
+        "uv environment" => "середовище uv",
+        "uv Python" => "Python uv",
+        "virtual environment" => "віртуальне середовище",
+        "conda environment" => "середовище conda",
+        "system" => "система",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Клітинкам Python потрібна пісочниця, а GridCraft не має її для цієї системи."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "Пісочниця не витримала перевірку GridCraft, тому Python не буде запущено."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => {
+            "Python вимкнено. Увімкніть його в Параметрах, щоб виконувати клітинки Python."
+        }
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft не знаходить Python 3.11 або новіший. Налаштуйте його за допомогою uv або виберіть."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "Цей Python надто старий: клітинкам Python потрібна версія 3.11 або новіша.",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Це заглушка Python від Apple, яку GridCraft не використовує. Налаштуйте Python за допомогою uv або виберіть інший."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft не зміг визначити, що потрібно цьому Python для запуску.",
+        "Python didn't start." => "Python не запустився.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Python не ввімкнено для цієї книги, тому її клітинки зберігають значення з файлу."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Цей сеанс не виконує Python: клітинки зберігають значення з файлу."
+        }
+        "This workbook imports packages this Python doesn't have." => "Ця книга імпортує пакети, яких немає в цьому Python.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "pandas не встановлено в цьому Python, тому діапазони повертаються як списки рядків."
+        }
+        "The initialization code failed, so Python cells can't run." => {
+            "Код ініціалізації завершився помилкою, тому клітинки Python не можуть виконуватися."
+        }
+        "This code isn't valid Python." => "Цей код не є дійсним кодом Python.",
+        "The code raised an error." => "Код викликав помилку.",
+        "The code uses a name that isn't defined." => "Код використовує невизначене ім’я.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Це ім’я визначено в пізнішій клітинці. Клітинки Python виконуються за порядком рядків, аркуш за аркушем."
+        }
+        "This Python doesn't have that package." => "У цьому Python немає такого пакета.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Цьому пакету потрібна бібліотека поза тим, що пісочниця дозволяє читати Python."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Клітинки Python не можуть читати й записувати файли на вашому комп’ютері. Помістіть дані на аркуш і прочитайте їх через xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Клітинки Python не можуть використовувати мережу. Помістіть дані на аркуш і прочитайте їх через xl()."
+        }
+        "Python cells can't start other programs or processes." => "Клітинки Python не можуть запускати інші програми та процеси.",
+        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
+            "Клітинки Python не будують графіки. Поверніть дані на аркуш і створіть з них діаграму."
+        }
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() потрібне посилання, записане в коді як текст, наприклад xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Цей діапазон надто великий для надсилання до Python.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() називає те, що тут не є клітинкою, діапазоном, таблицею чи визначеним іменем."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "Код перевищив обмеження часу. Python перезапущено, тому його змінні очищено."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "Код перевищив обмеження пам’яті. Python перезапущено, тому його змінні очищено."
+        }
+        "The result is too large to bring back to the sheet." => "Результат надто великий, щоб повернути його на аркуш.",
+        "The printed output was cut off at its limit." => "Виведений текст обрізано за обмеженням.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python несподівано зупинився й був перезапущений, тому його змінні очищено."
+        }
+        "The result is empty." => "Результат порожній.",
+        "The result needs cells that aren't empty." => "Результату потрібні непорожні клітинки.",
+        "The result isn't a number a cell can hold." => "Результат не є числом, яке може зберігати клітинка.",
+        "This cell is running." => "Ця клітинка виконується.",
+        "What this cell reads has changed since it last ran." => "Те, що читає ця клітинка, змінилося з її останнього виконання.",
+        "This cell was stopped before it finished." => "Цю клітинку було зупинено до завершення.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() потрібне посилання, записане як текст, наприклад xl(\"A1:B5\"). Обчислюване посилання прочитати не можна."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Цьому модулю потрібні мережа або інші програми, які клітинки Python використовувати не можуть."
+        }
+        "This Python doesn't have this package." => "У цьому Python немає цього пакета.",
+        "Python cells can't open windows or ask for input." => "Клітинки Python не можуть відкривати вікна й запитувати ввід.",
+        "Python cells don't see your environment variables." => "Клітинки Python не бачать ваші змінні середовища.",
         _ => return None,
     })
 }

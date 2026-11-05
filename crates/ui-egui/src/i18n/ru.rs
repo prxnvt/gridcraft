@@ -515,6 +515,234 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+        "Python|Off" => "Выключен",
+        "Python|Not Set Up" => "Не настроен",
+        "Python|Ready" => "Готов",
+        "Python|Running" => "Выполняется",
+        "Python|Blocked" => "Заблокирован",
+        "Enable Python in cells" => "Включить Python в ячейках",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, слишком старая: ячейкам Python нужна версия 3.11 или новее",
+        "Looking for Python…" => "Поиск Python…",
+        "Copied to the clipboard." => "Скопировано в буфер обмена.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "В этой книге есть код Python. Включите его, чтобы выполнять ячейки; до этого они сохраняют значения из файла."
+        }
+        "Enable" => "Включить",
+        "Python: running {cell}, {seconds} s" => "Python: выполняется {cell}, {seconds} с",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Открыть среду Python",
+        "Nothing on this system: Python doesn't run here" => "В этой системе ничего нет: Python здесь не работает",
+        "GridCraft starts Python with an empty environment" => "GridCraft запускает Python с пустым окружением",
+        "macOS sandbox profile" => "Профиль песочницы macOS",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Фильтр Linux seccomp",
+        "Open Python Settings" => "Открыть параметры Python",
+        "Choose Interpreter" => "Выбрать интерпретатор",
+        "Copy Install Command" => "Копировать команду установки",
+        "Run Again" => "Выполнить снова",
+        "Reset" => "Сбросить",
+        "Python Environment" => "Среда Python",
+        "Python Packages" => "Пакеты Python",
+        "Python Problems" => "Проблемы Python",
+        "Python Run Log" => "Журнал выполнения Python",
+        "What Python Can Do" => "Что умеет Python",
+        "GridCraft is checking Python." => "GridCraft проверяет Python.",
+        "Check Again" => "Проверить снова",
+        "Interpreter" => "Интерпретатор",
+        "Chosen by you:" => "Выбран вами:",
+        "Automatic found:" => "Найден автоматически:",
+        "What runs:" => "Что выполняется:",
+        "None found yet." => "Пока ничего не найдено.",
+        "Sandbox" => "Песочница",
+        "Package folders" => "Папки пакетов",
+        "What Python can read" => "Что Python может читать",
+        "uv manages Python versions and packages. To get it, run:" => "uv управляет версиями и пакетами Python. Чтобы получить его, выполните:",
+        "Reading files outside Python: blocked" => "Чтение файлов вне Python: заблокировано",
+        "Writing files: blocked" => "Запись файлов: заблокирована",
+        "Using the network: blocked" => "Использование сети: заблокировано",
+        "Starting other programs: blocked" => "Запуск других программ: заблокирован",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "При каждом запуске Python GridCraft сначала пробует каждое из этих действий и не запускает Python, если не отклонены все."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Установите пакет с помощью uv. GridCraft только копирует команду; вы выполняете её в терминале, затем выбираете Проверить снова."
+        }
+        "Package name" => "Имя пакета",
+        "Other package managers" => "Другие менеджеры пакетов",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Для тех, кто управляет Python иначе: выберите любой интерпретатор по пути в разделе Файл › Параметры › Python. С помощью pip:"
+        }
+        "Packages: {count}" => "Пакетов: {count}",
+        "No problems." => "Проблем нет.",
+        "This workbook" => "Эта книга",
+        "No runs yet." => "Запусков пока нет.",
+        "Go to Cell" => "Перейти к ячейке",
+        "This run printed nothing." => "Этот запуск ничего не вывел.",
+        "Python cells can" => "Ячейки Python могут",
+        "Read cells through xl()" => "Читать ячейки через xl()",
+        "GridCraft sends only the cells that xl() names" => "GridCraft отправляет только ячейки, названные в xl()",
+        "Import installed packages" => "Импортировать установленные пакеты",
+        "The sandbox lets Python read its own installation" => "Песочница позволяет Python читать собственную установку",
+        "Compute" => "Вычислять",
+        "Within the time and memory limits in File › Options › Python" => "В пределах ограничений времени и памяти в Файл › Параметры › Python",
+        "Printed output is kept in the Run Log" => "Выведенный текст хранится в журнале выполнения",
+        "Use threads" => "Использовать потоки",
+        "Threads stay inside the one Python process" => "Потоки остаются внутри одного процесса Python",
+        "Python cells cannot" => "Ячейки Python не могут",
+        "Read your files" => "Читать ваши файлы",
+        "Write files" => "Записывать файлы",
+        "Use the network" => "Использовать сеть",
+        "Start programs" => "Запускать программы",
+        "See environment variables" => "Видеть переменные окружения",
+        "Open windows" => "Открывать окна",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "Строить графики. Данные попадают на лист, и из них создаётся диаграмма."
+        }
+        "Run this workbook's Python cells" => "Выполнять ячейки Python этой книги",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "По умолчанию выключено. Включить это можете только вы, здесь: ни файл, ни макрос, ни агент не могут. Книге, открытой из файла, также нужно собственное Включить."
+        }
+        "Limits" => "Ограничения",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Пока Python выключен, GridCraft ничего не запускает, поэтому ещё не может сказать, какую версию он использовал бы."
+        }
+        "Automatic would try first:" => "Автоматически сначала попробует:",
+        "Set up Python with uv" => "Настроить Python с помощью uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Выполните эти команды в терминале по порядку. GridCraft сначала ищет в этой среде, поэтому больше ничего выбирать не нужно. Он только копирует команды и никогда их не выполняет."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Любой Python 3.11 или новее можно выбрать по пути через Обзор…. Чтобы добавить в него пакеты с помощью pip:"
+        }
+        "Time limit for one cell" => "Ограничение времени для одной ячейки",
+        " seconds" => " секунд",
+        "Memory limit" => "Ограничение памяти",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "При достижении ограничения Python перезапускается, а его переменные очищаются; следующий запуск начинается заново."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "В macOS ограничение памяти проверяется два раза в секунду и не является жёстким пределом."
+        }
+        "Editor" => "Редактор",
+        "Initialization code isn't available yet" => "Код инициализации пока недоступен",
+        "Initialization" => "Инициализация",
+        "Select a Python cell first." => "Сначала выберите ячейку Python.",
+        "Output As" => "Вывод как",
+        "Run\nCell" => "Выполнить\nячейку",
+        "Run the selected Python cell" => "Выполнить выбранную ячейку Python",
+        "Run\nAll" => "Выполнить\nвсё",
+        "Run every Python cell in the workbook, in order" => "Выполнить все ячейки Python в книге по порядку",
+        "Nothing is running." => "Ничего не выполняется.",
+        "Stop the running cell" => "Остановить выполняемую ячейку",
+        "Clear Python's variables and run every cell again" => "Очистить переменные Python и снова выполнить все ячейки",
+        "Python Calculation" => "Вычисления Python",
+        "When this workbook's Python cells run" => "Когда выполняются ячейки Python этой книги",
+        "A Python cell is running." => "Ячейка Python выполняется.",
+        "Python is ready." => "Python готов.",
+        "Which Python runs cells" => "Какой Python выполняет ячейки",
+        "Packages" => "Пакеты",
+        "What this Python has installed" => "Что установлено в этом Python",
+        "Check Sandbox" => "Проверить песочницу",
+        "Check Python and the sandbox again, and show the report" => "Снова проверить Python и песочницу и показать отчёт",
+        "What Python\nCan Do" => "Что умеет\nPython",
+        "What Python cells can and can't do here" => "Что ячейки Python могут и чего не могут здесь",
+        "This Workbook: Enabled" => "Эта книга: включено",
+        "This Workbook: Disabled" => "Эта книга: выключено",
+        "Only a person can change this." => "Изменить это может только человек.",
+        "Run Log" => "Журнал выполнения",
+        "Each run's cell, time and printed output" => "Ячейка, время и выведенный текст каждого запуска",
+        "Clear the Run Log" => "Очистить журнал выполнения",
+        "Problems" => "Проблемы",
+        "Every Python cell with something to say" => "Каждая ячейка Python, о которой есть сообщение",
+        "Diagnostics" => "Диагностика",
+        "uv environment" => "среда uv",
+        "uv Python" => "Python uv",
+        "virtual environment" => "виртуальная среда",
+        "conda environment" => "среда conda",
+        "system" => "система",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Ячейкам Python нужна песочница, а у GridCraft её нет для этой системы."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "Песочница не выдержала проверку GridCraft, поэтому Python не будет запущен."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => "Python выключен. Включите его в Параметрах, чтобы выполнять ячейки Python.",
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft не находит Python 3.11 или новее. Настройте его с помощью uv или выберите."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "Этот Python слишком старый: ячейкам Python нужна версия 3.11 или новее.",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Это заглушка Python от Apple, которую GridCraft не использует. Настройте Python с помощью uv или выберите другой."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft не смог определить, что нужно этому Python для запуска.",
+        "Python didn't start." => "Python не запустился.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Python не включён для этой книги, поэтому её ячейки сохраняют значения из файла."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Этот сеанс не выполняет Python: ячейки сохраняют значения из файла."
+        }
+        "This workbook imports packages this Python doesn't have." => "Эта книга импортирует пакеты, которых нет в этом Python.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "pandas не установлен в этом Python, поэтому диапазоны возвращаются как списки строк."
+        }
+        "The initialization code failed, so Python cells can't run." => {
+            "Код инициализации завершился ошибкой, поэтому ячейки Python не могут выполняться."
+        }
+        "This code isn't valid Python." => "Этот код не является допустимым кодом Python.",
+        "The code raised an error." => "Код вызвал ошибку.",
+        "The code uses a name that isn't defined." => "Код использует неопределённое имя.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Это имя определено в более поздней ячейке. Ячейки Python выполняются по порядку строк, лист за листом."
+        }
+        "This Python doesn't have that package." => "В этом Python нет такого пакета.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Этому пакету нужна библиотека вне того, что песочница позволяет читать Python."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Ячейки Python не могут читать и записывать файлы на вашем компьютере. Поместите данные на лист и прочитайте их через xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Ячейки Python не могут использовать сеть. Поместите данные на лист и прочитайте их через xl()."
+        }
+        "Python cells can't start other programs or processes." => "Ячейки Python не могут запускать другие программы и процессы.",
+        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
+            "Ячейки Python не строят графики. Верните данные на лист и создайте из них диаграмму."
+        }
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() требуется ссылка, записанная в коде как текст, например xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Этот диапазон слишком велик для отправки в Python.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() называет то, что здесь не является ячейкой, диапазоном, таблицей или определённым именем."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "Код превысил ограничение времени. Python перезапущен, поэтому его переменные очищены."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "Код превысил ограничение памяти. Python перезапущен, поэтому его переменные очищены."
+        }
+        "The result is too large to bring back to the sheet." => "Результат слишком велик, чтобы вернуть его на лист.",
+        "The printed output was cut off at its limit." => "Выведенный текст обрезан по ограничению.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python неожиданно остановился и был перезапущен, поэтому его переменные очищены."
+        }
+        "The result is empty." => "Результат пуст.",
+        "The result needs cells that aren't empty." => "Результату нужны непустые ячейки.",
+        "The result isn't a number a cell can hold." => "Результат не является числом, которое может хранить ячейка.",
+        "This cell is running." => "Эта ячейка выполняется.",
+        "What this cell reads has changed since it last ran." => "То, что читает эта ячейка, изменилось с её последнего выполнения.",
+        "This cell was stopped before it finished." => "Эта ячейка была остановлена до завершения.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() требуется ссылка, записанная как текст, например xl(\"A1:B5\"). Вычисляемую ссылку прочитать нельзя."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Этому модулю нужны сеть или другие программы, которые ячейки Python использовать не могут."
+        }
+        "This Python doesn't have this package." => "В этом Python нет этого пакета.",
+        "Python cells can't open windows or ask for input." => "Ячейки Python не могут открывать окна и запрашивать ввод.",
+        "Python cells don't see your environment variables." => "Ячейки Python не видят ваши переменные окружения.",
         _ => return None,
     })
 }

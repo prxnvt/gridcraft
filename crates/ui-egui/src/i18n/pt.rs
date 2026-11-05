@@ -1051,6 +1051,239 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+        "Python|Off" => "Desativado",
+        "Python|Not Set Up" => "Não configurado",
+        "Python|Ready" => "Pronto",
+        "Python|Running" => "Em execução",
+        "Python|Blocked" => "Bloqueado",
+        "Enable Python in cells" => "Habilitar Python nas células",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, muito antiga: as células Python exigem a versão 3.11 ou posterior",
+        "Looking for Python…" => "Procurando o Python…",
+        "Copied to the clipboard." => "Copiado para a área de transferência.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Esta pasta de trabalho contém código Python. Habilite-o para executar as células; até lá, elas mantêm os valores salvos no arquivo."
+        }
+        "Enable" => "Habilitar",
+        "Python: running {cell}, {seconds} s" => "Python: executando {cell}, {seconds} s",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Abrir o ambiente do Python",
+        "Nothing on this system: Python doesn't run here" => "Nada neste sistema: o Python não é executado aqui",
+        "GridCraft starts Python with an empty environment" => "O GridCraft inicia o Python com um ambiente vazio",
+        "macOS sandbox profile" => "Perfil de sandbox do macOS",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Filtro seccomp do Linux",
+        "Open Python Settings" => "Abrir as configurações do Python",
+        "Choose Interpreter" => "Escolher interpretador",
+        "Copy Install Command" => "Copiar comando de instalação",
+        "Run Again" => "Executar novamente",
+        "Reset" => "Redefinir",
+        "Python Environment" => "Ambiente do Python",
+        "Python Packages" => "Pacotes do Python",
+        "Python Problems" => "Problemas do Python",
+        "Python Run Log" => "Log de execução do Python",
+        "What Python Can Do" => "O que o Python pode fazer",
+        "GridCraft is checking Python." => "O GridCraft está verificando o Python.",
+        "Check Again" => "Verificar novamente",
+        "Interpreter" => "Interpretador",
+        "Chosen by you:" => "Escolhido por você:",
+        "Automatic found:" => "Encontrado automaticamente:",
+        "What runs:" => "O que é executado:",
+        "None found yet." => "Nenhum encontrado ainda.",
+        "Sandbox" => "Sandbox",
+        "Package folders" => "Pastas de pacotes",
+        "What Python can read" => "O que o Python pode ler",
+        "uv manages Python versions and packages. To get it, run:" => "O uv gerencia as versões e os pacotes do Python. Para obtê-lo, execute:",
+        "Reading files outside Python: blocked" => "Leitura de arquivos fora do Python: bloqueada",
+        "Writing files: blocked" => "Gravação de arquivos: bloqueada",
+        "Using the network: blocked" => "Uso da rede: bloqueado",
+        "Starting other programs: blocked" => "Início de outros programas: bloqueado",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Cada vez que o Python inicia, o GridCraft tenta cada uma destas medidas e só executa o Python se todas forem recusadas."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Instale um pacote com o uv. O GridCraft apenas copia o comando; você o executa em um terminal e depois escolhe Verificar novamente."
+        }
+        "Package name" => "Nome do pacote",
+        "Other package managers" => "Outros gerenciadores de pacotes",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Para quem gerencia o Python de outra forma: escolha qualquer interpretador pelo caminho em Arquivo › Opções › Python. Com o pip:"
+        }
+        "Packages: {count}" => "Pacotes: {count}",
+        "No problems." => "Nenhum problema.",
+        "No runs yet." => "Nenhuma execução ainda.",
+        "Go to Cell" => "Ir para a célula",
+        "This run printed nothing." => "Esta execução não imprimiu nada.",
+        "Python cells can" => "As células Python podem",
+        "Read cells through xl()" => "Ler células por meio de xl()",
+        "GridCraft sends only the cells that xl() names" => "O GridCraft envia apenas as células que xl() nomeia",
+        "Import installed packages" => "Importar pacotes instalados",
+        "The sandbox lets Python read its own installation" => "O sandbox permite que o Python leia a própria instalação",
+        "Compute" => "Calcular",
+        "Within the time and memory limits in File › Options › Python" => "Dentro dos limites de tempo e memória em Arquivo › Opções › Python",
+        "Printed output is kept in the Run Log" => "A saída impressa é mantida no log de execução",
+        "Use threads" => "Usar threads",
+        "Threads stay inside the one Python process" => "Os threads permanecem dentro do único processo do Python",
+        "Python cells cannot" => "As células Python não podem",
+        "Read your files" => "Ler seus arquivos",
+        "Write files" => "Gravar arquivos",
+        "Use the network" => "Usar a rede",
+        "Start programs" => "Iniciar programas",
+        "See environment variables" => "Ver variáveis de ambiente",
+        "Open windows" => "Abrir janelas",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "Desenhar gráficos. Os dados vão para uma planilha e um gráfico é criado a partir deles."
+        }
+        "Run this workbook's Python cells" => "Executar as células Python desta pasta de trabalho",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "Desativado por padrão. Só você pode ativá-lo, aqui: nenhum arquivo, macro ou agente pode. Uma pasta de trabalho aberta de um arquivo também precisa do próprio Habilitar."
+        }
+        "Limits" => "Limites",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Enquanto o Python está desativado, o GridCraft não inicia nada e por isso ainda não pode dizer qual versão usaria."
+        }
+        "Automatic would try first:" => "O Automático tentaria primeiro:",
+        "Set up Python with uv" => "Configurar o Python com o uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Execute estes comandos em um terminal, em ordem. O GridCraft procura primeiro neste ambiente, então não há mais nada a escolher. Ele apenas copia os comandos; nunca os executa."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Qualquer Python 3.11 ou posterior pode ser escolhido pelo caminho com Procurar…. Para adicionar pacotes a ele com o pip:"
+        }
+        "Time limit for one cell" => "Limite de tempo para uma célula",
+        " seconds" => " segundos",
+        "Memory limit" => "Limite de memória",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "Ao atingir um limite, o Python é reiniciado e suas variáveis são apagadas; a próxima execução começa do zero."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "No macOS, o limite de memória é verificado duas vezes por segundo; não é um teto rígido."
+        }
+        "Editor" => "Editor",
+        "Initialization code isn't available yet" => "O código de inicialização ainda não está disponível",
+        "Initialization" => "Inicialização",
+        "Select a Python cell first." => "Selecione primeiro uma célula Python.",
+        "Output As" => "Exibir saída como",
+        "Run\nCell" => "Executar\ncélula",
+        "Run the selected Python cell" => "Executar a célula Python selecionada",
+        "Run\nAll" => "Executar\ntudo",
+        "Run every Python cell in the workbook, in order" => "Executar em ordem todas as células Python da pasta de trabalho",
+        "Nothing is running." => "Nada está em execução.",
+        "Stop the running cell" => "Parar a célula em execução",
+        "Clear Python's variables and run every cell again" => "Limpar as variáveis do Python e executar todas as células novamente",
+        "Python Calculation" => "Cálculo do Python",
+        "When this workbook's Python cells run" => "Quando as células Python desta pasta de trabalho são executadas",
+        "A Python cell is running." => "Uma célula Python está em execução.",
+        "Python is ready." => "O Python está pronto.",
+        "Which Python runs cells" => "Qual Python executa as células",
+        "Packages" => "Pacotes",
+        "What this Python has installed" => "O que este Python tem instalado",
+        "Check Sandbox" => "Verificar sandbox",
+        "Check Python and the sandbox again, and show the report" => "Verificar o Python e o sandbox novamente e mostrar o relatório",
+        "What Python\nCan Do" => "O que o Python\npode fazer",
+        "What Python cells can and can't do here" => "O que as células Python podem e não podem fazer aqui",
+        "This Workbook: Enabled" => "Esta pasta de trabalho: habilitada",
+        "This Workbook: Disabled" => "Esta pasta de trabalho: desabilitada",
+        "Only a person can change this." => "Somente uma pessoa pode alterar isto.",
+        "Run Log" => "Log de execução",
+        "Each run's cell, time and printed output" => "Célula, hora e saída impressa de cada execução",
+        "Clear the Run Log" => "Limpar o log de execução",
+        "Problems" => "Problemas",
+        "Every Python cell with something to say" => "Todas as células Python com algo a informar",
+        "Diagnostics" => "Diagnóstico",
+        "uv environment" => "ambiente do uv",
+        "uv Python" => "Python do uv",
+        "virtual environment" => "ambiente virtual",
+        "conda environment" => "ambiente do conda",
+        "system" => "sistema",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "As células Python precisam de um sandbox, e o GridCraft não tem nenhum para este sistema."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "O sandbox não resistiu à verificação do GridCraft, então o Python não será executado."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => {
+            "O Python está desativado. Ative-o nas configurações para executar células Python."
+        }
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "O GridCraft não encontra o Python 3.11 ou posterior. Configure um com o uv ou escolha um."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => {
+            "Este Python é muito antigo: as células Python exigem a versão 3.11 ou posterior."
+        }
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Este é o marcador de posição do Python da Apple, que o GridCraft não usa. Configure o Python com o uv ou escolha outro."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => {
+            "O GridCraft não conseguiu determinar do que este Python precisa para ser executado."
+        }
+        "Python didn't start." => "O Python não iniciou.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "O Python não está ativado nesta pasta de trabalho, então as células mantêm os valores salvos no arquivo."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Esta sessão não executa o Python: as células mantêm os valores salvos no arquivo."
+        }
+        "This workbook imports packages this Python doesn't have." => "Esta pasta de trabalho importa pacotes que este Python não tem.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "O pandas não está instalado neste Python, então os intervalos voltam como listas de linhas."
+        }
+        "The initialization code failed, so Python cells can't run." => {
+            "O código de inicialização falhou, então as células Python não podem ser executadas."
+        }
+        "This code isn't valid Python." => "Este código não é Python válido.",
+        "The code raised an error." => "O código gerou um erro.",
+        "The code uses a name that isn't defined." => "O código usa um nome que não está definido.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Este nome é definido em uma célula posterior. As células Python são executadas na ordem das linhas, planilha por planilha."
+        }
+        "This Python doesn't have that package." => "Este Python não tem esse pacote.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Este pacote precisa de uma biblioteca fora do que o sandbox permite que o Python leia."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "As células Python não podem ler nem gravar arquivos no seu computador. Coloque os dados em uma planilha e leia-os com xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "As células Python não podem usar a rede. Coloque os dados em uma planilha e leia-os com xl()."
+        }
+        "Python cells can't start other programs or processes." => "As células Python não podem iniciar outros programas nem processos.",
+        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
+            "As células Python não desenham gráficos. Devolva os dados a uma planilha e crie um gráfico a partir deles."
+        }
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() precisa que sua referência seja escrita como texto no código, como xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Este intervalo é grande demais para ser enviado ao Python.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() nomeia algo que aqui não é uma célula, um intervalo, uma tabela nem um nome definido."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "O código ultrapassou o limite de tempo. O Python foi reiniciado, então suas variáveis foram apagadas."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "O código ultrapassou o limite de memória. O Python foi reiniciado, então suas variáveis foram apagadas."
+        }
+        "The result is too large to bring back to the sheet." => "O resultado é grande demais para voltar à planilha.",
+        "The printed output was cut off at its limit." => "A saída impressa foi cortada ao atingir o limite.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "O Python parou inesperadamente e foi reiniciado, então suas variáveis foram apagadas."
+        }
+        "The result is empty." => "O resultado está vazio.",
+        "The result needs cells that aren't empty." => "O resultado precisa de células que não estejam vazias.",
+        "The result isn't a number a cell can hold." => "O resultado não é um número que uma célula possa conter.",
+        "This cell is running." => "Esta célula está em execução.",
+        "What this cell reads has changed since it last ran." => "O que esta célula lê mudou desde a última execução.",
+        "This cell was stopped before it finished." => "Esta célula foi interrompida antes de terminar.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() precisa que sua referência seja escrita como texto, como xl(\"A1:B5\"). Uma referência calculada não pode ser lida."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Este módulo precisa da rede ou de outros programas, que as células Python não podem usar."
+        }
+        "This Python doesn't have this package." => "Este Python não tem este pacote.",
+        "Python cells can't open windows or ask for input." => "As células Python não podem abrir janelas nem pedir entrada.",
+        "Python cells don't see your environment variables." => "As células Python não veem suas variáveis de ambiente.",
         _ => return None,
     })
 }

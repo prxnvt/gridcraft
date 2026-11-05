@@ -620,6 +620,230 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Zobrazit",
         "Collapse dialog" => "Sbalit dialogové okno",
         "Expand dialog" => "Rozbalit dialogové okno",
+        "Python|Off" => "Vypnuto",
+        "Python|Not Set Up" => "Nenastaveno",
+        "Python|Ready" => "Připraveno",
+        "Python|Running" => "Spuštěno",
+        "Python|Blocked" => "Zablokováno",
+        "Enable Python in cells" => "Povolit Python v buňkách",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, příliš stará: buňky Pythonu vyžadují verzi 3.11 nebo novější",
+        "Looking for Python…" => "Hledá se Python…",
+        "Copied to the clipboard." => "Zkopírováno do schránky.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Tento sešit obsahuje kód Pythonu. Povolte jej, aby se buňky spustily; do té doby si ponechají hodnoty uložené v souboru."
+        }
+        "Enable" => "Povolit",
+        "Python: running {cell}, {seconds} s" => "Python: spouští se {cell}, {seconds} s",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Otevřít prostředí Pythonu",
+        "Nothing on this system: Python doesn't run here" => "V tomto systému nic není: Python zde nepoběží",
+        "GridCraft starts Python with an empty environment" => "GridCraft spouští Python s prázdným prostředím",
+        "macOS sandbox profile" => "Profil sandboxu macOS",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Filtr Linux seccomp",
+        "Open Python Settings" => "Otevřít nastavení Pythonu",
+        "Choose Interpreter" => "Vybrat interpret",
+        "Copy Install Command" => "Kopírovat instalační příkaz",
+        "Run Again" => "Spustit znovu",
+        "Reset" => "Obnovit",
+        "Python Environment" => "Prostředí Pythonu",
+        "Python Packages" => "Balíčky Pythonu",
+        "Python Problems" => "Problémy Pythonu",
+        "Python Run Log" => "Protokol spuštění Pythonu",
+        "What Python Can Do" => "Co Python umí",
+        "GridCraft is checking Python." => "GridCraft kontroluje Python.",
+        "Check Again" => "Zkontrolovat znovu",
+        "Interpreter" => "Interpret",
+        "Chosen by you:" => "Vybrali jste:",
+        "Automatic found:" => "Automaticky nalezeno:",
+        "What runs:" => "Co se spouští:",
+        "None found yet." => "Zatím nic nenalezeno.",
+        "Sandbox" => "Sandbox",
+        "Package folders" => "Složky balíčků",
+        "What Python can read" => "Co Python může číst",
+        "uv manages Python versions and packages. To get it, run:" => "uv spravuje verze a balíčky Pythonu. Chcete-li jej získat, spusťte:",
+        "Reading files outside Python: blocked" => "Čtení souborů mimo Python: zablokováno",
+        "Writing files: blocked" => "Zápis souborů: zablokován",
+        "Using the network: blocked" => "Používání sítě: zablokováno",
+        "Starting other programs: blocked" => "Spouštění jiných programů: zablokováno",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Při každém spuštění Pythonu GridCraft nejprve zkusí každou z těchto akcí a Python nespustí, pokud nejsou všechny odmítnuty."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Nainstalujte balíček pomocí uv. GridCraft příkaz pouze zkopíruje; spustíte jej v terminálu a poté zvolíte Zkontrolovat znovu."
+        }
+        "Package name" => "Název balíčku",
+        "Other package managers" => "Jiné správce balíčků",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Pro ty, kdo spravují Python jinak: libovolný interpret vyberte podle cesty v Soubor › Možnosti › Python. S pip:"
+        }
+        "Packages: {count}" => "Balíčky: {count}",
+        "No problems." => "Žádné problémy.",
+        "This workbook" => "Tento sešit",
+        "No runs yet." => "Zatím žádná spuštění.",
+        "Go to Cell" => "Přejít na buňku",
+        "This run printed nothing." => "Toto spuštění nic nevypsalo.",
+        "Python cells can" => "Buňky Pythonu mohou",
+        "Read cells through xl()" => "Číst buňky pomocí xl()",
+        "GridCraft sends only the cells that xl() names" => "GridCraft odešle jen buňky, které xl() uvádí",
+        "Import installed packages" => "Importovat nainstalované balíčky",
+        "The sandbox lets Python read its own installation" => "Sandbox umožňuje Pythonu číst vlastní instalaci",
+        "Compute" => "Počítat",
+        "Within the time and memory limits in File › Options › Python" => "V rámci limitů času a paměti v Soubor › Možnosti › Python",
+        "Printed output is kept in the Run Log" => "Vypsaný výstup se uchovává v protokolu spuštění",
+        "Use threads" => "Používat vlákna",
+        "Threads stay inside the one Python process" => "Vlákna zůstávají uvnitř jednoho procesu Pythonu",
+        "Python cells cannot" => "Buňky Pythonu nemohou",
+        "Read your files" => "Číst vaše soubory",
+        "Write files" => "Zapisovat soubory",
+        "Use the network" => "Používat síť",
+        "Start programs" => "Spouštět programy",
+        "See environment variables" => "Vidět proměnné prostředí",
+        "Open windows" => "Otevírat okna",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => "Kreslit grafy. Data se uloží do listu a graf se z nich vytvoří.",
+        "Run this workbook's Python cells" => "Spouštět buňky Pythonu tohoto sešitu",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "Ve výchozím stavu vypnuto. Zapnout to můžete jen vy, zde: žádný soubor, makro ani agent to nedokáže. Sešit otevřený ze souboru také potřebuje vlastní Povolit."
+        }
+        "Limits" => "Limity",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Dokud je Python vypnutý, GridCraft nic nespouští, a proto zatím nemůže říct, kterou verzi by použil."
+        }
+        "Automatic would try first:" => "Automaticky by nejprve zkusil:",
+        "Set up Python with uv" => "Nastavit Python pomocí uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Spusťte tyto příkazy v terminálu v uvedeném pořadí. GridCraft hledá nejprve v tomto prostředí, takže není co dalšího vybírat. Příkazy pouze kopíruje, nikdy je nespouští."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Libovolný Python 3.11 nebo novější lze vybrat podle cesty pomocí Procházet…. Přidání balíčků do něj pomocí pip:"
+        }
+        "Time limit for one cell" => "Časový limit pro jednu buňku",
+        " seconds" => " sekund",
+        "Memory limit" => "Limit paměti",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "Při dosažení limitu se Python restartuje a jeho proměnné se vymažou; další spuštění začne znovu."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "V macOS je limit paměti kontrola dvakrát za sekundu, ne pevný strop."
+        }
+        "Editor" => "Editor",
+        "Initialization code isn't available yet" => "Inicializační kód zatím není k dispozici",
+        "Initialization" => "Inicializace",
+        "Select a Python cell first." => "Nejprve vyberte buňku Pythonu.",
+        "Output As" => "Výstup jako",
+        "Run\nCell" => "Spustit\nbuňku",
+        "Run the selected Python cell" => "Spustit vybranou buňku Pythonu",
+        "Run\nAll" => "Spustit\nvše",
+        "Run every Python cell in the workbook, in order" => "Spustit všechny buňky Pythonu v sešitu v pořadí",
+        "Nothing is running." => "Nic neběží.",
+        "Stop the running cell" => "Zastavit spuštěnou buňku",
+        "Clear Python's variables and run every cell again" => "Vymazat proměnné Pythonu a znovu spustit všechny buňky",
+        "Python Calculation" => "Výpočet Pythonu",
+        "When this workbook's Python cells run" => "Kdy se spouštějí buňky Pythonu tohoto sešitu",
+        "A Python cell is running." => "Buňka Pythonu běží.",
+        "Python is ready." => "Python je připraven.",
+        "Which Python runs cells" => "Který Python spouští buňky",
+        "Packages" => "Balíčky",
+        "What this Python has installed" => "Co má tento Python nainstalováno",
+        "Check Sandbox" => "Zkontrolovat sandbox",
+        "Check Python and the sandbox again, and show the report" => "Znovu zkontrolovat Python a sandbox a zobrazit zprávu",
+        "What Python\nCan Do" => "Co Python\numí",
+        "What Python cells can and can't do here" => "Co buňky Pythonu zde mohou a nemohou",
+        "This Workbook: Enabled" => "Tento sešit: povoleno",
+        "This Workbook: Disabled" => "Tento sešit: zakázáno",
+        "Only a person can change this." => "Může to změnit jen člověk.",
+        "Run Log" => "Protokol spuštění",
+        "Each run's cell, time and printed output" => "Buňka, čas a vypsaný výstup každého spuštění",
+        "Clear the Run Log" => "Vymazat protokol spuštění",
+        "Problems" => "Problémy",
+        "Every Python cell with something to say" => "Každá buňka Pythonu s nějakou zprávou",
+        "Diagnostics" => "Diagnostika",
+        "uv environment" => "prostředí uv",
+        "uv Python" => "Python uv",
+        "virtual environment" => "virtuální prostředí",
+        "conda environment" => "prostředí conda",
+        "system" => "systém",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Buňky Pythonu potřebují sandbox a GridCraft pro tento systém žádný nemá."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "Sandbox při kontrole GridCraftu neobstál, proto Python nepoběží."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => "Python je vypnutý. Zapněte jej v Nastavení, aby se buňky Pythonu spouštěly.",
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft nemůže najít Python 3.11 nebo novější. Nastavte jej pomocí uv, nebo nějaký vyberte."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "Tento Python je příliš starý: buňky Pythonu vyžadují verzi 3.11 nebo novější.",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Toto je zástupný Python od Applu, který GridCraft nepoužívá. Nastavte Python pomocí uv, nebo vyberte jiný."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft nedokázal zjistit, co tento Python potřebuje ke spuštění.",
+        "Python didn't start." => "Python se nespustil.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Python není pro tento sešit zapnutý, proto jeho buňky ponechávají hodnoty uložené v souboru."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Tato relace Python nespouští: buňky ponechávají hodnoty uložené v souboru."
+        }
+        "This workbook imports packages this Python doesn't have." => "Tento sešit importuje balíčky, které tento Python nemá.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "pandas není v tomto Pythonu nainstalováno, proto se rozsahy vracejí jako seznamy řádků."
+        }
+        "The initialization code failed, so Python cells can't run." => "Inicializační kód selhal, proto buňky Pythonu nelze spustit.",
+        "This code isn't valid Python." => "Tento kód není platný Python.",
+        "The code raised an error." => "Kód vyvolal chybu.",
+        "The code uses a name that isn't defined." => "Kód používá nedefinovaný název.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Tento název je definován v pozdější buňce. Buňky Pythonu se spouštějí v pořadí řádků, list po listu."
+        }
+        "This Python doesn't have that package." => "Tento Python nemá daný balíček.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Tento balíček potřebuje knihovnu mimo to, co sandbox Pythonu dovoluje číst."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Buňky Pythonu nemohou číst ani zapisovat soubory ve vašem počítači. Vložte data do listu a čtěte je pomocí xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Buňky Pythonu nemohou používat síť. Vložte data do listu a čtěte je pomocí xl()."
+        }
+        "Python cells can't start other programs or processes." => "Buňky Pythonu nemohou spouštět jiné programy ani procesy.",
+        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
+            "Buňky Pythonu nekreslí grafy. Vraťte data do listu a vytvořte z nich graf."
+        }
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() potřebuje svůj odkaz zapsaný jako text v kódu, například xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Tento rozsah je příliš velký pro odeslání do Pythonu.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() uvádí něco, co zde není buňka, rozsah, tabulka ani definovaný název."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "Kód překročil časový limit. Python byl restartován, proto byly jeho proměnné vymazány."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "Kód překročil limit paměti. Python byl restartován, proto byly jeho proměnné vymazány."
+        }
+        "The result is too large to bring back to the sheet." => "Výsledek je příliš velký pro vrácení do listu.",
+        "The printed output was cut off at its limit." => "Vypsaný výstup byl oříznut na limitu.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python se neočekávaně zastavil a byl restartován, proto byly jeho proměnné vymazány."
+        }
+        "The result is empty." => "Výsledek je prázdný.",
+        "The result needs cells that aren't empty." => "Výsledek potřebuje buňky, které nejsou prázdné.",
+        "The result isn't a number a cell can hold." => "Výsledek není číslo, které může buňka obsahovat.",
+        "This cell is running." => "Tato buňka běží.",
+        "What this cell reads has changed since it last ran." => "To, co tato buňka čte, se od posledního spuštění změnilo.",
+        "This cell was stopped before it finished." => "Tato buňka byla zastavena před dokončením.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() potřebuje svůj odkaz zapsaný jako text, například xl(\"A1:B5\"). Vypočtený odkaz nelze přečíst."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Tento modul potřebuje síť nebo jiné programy, které buňky Pythonu nemohou používat."
+        }
+        "This Python doesn't have this package." => "Tento Python nemá tento balíček.",
+        "Python cells can't open windows or ask for input." => "Buňky Pythonu nemohou otevírat okna ani žádat o vstup.",
+        "Python cells don't see your environment variables." => "Buňky Pythonu nevidí vaše proměnné prostředí.",
         _ => return None,
     })
 }
