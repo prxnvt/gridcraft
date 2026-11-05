@@ -19,8 +19,6 @@ use gridcraft_python::process::ProcessTransport;
 use gridcraft_python::{Client, Limits, Outcome, Output};
 use gridcraft_sandbox::Support;
 
-const LIST_PACKAGES: &str = "import importlib.metadata as m\nsorted(([d.metadata['Name'] or '', d.version or ''] for d in m.distributions()), key=lambda r: r[0].lower()) or None";
-
 pub fn main(args: &[String]) -> ExitCode {
     match run(args) {
         Ok(code) => code,
@@ -100,7 +98,7 @@ fn report(i: &Interpreter) {
 }
 
 fn list_packages(client: &mut Client) -> bool {
-    match client.run(LIST_PACKAGES, BTreeMap::new()) {
+    match client.run(interp::LIST_PACKAGES, BTreeMap::new()) {
         Ok(Outcome::Ok { output: Output::Value(gridcraft_core::Value::Array(rows)), .. }) => {
             let names: Vec<String> = (0..rows.rows)
                 .map(|r| {
