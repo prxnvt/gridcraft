@@ -2,14 +2,15 @@
 //! only runs in a worker that has run every cell before it, since they share variables: a fresh
 //! worker runs those first. A result writes no undo step.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gridcraft_core::{CellError, CellRef, Value};
-use gridcraft_model::PyOutput;
+use gridcraft_model::{PyCode, PyOutput};
 use gridcraft_python::diagnostics::{Diagnostic, for_outcome};
 use gridcraft_python::protocol::OUTPUT_CUT;
-use gridcraft_python::{Client, Outcome, Output, RunResult, Transport};
+use gridcraft_python::{Client, Input, Outcome, Output, RunResult, Transport};
 use web_time::Instant;
 
 use super::inputs::{Problem, Reader, code_hash, literals};
@@ -315,24 +316,52 @@ impl DocRun {
         }
         match inputs {
             Err(problem) => self.settle_problem(d, index, fp, problem, cx, stats),
-            Ok(inputs) => {
-                if self.client.is_none() {
-                    self.client = starter.client();
-                    stats.clients = stats.clients.saturating_add(u64::from(self.client.is_some()));
-                }
-                let Some(client) = self.client.as_mut() else { return Step::Stop };
-                match client.submit_cell(&py.code, inputs, py.object) {
-                    Ok(id) => {
-                        self.inflight = Some(Inflight { id, index, fp, started: now(), discard: false });
-                        Step::Submitted
-                    }
-                    Err(_) => {
-                        client.stop();
-                        Step::Stop
-                    }
-                }
+            Ok(inputs) => self.submit(index, fp, &py, inputs, starter, stats),
+        }
+    }
+
+    /// Sends the cell to the worker, which must be the one that ran the cells before it. A worker can
+    /// go at any moment, and the client starts another as it sends without saying so, which would run
+    /// the cell with its variables gone. So that is checked around the send: then the cells before it
+    /// run first, in a fresh worker, and the send is taken back.
+    fn submit(&mut self, index: usize, fp: u64, py: &PyCode, inputs: BTreeMap<String, Input>, starter: &Starter, stats: &mut PythonStats) -> Step {
+        if self.client.is_none() {
+            self.client = starter.client();
+            stats.clients = stats.clients.saturating_add(u64::from(self.client.is_some()));
+        }
+        let was_alive = self.client.as_ref().is_some_and(Client::alive);
+        if !was_alive && self.worker_used {
+            self.lost_between_cells();
+            return Step::Skipped;
+        }
+        let Some(client) = self.client.as_mut() else { return Step::Stop };
+        let starts = client.starts();
+        let sent = client.submit_cell(&py.code, inputs, py.object);
+        let replaced = was_alive && client.starts() != starts;
+        match sent {
+            Ok(id) if !replaced => {
+                self.inflight = Some(Inflight { id, index, fp, started: now(), discard: false });
+                self.worker_used = true;
+                Step::Submitted
+            }
+            Ok(_) => {
+                client.stop();
+                self.lost_between_cells();
+                Step::Skipped
+            }
+            Err(_) => {
+                client.stop();
+                self.lost_between_cells();
+                Step::Stop
             }
         }
+    }
+
+    /// The worker went with no request to blame. The cells before the next one run again, and that
+    /// counts as a lost worker: the next result ends the go if there have been too many.
+    fn lost_between_cells(&mut self) {
+        self.worker_gone();
+        self.replays = self.replays.saturating_add(1);
     }
 
     /// A cell that stopped the worker with these same code and inputs stays as it was.
@@ -394,7 +423,7 @@ impl DocRun {
         let alive = client.alive();
         let idle = client.poll(Duration::ZERO);
         if alive && !client.alive() {
-            self.worker_gone();
+            self.lost_between_cells();
         }
         idle
     }
@@ -405,6 +434,7 @@ impl DocRun {
             e.in_worker = false;
         }
         self.cursor = 0;
+        self.worker_used = false;
     }
 
     fn log_run(&mut self, run: PythonRun) {

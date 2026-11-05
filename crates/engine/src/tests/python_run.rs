@@ -29,7 +29,7 @@ fn number(v: &Input) -> f64 {
 
 /// A little language for the fake worker's cells: the first word says what the cell does.
 ///
-/// `ret 5`, `set a 5` (a variable, returning nothing), `get a` (fails as an undefined name),
+/// `ret 5`, `set a 5` (a variable, returning nothing), `setdie a 5`, `setdieall a 5`, `get a` (fails as an undefined name),
 /// `sum xl("A1") xl("B1:B3")`, `say xl("A1")` (the input as it came), `shape xl("A:A")` (its rows),
 /// `spill 3 1`, `obj`, `fail`, `print 100` (bytes), `failprint`, `num`, `empty`, `none`, `hang`,
 /// `die`, `flood`, `garbage`, `tick` (a number that grows with each run).
@@ -41,6 +41,12 @@ fn answer(w: &mut FakeWorker, id: u64, code: &str, inputs: &BTreeMap<String, Inp
         "set" => {
             vars.insert(words[1].into(), words[2].parse().unwrap());
             value(Value::Empty)
+        }
+        // Answers, then the worker goes away: the first one to run it, or every one.
+        "setdie" | "setdieall" => {
+            vars.insert(words[1].into(), words[2].parse().unwrap());
+            let dies = words[0] == "setdieall" || w.start_number() == 1;
+            return w.done(id, value(Value::Empty)) && !dies;
         }
         "get" => match vars.get(words[1]) {
             Some(n) => value(Value::Number(*n)),
@@ -1520,4 +1526,58 @@ fn a_search_while_python_is_off_starts_nothing() {
         assert_eq!((found.version, found.kind), (None, None), "{}", found.path.display());
         assert!(found.path.is_absolute());
     }
+}
+
+#[test]
+fn a_worker_lost_right_after_a_result_is_rebuilt_before_the_next_cell() {
+    // The reply and the closed pipe are both waiting when the poll takes the result and goes straight
+    // on to the next cell: the client replaces the worker as it sends, and says nothing. A1 gets the
+    // worker's first line out of the way, as the queue from the worker holds only two.
+    let (mut s, h) = session();
+    py(&mut s, "A1", "ret 0");
+    py(&mut s, "A2", "setdie x 1");
+    py(&mut s, "A3", "get x");
+    s.python_poll(Duration::ZERO);
+    read_requests(&h, 1);
+    std::thread::sleep(Duration::from_millis(50));
+    s.python_poll(Duration::ZERO);
+    assert_eq!(v(&s, "A1"), NUM(0.0));
+    read_requests(&h, 2);
+    std::thread::sleep(Duration::from_millis(50));
+    settle(&mut s);
+    assert_eq!(v(&s, "A3"), NUM(1.0), "the variable is there: {:?}", runs(&h));
+    assert_eq!(diagnostic(&s, "A3"), None);
+    assert_eq!(diagnostic(&s, "A2"), None, "nothing is held against the cell before it");
+}
+
+#[test]
+fn a_worker_lost_while_idle_is_rebuilt_before_the_next_cell() {
+    let (mut s, h) = with_limits(Limits { memory_bytes: 1024, ..Limits::default() });
+    py(&mut s, "A1", "set x 1");
+    py(&mut s, "A2", "get x");
+    s.execute("python.calculation", json!({"mode": "manual"})).unwrap();
+    s.execute("python.run", json!({"cell": "A1"})).unwrap();
+    settle(&mut s);
+    assert_eq!(h.starts(), 1);
+    // The worker goes over its limit with nothing running. The watcher reads it slowly then.
+    h.set_rss(1024 * 1024);
+    std::thread::sleep(Duration::from_millis(200));
+    h.set_rss(0);
+    s.execute("python.run", json!({"cell": "A2"})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "A2"), NUM(1.0), "{:?}", runs(&h));
+    assert_eq!(runs(&h), ["set x 1", "set x 1", "get x"]);
+    assert_eq!(h.starts(), 2);
+}
+
+#[test]
+fn a_worker_that_keeps_going_away_between_cells_ends_with_the_rest_stale() {
+    let (mut s, _h) = session();
+    py(&mut s, "A1", "setdieall x 1");
+    py(&mut s, "A2", "get x");
+    // It ends, and the next cell never ran without its variable. Which it says depends on whether the
+    // worker went before the cell was sent or after.
+    settle(&mut s);
+    let said = diagnostic(&s, "A2");
+    assert!(matches!(said, Some("state.stale" | "worker.lost")), "{said:?}");
 }
