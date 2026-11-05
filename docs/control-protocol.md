@@ -69,7 +69,8 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `ui.pythonMode` (via `engine.execute`) | `{on?}` | Python mode on the active cell, in the formula bar (an edit in progress keeps its text); `on: false` turns it off; without `on` it switches. A start that is refused (a locked cell on a protected sheet, a cell or draft inside another cell's spill, code hidden on a protected sheet) is an error with the reason. Opens no dialog |
 | `ui.pythonEditor` (via `engine.execute`) | `{on?, cell?, force?}` | Open the Python editor window on `cell` (`A1` or `Sheet2!B3`; default: the active cell; a cell inside a Python cell's spill opens its Python cell), or close it with `on: false`; without `on` it opens or closes. Opens no dialog and never asks: with unsaved code in the window it refuses to close it or open it on another cell, unless `force: true` discards the code. Refused on a Hidden cell of a protected sheet, whose code stays out of view. Replies with the window's state. `file.close`, and `window.close` on the workbook's last window, are refused while the window has unsaved code for the workbook; `app.quit` is refused while it has unsaved code |
 | `ui.pythonCard` (via `engine.execute`) | `{on?}` | Open the card of the active cell's Python cell (its cached result's type and preview), or close it with `on: false`. Opening it is an error when the active cell isn't a Python cell, or while a cell is being edited; closing it always succeeds |
-| `ui.backstage` (via `engine.execute`) | `{page?: home\|new\|open\|info\|saveAs\|print\|export\|options\|account\|close}` | Open the File tab's Backstage view on a page, or close it (`ui.inspect` reports the open page as `backstage`) |
+| `ui.pythonEnvironment`, `ui.pythonPackages`, `ui.pythonProblems`, `ui.pythonRunLog`, `ui.pythonPermissions` (via `engine.execute`) | `{on?}` | Open or close a Python pane, in place of any other pane; without `on` it switches. Replies `{open}`; `ui.inspect` reports them. Opening a pane is safe from any caller: none of them turns Python on |
+| `ui.backstage` (via `engine.execute`) | `{page?: home\|new\|open\|info\|saveAs\|print\|export\|options\|account\|close, section?: general\|python}` | `section` picks File › Options' page. Open the File tab's Backstage view on a page, or close it (`ui.inspect` reports the open page as `backstage`) |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state. On the native app it works while hidden or occluded when the platform still reports the current content size (the request asks for a hidden paint); a minimized window has no capturable size, so its request stays queued until the window is restored and otherwise reports the 8 s timeout. In a **hidden browser tab** the web runner does not implement that paint request, so the capture waits until the tab is shown again or reports the 8 s timeout. Up to 4 outstanding requests; retained images are limited to 128 MiB each and 256 MiB in total (each request reserves the largest image the ±1-pixel rounding rule can retain), one capture's transient encoding working set to 256 MiB, a base64 reply to 64 MiB, and retained images plus one capture's encoding working set to 512 MiB; a request that would exceed a budget is refused without evicting earlier ones. See [Screenshot budgets](#screenshot-budgets). A resize/DPI/zoom/visibility/occlusion change during capture is retried within the bounded retry budget or reported instead of saving stale pixels; the identity intentionally includes zoom and occlusion even though the expected physical size may be unchanged, so a capture never crosses layout generations. Every reply — success, refusal or timeout — carries the request `token` as `request` |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
@@ -166,6 +167,16 @@ GridCraft accepts the existing `file.print` sheet/pagination params on `ui.print
 
 `engine.execute` reaches the `python.*` commands: `python.set`, `python.run`, `python.runAll`,
 `python.stop`, `python.reset`, `python.calculation`, `python.diagnostics`, `python.runLog`,
-`python.environment` and `python.refreshEnvironment`. None opens a dialog. Python runs only in a session
-the app gave the capability, which no method here can give, and no method can choose the interpreter;
-the app doesn't give it yet, so these commands report that Python doesn't run here.
+`python.clearRunLog`, `python.environment` and `python.refreshEnvironment`. None opens a dialog.
+
+Python runs only after a person turned it on in File › Options › Python, and a workbook from a file
+only after a person enabled it. Nothing here can do either, or choose the interpreter or the limits:
+they aren't commands, `ui.set` has no such field, and those widgets refuse the input `ui.click`,
+`ui.drag`, `ui.key` and `ui.text` send, whatever they are aimed at. Until then these commands report
+why Python doesn't run. That doesn't cover someone who can edit the preferences file on disk, or who
+operates the real mouse and keyboard or the system's accessibility interface.
+
+`ui.inspect` reports `python`: `{state: off|notSetUp|ready|running|blocked, reason?, enabled,
+workbookEnabled, hasCells, enableBar, calculation, interpreter?, running? {sheet, cell, ms},
+optionsPage, panes: {environment, packages, problems, runLog, permissions}}`. `state` is what the
+Python tab's button shows; `reason` is a diagnostic's id from `python.diagnostics`' vocabulary.

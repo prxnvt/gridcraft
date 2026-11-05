@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -231,16 +231,33 @@ forward.
 
 ## Running Python cells
 
-The engine can run Python cells; the app doesn't turn that on yet. `engine::python` needs a
-`PythonCapability` from `Session::set_python_capability`, a setter for the app, and no app calls it
-and no interface offers it, so today only tests run cells: the app, the CLI and MCP all behave as a
-session without one, where cells keep their saved values or show `#BLOCKED!` and the commands that
-run cells say why not. No command, control method, preference or file content can give a capability
-or choose the interpreter (`no_command_turns_python_on_or_chooses_an_interpreter` walks the command
-catalog). A workbook made in the app is on when the capability is; one opened from a file is off
-until `Session::set_python_workbook_enabled` turns it on, and Python code pasted from a file turns a
+`engine::python` runs Python cells in a session that has a `PythonCapability` from
+`Session::set_python_capability`, a setter for the app. The app gives one; the CLI and MCP don't, so
+there cells keep their saved values or show `#BLOCKED!` and the commands that run cells say why not.
+No command, control method or file content can give a capability or choose the interpreter
+(`no_command_turns_python_on_or_chooses_an_interpreter` walks the command catalog). A workbook made
+in the app is on when the capability is; one opened from a file is off until
+`Session::set_python_workbook_enabled` turns it on, and Python code pasted from a file turns a
 workbook off again, even one the person had turned on, as other content from a file only changes its
 `Trust`.
+
+**In the app** (`ui_egui::python_ui`). The person's choices are a preference, `UiState::python`, off
+by default; anything malformed in the saved file reads as off. `python_ui::tick`, from
+`SheetApp::logic`, compares them with what the session was last given and hands over a new capability
+when they changed, calls `python_poll(Duration::ZERO)`, and while `python_busy()` asks for a repaint
+every 100 ms, so results appear without input and an idle app stays idle. The switches are widget
+code only: `write_settings` and `set_workbook` refuse, and the widgets draw disabled, while synthetic
+input from the control channel is queued or was just applied (`python_ui::locked`). So `ui.click`,
+`ui.drag`, `ui.key` and `ui.text` can't reach them, and they have no key tips. That doesn't cover
+someone who can edit the preferences file, or who operates the real mouse and keyboard or the
+accessibility interface. With Python off nothing is started: the search for Pythons
+(`engine::search_pythons`, on a thread of its own) lists paths without asking them anything.
+
+The panes (`python_ui/panes.rs`) read `python_report`, `python_diagnostics` and `python_run_log`, and
+each opens by a UI-only command (`ui.pythonEnvironment` and the like). Their lists draw only the rows
+in view. What the interface asks every frame is cheap: `python_state` copies nothing, `python_running`
+reads the request in flight, and `python_has_cells` is kept from what each change touched, so a
+workbook without Python cells is scanned once.
 
 Nothing blocks the caller. A command only marks what is due, at the end of the outermost `execute`;
 `Session::python_poll`, called each frame, takes at most one finished result, writes it through the
