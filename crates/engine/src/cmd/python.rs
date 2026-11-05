@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             noundo "python.reset",
             "Reset Python",
-            ["Python", "Run"],
+            ["Formulas", "Python"],
             None,
             "starts the workbook's Python again with fresh variables and runs every cell, whatever the calculation mode. Returns {queued}. An error when Python doesn't run here, with the reason",
             has_doc,

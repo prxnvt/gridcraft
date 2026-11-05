@@ -1,5 +1,6 @@
-//! The Python tab: Code, Run, Environment, Permissions and Diagnostics. Its buttons run `python.*`
-//! commands or open panes, which any caller may do. The workbook's switch and the interpreter list
+//! The Python tab, contextual: it is up while the person is on or working with a Python cell. Code,
+//! Run, Environment, Permissions and Diagnostics. Its buttons run `python.*` commands or open panes,
+//! which any caller may do. The workbook's switch and the interpreter list
 //! are widget code only, so they have no key tips: a key tip is something the control channel can
 //! press.
 

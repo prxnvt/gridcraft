@@ -12,7 +12,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("JI", Entry::Tab("Draw")), // Two-letter unit. Deeper Draw letters differ between Excel and GridCraft; left blank for future contributors.
     ("P", Entry::Tab("Page Layout")),
     ("M", Entry::Tab("Formulas")),
-    ("Y", Entry::Tab("Python")), // GridCraft's own tab: Excel keeps these in Formulas (M Y). Its letters are below, after M.
+    ("Y", Entry::Tab("Python")), // A contextual tab of GridCraft's own (Excel keeps these in Formulas, M Y): the letter answers only while the tab is up. Its letters are below, after M.
     ("A", Entry::Tab("Data")),
     ("R", Entry::Tab("Review")),
     ("W", Entry::Tab("View")),

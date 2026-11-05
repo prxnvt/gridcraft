@@ -1,6 +1,6 @@
 # Python in cells
 
-> **Last updated:** 2026-11-05 · **Change:** first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits
+> **Last updated:** 2026-11-05 · **Change:** minor (the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
 
 A Python cell runs code you write, in your own Python, on your computer. GridCraft never downloads
 Python and never installs packages. It finds the Python you have, and it runs your code in a sandbox
@@ -17,9 +17,9 @@ Python is off until you turn it on.
 1. Open **File › Options › Python** and tick **Enable Python in cells**.
 2. GridCraft looks for a Python. The page shows what it found, with its version and kind.
 3. A workbook opened from a file needs its own **Enable**, on the bar that shows under the ribbon.
-   Until then its cells keep the values saved in the file. **Python › This Workbook** is the same
-   switch. A workbook made in GridCraft needs none.
-4. Select a cell, choose **Python › Insert Python** (Ctrl+Alt+Shift+P), type `1 + 1`, and press
+   Until then its cells keep the values saved in the file. **This Workbook** on the Python tab is the
+   same switch. A workbook made in GridCraft needs none.
+4. Select a cell, choose **Formulas › Insert Python** (Ctrl+Alt+Shift+P), type `1 + 1`, and press
    Ctrl+Enter. The cell shows `2`.
 
 Only a person can do this, in the app. No file, macro, command, MCP call or control-channel request
@@ -39,12 +39,12 @@ uv pip install --python ~/.gridcraft/python numpy pandas statsmodels
 ```
 
 GridCraft looks in `~/.gridcraft/python` first, so there is nothing more to choose. Then choose
-**Check Again**. To add a package later, use **Python › Packages**: type its name and choose
+**Check Again**. To add a package later, use **Packages** on the Python tab: type its name and choose
 **Copy Install Command**, which gives the uv command for the Python in use.
 
 **Which Python.** Automatic tries, in order: `~/.gridcraft/python`, the active virtual environment,
 uv's own Pythons, the active conda environment, `PATH`, and the places Pythons are usually installed.
-Python 3.11 or newer is needed. **Python › Interpreter** and the Options page list what was found and
+Python 3.11 or newer is needed. **Interpreter** on the Python tab and the Options page list what was found and
 take any other path with **Browse…**. While Python is off GridCraft starts nothing, so the list shows
 paths only, without versions.
 
@@ -56,7 +56,7 @@ Packages must be installed inside the Python that GridCraft uses. Packages insta
 
 ## What cells can and can't do
 
-**Python › What Python Can Do** lists this for your system, with what enforces each line.
+**What Python Can Do** on the Python tab lists this for your system, with what enforces each line.
 
 Cells can:
 
@@ -92,6 +92,16 @@ The time and memory limits are in **File › Options › Python**. At a limit Py
 variables are cleared; the next run starts fresh.
 
 ## The Python tab
+
+The Python tab is contextual, like Table Design. It is there while the active cell is a Python cell,
+or while you edit Python code, in the formula bar or the editor window, and it sits at the right end
+of the tab bar. Selecting a Python cell adds the tab and leaves the ribbon where it was; click the
+tab, or press Alt, Y, to show it. When you leave the cell the tab goes, and if it was showing, the
+ribbon returns to Home. A pane you opened from it stays open.
+
+**Formulas › Python** is the way in from anywhere: Insert Python starts Python mode, which brings the
+tab up, and Reset and Diagnostics are there too. File › Options › Python and the status bar item work
+anywhere, and each pane has its own command.
 
 - **Code:** Insert Python, Editor, Output As (Python Object or Excel Value). Initialization is
   disabled: GridCraft has no initialization code yet.

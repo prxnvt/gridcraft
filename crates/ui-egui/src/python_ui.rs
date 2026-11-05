@@ -541,6 +541,12 @@ pub(crate) fn dim(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).font(theme::ui_font(12.0)).color(t.text_dim));
 }
 
+/// Whether the Python tab is up: the active cell is a Python cell, or Python code is being edited,
+/// in the formula bar or in the editor window. It doesn't depend on whether Python can run here.
+pub fn tab_shows(app: &SheetApp) -> bool {
+    app.editor.as_ref().is_some_and(|e| e.python) || app.py_window.is_some() || crate::python_card::active_python_cell(app).is_some()
+}
+
 /// Whether the Enable bar shows: Python is on in Settings on a system that can run it, and this
 /// workbook has Python cells and isn't enabled.
 pub fn bar_shows(app: &SheetApp) -> bool {

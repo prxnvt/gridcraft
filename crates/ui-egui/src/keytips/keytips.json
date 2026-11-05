@@ -49,7 +49,7 @@
    "seq": "Y",
    "kind": "tab",
    "target": "Python",
-   "note": "GridCraft's own tab: Excel keeps these in Formulas (M Y). Its letters are below, after M."
+   "note": "A contextual tab of GridCraft's own (Excel keeps these in Formulas, M Y): the letter answers only while the tab is up. Its letters are below, after M."
   },
   {
    "seq": "A",
