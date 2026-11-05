@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (the indicators: `python_card::tag_state`, `python_ui::checks`, `engine::python::packages`; earlier: the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -256,6 +256,14 @@ accessibility interface. With Python off nothing is started: the search for Pyth
 The Python tab is a contextual tab like Table Design (`ribbon::contextual_tabs`, last, so rightmost):
 `python_ui::tab_shows` is true on a Python cell, or while a draft or the editor window edits code. Its
 key tip, `Y`, is in the static table, so `SheetApp::ribbon_keys` ignores a tab that isn't up.
+
+The PY tag (`python_card::tag_state`, `paint_tag`) reads the cell's `busy` and `stale` flags and
+`python_diagnostic`, a few lookups per cell in view. Both editors keep a `python_ui::checks::CodeChecks`:
+`lint` runs once per text and package list, and its findings become `code_editor::Mark`s in chars, so a
+mark from before this frame's edit can't split a character; a run's line is used only while the text is
+the code that ran. `engine::python::packages` works out `packages.missing` from each piece of code
+once per package list, keyed by its hash, so an edit reads the cell that changed, and an empty list reports
+nothing.
 
 The panes (`python_ui/panes.rs`) read `python_report`, `python_diagnostics` and `python_run_log`, and
 each opens by a UI-only command (`ui.pythonEnvironment` and the like). Their lists draw only the rows
