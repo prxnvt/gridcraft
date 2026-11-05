@@ -21,7 +21,7 @@ fn python() -> Option<PathBuf> {
     };
     if found.is_none() {
         let ci = std::env::var_os("CI").is_some();
-        let on_path = !interp::candidates(&SearchEnv { virtual_env: None, conda_prefix: None, path: env.path.clone() }).is_empty();
+        let on_path = !interp::candidates(&SearchEnv { path: env.path.clone(), ..SearchEnv::default() }).is_empty();
         assert!(!(ci && on_path), "CI has a python on PATH, but no Python 3.11 or newer was found");
         println!("skipped: no Python 3.11 or newer found");
     }

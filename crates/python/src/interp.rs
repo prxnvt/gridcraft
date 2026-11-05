@@ -1,8 +1,9 @@
-//! Finding the user's Python: `$VIRTUAL_ENV`, `$CONDA_PREFIX`, then `python3` and `python` on
-//! `PATH`, or one explicit path given by the caller. Only absolute paths to existing files count:
-//! a relative `PATH` entry (`.` included) is skipped, so the folder the app runs in can't plant
-//! an interpreter. Each candidate is asked its version with a hard deadline and a bounded read;
-//! one that hangs or floods is killed and counted as not found. Python 3.11 or newer is needed.
+//! Finding the user's Python: one explicit path given by the caller, or the search in
+//! [`candidates`], where uv's environments and Pythons come first. Only absolute paths to existing
+//! files count: a relative `PATH` entry (`.` included) is skipped, so the folder the app runs in
+//! can't plant an interpreter. Each candidate is asked its version with a hard deadline and a
+//! bounded read; one that hangs or floods is killed and counted as not found. Python 3.11 or newer
+//! is needed.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -56,6 +57,11 @@ pub enum Detection {
         path: PathBuf,
         version: Version,
     },
+    /// The path chosen is Apple's `/usr/bin/python3`, a stub that may open an installer window. It
+    /// isn't asked anything.
+    Stub {
+        path: PathBuf,
+    },
 }
 
 /// Why a probe gave no version.
@@ -74,14 +80,52 @@ pub struct SearchEnv {
     pub virtual_env: Option<OsString>,
     pub conda_prefix: Option<OsString>,
     pub path: Option<OsString>,
+    pub home: Option<OsString>,
+    /// `UV_PYTHON_INSTALL_DIR`: where uv keeps its Pythons, when it isn't the default.
+    pub uv_python_dir: Option<OsString>,
+    /// `XDG_DATA_HOME`: uv keeps its Pythons under it, by default `~/.local/share`.
+    pub xdg_data_home: Option<OsString>,
+    /// Also look where Pythons are usually installed, outside `PATH`.
+    pub known_dirs: bool,
 }
 
 impl SearchEnv {
     /// This process's environment.
     pub fn from_process() -> SearchEnv {
-        SearchEnv { virtual_env: std::env::var_os("VIRTUAL_ENV"), conda_prefix: std::env::var_os("CONDA_PREFIX"), path: std::env::var_os("PATH") }
+        SearchEnv {
+            virtual_env: std::env::var_os("VIRTUAL_ENV"),
+            conda_prefix: std::env::var_os("CONDA_PREFIX"),
+            path: std::env::var_os("PATH"),
+            home: std::env::var_os("HOME"),
+            uv_python_dir: std::env::var_os("UV_PYTHON_INSTALL_DIR"),
+            xdg_data_home: std::env::var_os("XDG_DATA_HOME"),
+            known_dirs: true,
+        }
+    }
+
+    /// The environment GridCraft suggests making with uv, under the home directory.
+    pub fn recommended_env(&self) -> Option<PathBuf> {
+        let home = PathBuf::from(self.home.as_ref()?);
+        home.is_absolute().then(|| home.join(RECOMMENDED_ENV))
+    }
+
+    fn uv_pythons_dir(&self) -> Option<PathBuf> {
+        let dir = match (&self.uv_python_dir, &self.xdg_data_home, &self.home) {
+            (Some(d), _, _) => PathBuf::from(d),
+            (None, Some(d), _) => PathBuf::from(d).join("uv/python"),
+            (None, None, Some(h)) => PathBuf::from(h).join(".local/share/uv/python"),
+            (None, None, None) => return None,
+        };
+        dir.is_absolute().then_some(dir)
     }
 }
+
+/// The environment GridCraft suggests making with uv, relative to the home directory.
+pub const RECOMMENDED_ENV: &str = ".gridcraft/python";
+/// Apple's stub: it starts the Command Line Tools' Python (too old), or opens an installer window.
+const APPLE_STUB: &str = "/usr/bin/python3";
+/// Pythons of uv's own store looked at.
+const MAX_UV_PYTHONS: usize = 64;
 
 #[cfg(windows)]
 const NAMES: [&str; 2] = ["python3.exe", "python.exe"];
@@ -94,16 +138,25 @@ const ENV_BIN: &[&str] = &["Scripts", ""];
 const ENV_BIN: &[&str] = &["bin"];
 
 /// The paths to try, in order, without duplicates: absolute and existing files only.
+///
+/// uv comes first: the environment GridCraft suggests making with it, the active virtual
+/// environment (which `uv venv` makes), then uv's own Pythons, newest first. After those, for people
+/// who use other tools: the active conda environment, `PATH`, and the places Pythons are usually
+/// installed, which matter because an app started from the Dock doesn't get the shell's `PATH`.
 pub fn candidates(env: &SearchEnv) -> Vec<PathBuf> {
+    let env_dirs = |prefix: PathBuf| -> Vec<PathBuf> { ENV_BIN.iter().map(|b| if b.is_empty() { prefix.clone() } else { prefix.join(b) }).collect() };
     let mut dirs: Vec<PathBuf> = Vec::new();
-    for prefix in [&env.virtual_env, &env.conda_prefix].into_iter().flatten() {
-        let prefix = PathBuf::from(prefix);
-        dirs.extend(ENV_BIN.iter().map(|b| if b.is_empty() { prefix.clone() } else { prefix.join(b) }));
+    for prefix in [env.recommended_env(), env.virtual_env.as_ref().map(PathBuf::from)].into_iter().flatten() {
+        dirs.extend(env_dirs(prefix));
+    }
+    dirs.extend(uv_python_bins(env));
+    if let Some(prefix) = &env.conda_prefix {
+        dirs.extend(env_dirs(PathBuf::from(prefix)));
     }
     let on_path: Vec<PathBuf> = env.path.as_ref().map(|p| std::env::split_paths(p).collect()).unwrap_or_default();
     let mut out: Vec<PathBuf> = Vec::new();
     let mut push = |p: PathBuf| {
-        if usable_file(&p) && !out.contains(&p) {
+        if usable_file(&p) && !out.contains(&p) && !is_apple_stub(&p) {
             out.push(p);
         }
     };
@@ -118,17 +171,93 @@ pub fn candidates(env: &SearchEnv) -> Vec<PathBuf> {
             push(d.join(n));
         }
     }
+    if env.known_dirs {
+        for d in known_dirs(env) {
+            for n in NAMES {
+                push(d.join(n));
+            }
+        }
+    }
     out
+}
+
+/// The `bin` folders of uv's own Pythons, newest first. A folder is named like
+/// `cpython-3.12.13-macos-aarch64-none`.
+fn uv_python_bins(env: &SearchEnv) -> Vec<PathBuf> {
+    let Some(dir) = env.uv_pythons_dir() else { return Vec::new() };
+    let Ok(listing) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut found: Vec<((u32, u32, u32), PathBuf)> = listing
+        .take(MAX_UV_PYTHONS)
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name();
+            let mut parts = name.to_str()?.strip_prefix("cpython-")?.split('-').next()?.split('.');
+            let major = parts.next()?.parse().ok()?;
+            let minor = parts.next()?.parse().ok()?;
+            let patch = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+            Some(((major, minor, patch), e.path().join("bin")))
+        })
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    found.into_iter().map(|(_, bin)| bin).collect()
+}
+
+/// Where Pythons are usually installed, outside `PATH`.
+fn known_dirs(env: &SearchEnv) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if cfg!(target_os = "macos") {
+        dirs.push("/opt/homebrew/bin".into());
+        dirs.push("/usr/local/bin".into());
+        // python.org's installer, newest first.
+        let versions = Path::new("/Library/Frameworks/Python.framework/Versions");
+        if let Ok(listing) = std::fs::read_dir(versions) {
+            let mut named: Vec<PathBuf> = listing.take(MAX_UV_PYTHONS).flatten().map(|e| e.path().join("bin")).collect();
+            named.sort();
+            named.reverse();
+            dirs.extend(named);
+        }
+    } else if cfg!(unix) {
+        dirs.push("/usr/bin".into());
+        dirs.push("/usr/local/bin".into());
+    }
+    if let Some(home) = &env.home {
+        let pyenv = PathBuf::from(home).join(".pyenv/versions");
+        if let Ok(listing) = std::fs::read_dir(pyenv) {
+            let mut named: Vec<PathBuf> = listing.take(MAX_UV_PYTHONS).flatten().map(|e| e.path().join("bin")).collect();
+            named.sort();
+            named.reverse();
+            dirs.extend(named);
+        }
+    }
+    dirs
+}
+
+fn is_apple_stub(p: &Path) -> bool {
+    cfg!(target_os = "macos") && p == Path::new(APPLE_STUB)
 }
 
 fn usable_file(p: &Path) -> bool {
     p.is_absolute() && p.is_file()
 }
 
+/// Where uv is: on `PATH`, or where its installer and Homebrew put it.
+pub fn find_uv(env: &SearchEnv) -> Option<PathBuf> {
+    let name = if cfg!(windows) { "uv.exe" } else { "uv" };
+    let mut dirs: Vec<PathBuf> = env.path.as_ref().map(|p| std::env::split_paths(p).collect()).unwrap_or_default();
+    if let Some(home) = &env.home {
+        dirs.push(PathBuf::from(home).join(".local/bin"));
+        dirs.push(PathBuf::from(home).join(".cargo/bin"));
+    }
+    dirs.push("/opt/homebrew/bin".into());
+    dirs.push("/usr/local/bin".into());
+    dirs.into_iter().filter(|d| d.is_absolute()).map(|d| d.join(name)).find(|p| p.is_file())
+}
+
 /// Finds an interpreter: `explicit` alone when given, otherwise the
 /// [`candidates`] in order, the first new enough winning.
 pub fn detect(env: &SearchEnv, explicit: Option<&Path>, timeout: Duration) -> Detection {
     let list = match explicit {
+        Some(p) if is_apple_stub(p) => return Detection::Stub { path: p.to_path_buf() },
         Some(p) => vec![p.to_path_buf()],
         None => candidates(env),
     };
@@ -212,6 +341,54 @@ mod tests {
             fn drop(&mut self) {
                 let _ = std::fs::remove_dir_all(&self.0);
             }
+        }
+
+        #[test]
+        fn uv_comes_first_and_the_newest_of_its_pythons_first() {
+            let root = Bin::new("uv");
+            let fake = |dir: &str| {
+                let bin = root.0.join(dir).join("bin");
+                std::fs::create_dir_all(&bin).unwrap();
+                let p = bin.join("python3");
+                std::fs::write(&p, "#!/bin/sh\n").unwrap();
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+                p
+            };
+            let recommended = fake("home/.gridcraft/python");
+            let venv = fake("venv");
+            let old_uv = fake("uv/cpython-3.11.9-macos-aarch64-none");
+            let new_uv = fake("uv/cpython-3.13.2-macos-aarch64-none");
+            let conda = fake("conda");
+            let on_path = fake("path");
+            let env = SearchEnv {
+                virtual_env: Some(root.0.join("venv").into_os_string()),
+                conda_prefix: Some(root.0.join("conda").into_os_string()),
+                path: std::env::join_paths([root.0.join("path/bin")]).ok(),
+                home: Some(root.0.join("home").into_os_string()),
+                uv_python_dir: Some(root.0.join("uv").into_os_string()),
+                ..SearchEnv::default()
+            };
+            assert_eq!(candidates(&env), vec![recommended, venv, new_uv, old_uv, conda, on_path]);
+        }
+
+        #[test]
+        fn uv_is_found_outside_path() {
+            let root = Bin::new("find-uv");
+            let bin = root.0.join(".local/bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let uv = bin.join("uv");
+            std::fs::write(&uv, "").unwrap();
+            let env = SearchEnv { home: Some(root.0.clone().into_os_string()), path: Some("relative/bin".into()), ..SearchEnv::default() };
+            assert_eq!(find_uv(&env), Some(uv));
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn apples_stub_is_never_asked() {
+            let env = SearchEnv { path: Some("/usr/bin".into()), ..SearchEnv::default() };
+            assert!(!candidates(&env).iter().any(|p| p == Path::new("/usr/bin/python3")));
+            let stub = Path::new("/usr/bin/python3");
+            assert_eq!(detect(&SearchEnv::default(), Some(stub), Duration::from_secs(1)), Detection::Stub { path: stub.to_path_buf() });
         }
 
         fn path_of(dirs: &[&Path]) -> Option<OsString> {
