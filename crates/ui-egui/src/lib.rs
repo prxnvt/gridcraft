@@ -50,6 +50,7 @@ pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
 pub mod python_card;
+pub mod python_ui;
 pub mod python_window;
 pub mod ribbon;
 pub mod selection_glide;
@@ -127,6 +128,9 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// Python in cells (File ▸ Options ▸ Python). Only widget code writes this (see [`python_ui`]).
+    #[serde(deserialize_with = "python_ui::lenient_prefs")]
+    pub python: python_ui::PythonPrefs,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -162,6 +166,7 @@ impl Default for UiState {
             keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            python: python_ui::PythonPrefs::default(),
         }
     }
 }
@@ -230,6 +235,8 @@ pub struct SheetApp {
     pub text_box_editor: Option<text_box::EditState>,
     /// The Python editor window, when open (one at a time, for one cell of one workbook).
     pub py_window: Option<python_window::PyWindow>,
+    /// Python: what the session was given, the panes' state (see [`python_ui`]).
+    pub python: python_ui::PythonUi,
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
