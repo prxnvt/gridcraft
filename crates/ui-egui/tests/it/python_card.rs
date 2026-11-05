@@ -7,10 +7,13 @@ use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_engine::model::PyOutput;
-use gridcraft_ui_egui::python_card::{self, CONVERT, Card, MAX_PREVIEW_CHARS, NOT_RUN};
+use gridcraft_ui_egui::python_card::{self, CONVERT, Card, MAX_PREVIEW_CHARS};
 use serde_json::json;
 
 use crate::common::Harness;
+
+/// What the catalog says about a cell while Python is off, as it is in these tests.
+const OFF: &str = "Python is off. Turn it on in Settings to run Python cells.";
 
 /// B2 holds new code (#BLOCKED!); C4 a cached DataFrame shown as a Python object, with a preview
 /// far longer than the card shows; E2 a cached list shown as values.
@@ -116,8 +119,9 @@ fn python_cells_carry_a_py_tag_and_a_click_on_it_opens_the_card() {
     click(&mut h, tag.center());
     assert_eq!(card(&h), Some(CellRef::parse("B2").unwrap()));
     assert_eq!(h.state().session.active().map(|d| d.selection.active), Some(CellRef::new(1, 1)));
-    // New code has no result: the card says why the cell shows #BLOCKED!.
-    assert!(h.query_by_label(NOT_RUN).is_some(), "the card explains #BLOCKED!");
+    // New code has no result: the card says why the cell shows #BLOCKED!, with what to do.
+    assert!(h.query_by_label(OFF).is_some(), "the card explains #BLOCKED!");
+    assert!(h.query_by_label("Open Settings").is_some());
     assert!(h.query_by_label("#BLOCKED!").is_some());
     assert!(h.query_by_label("Excel Value").is_some(), "and names the return type");
     h.check_accessibility();
@@ -249,7 +253,7 @@ fn a_python_cell_that_shows_an_error_gets_the_warning_button_which_says_why() {
     h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     h.get_by_label("Error checking options").hover();
     h.run_steps(6);
-    assert!(h.query_by_value(NOT_RUN).is_some() || h.query_by_label(NOT_RUN).is_some(), "hovering the button says why the cell shows #BLOCKED!");
+    assert!(h.query_by_value(OFF).is_some() || h.query_by_label(OFF).is_some(), "hovering the button says why the cell shows #BLOCKED!");
     h.get_by_label("Error checking options").click();
     h.run_steps(3);
     assert!(h.query_by_label("#BLOCKED!").is_some(), "the menu names the error");
@@ -281,11 +285,10 @@ fn the_warning_button_says_python_did_not_run_only_for_blocked() {
     h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     h.get_by_label("Error checking options").hover();
     h.run_steps(6);
-    assert!(h.query_by_value(NOT_RUN).is_none() && h.query_by_label(NOT_RUN).is_none(), "the hover doesn't say the code didn't run");
+    assert!(h.query_by_value(OFF).is_some() || h.query_by_label(OFF).is_some(), "the hover says what the catalog says");
     h.get_by_label("Error checking options").click();
     h.run_steps(3);
     assert!(h.query_by_label("#PYTHON!").is_some(), "the menu names the error");
-    assert!(h.query_by_label(NOT_RUN).is_none(), "the menu doesn't say the code didn't run");
     assert!(h.query_by_label("Show Card").is_some(), "the menu still opens the card");
 }
 
