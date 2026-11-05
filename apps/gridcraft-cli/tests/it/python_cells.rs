@@ -94,14 +94,13 @@ fn num(n: f64) -> Value {
 
 #[test]
 fn the_report_names_the_python_the_sandbox_and_what_is_installed() {
-    let Some(s) = session() else { return };
+    let Some(mut s) = session() else { return };
     let env = s.python_environment();
     assert_eq!(env.state, PythonState::Ready);
     let python = env.interpreter.as_ref().expect("the report names the interpreter");
     assert!(python.path.is_absolute() && python.version >= gridcraft_python::interp::MIN_VERSION, "{python:?}");
     assert!(!env.sandbox.is_empty());
     assert!(env.diagnostic.is_none() || env.diagnostic.as_ref().is_some_and(|d| d.kind.id == "packages.noPandas"), "{:?}", env.diagnostic);
-    let mut s = s;
     let json = s.execute("python.environment", json!({})).unwrap();
     assert_eq!(json["state"], "ready");
     assert!(json["interpreter"]["version"].is_string());
@@ -166,7 +165,6 @@ fn opening_a_file_is_refused_by_the_sandbox_and_the_cell_says_so() {
     let Some(mut s) = session() else { return };
     let secret = std::env::temp_dir().canonicalize().unwrap().join(format!("gridcraft-python-cells-{}.txt", std::process::id()));
     std::fs::write(&secret, "secret\n").unwrap();
-    py(&mut s, "A1", "print('before')\n");
     py(&mut s, "A2", &format!("print('before')\nopen({:?}).read()", secret.display().to_string()));
     settle(&mut s);
     std::fs::remove_file(&secret).unwrap();
