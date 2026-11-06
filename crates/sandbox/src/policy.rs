@@ -53,6 +53,20 @@ impl Policy {
                 }
             }
         }
+        // Fonts, which a plot's text is drawn with. Only the system's: fonts in the home folder stay
+        // out of reach. macOS's own `/System/Library/Fonts` comes with its base profile.
+        let fonts: &[&str] = if cfg!(target_os = "linux") {
+            &["/usr/share/fonts", "/usr/local/share/fonts"]
+        } else if cfg!(target_os = "macos") {
+            &["/Library/Fonts"]
+        } else {
+            &[]
+        };
+        for dir in fonts {
+            if Path::new(dir).exists() {
+                self.read.push((*dir).into());
+            }
+        }
         self
     }
 
