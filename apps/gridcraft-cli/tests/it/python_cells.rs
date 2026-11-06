@@ -748,7 +748,7 @@ fn code_from_a_file_goes_on_without_what_it_cant_import() {
         .filter(|r| r["kind"] == "init.skipped" && r["detail"] != "matplotlib")
         .map(|r| (r["detail"].as_str().unwrap().to_string(), r["line"].as_u64().unwrap()))
         .collect();
-    assert_eq!(skipped, [("a_package_nobody_has".to_string(), 4), ("excel".to_string(), 5), ("another_package_nobody_has".to_string(), 6)], "{rows}");
+    assert_eq!(skipped, [("a_package_nobody_has".to_string(), 4), ("another_package_nobody_has".to_string(), 6), ("excel".to_string(), 9)], "{rows}");
     assert_eq!(init_runs(&s), [Some("init.skipped")]);
     // A line that isn't an import or an option is still the code's failure.
     for (bad, line, says) in [("import nothing_here_either\n1 / 0", 2, "ZeroDivisionError"), ("undefined_name + 1", 1, "NameError")] {
@@ -776,7 +776,7 @@ fn a_persons_code_can_keep_excels_own_module() {
     assert_eq!(v(&s, "A1"), num(2.0));
     let rows = s.execute("python.diagnostics", json!({})).unwrap();
     let row = rows.as_array().unwrap().iter().find(|r| r["kind"] == "init.skipped").expect("it says so");
-    assert_eq!((row["detail"].as_str(), row["line"].as_u64(), row["install"].clone()), (Some("excel"), Some(1), serde_json::Value::Null));
+    assert_eq!((row["detail"].as_str(), row["line"].as_u64(), row["install"].clone()), (Some("excel"), Some(2), serde_json::Value::Null));
     assert!(!rows.as_array().unwrap().iter().any(|r| r["kind"] == "packages.missing"), "nothing to install: {rows}");
     // Another module on the same line isn't excused.
     init(&mut s, "import excel, a_package_nobody_has\nrate = 3");
@@ -845,4 +845,205 @@ fn matplotlib_and_seaborn_load_in_the_sandbox_and_it_stays_read_only() {
     }
     assert!(!std::path::Path::new("/tmp/gridcraft-plot-test.png").exists());
     assert!(!std::path::Path::new("/tmp/gridcraft-plot-test.txt").exists());
+}
+
+/// `(width, height)` from `python.image`, and the bytes' pixels, for a cell that gave a picture.
+fn picture(s: &mut Session, cell: &str) -> (u64, u64, u64) {
+    let r = s.execute("python.image", json!({"cell": cell})).unwrap_or_else(|e| panic!("{cell}: {e}: {:?}", kind(s, cell)));
+    (r["width"].as_u64().unwrap(), r["height"].as_u64().unwrap(), r["density"].as_u64().unwrap())
+}
+
+const IRIS: &str = "import numpy as _np\n\
+    _rng = _np.random.default_rng(1)\n\
+    iris = pd.DataFrame(_rng.normal(size=(150, 4)), columns=['sepal_length', 'sepal_width', 'petal_length', 'petal_width'])\n";
+
+#[test]
+fn microsofts_three_samples_give_pictures() {
+    let Some(mut s) = plots_session() else { return };
+    py(&mut s, "A1", IRIS);
+    // The pair plot ends in an assignment, and comes out the size Excel reports.
+    py(&mut s, "A2", "import seaborn as sns\npairplot = sns.pairplot(iris)");
+    // The scatter plot ends in a title.
+    py(
+        &mut s,
+        "A3",
+        "import matplotlib.pyplot as plt\nplt.figure()\nplt.scatter(iris['sepal_length'], iris['sepal_width'])\nplt.xlabel('sepal_length')\nplt.ylabel('sepal_width')\nplt.title('Sepal length and width analysis')",
+    );
+    // The non-Latin sample ends in plt.show().
+    py(
+        &mut s,
+        "A4",
+        "import matplotlib.pyplot as plt\nfrom matplotlib.font_manager import FontProperties\nfont_path = excel.FontPath.CHINESE_SIMPLIFIED\nfont_properties = FontProperties(fname=font_path)\nplt.rcParams['font.family'] = font_properties.get_name()\nmyplot = pd.DataFrame({'\u{6b27}\u{6587}': [1, 2, 3], '\u{6bd4}\u{5c14}': [1, 2, 3]}).plot(x='\u{6b27}\u{6587}')\nplt.show()",
+    );
+    settle(&mut s);
+    assert_eq!(v(&s, "A2"), Value::text("Image"), "{:?}", s.python_diagnostic(0, CellRef::parse("A2").unwrap()));
+    let (w, h, density) = picture(&mut s, "A2");
+    assert!((980..=992).contains(&w) && (980..=992).contains(&h), "{w} x {h}");
+    assert_eq!(density, 2, "drawn sharper than it reports");
+    assert_eq!(v(&s, "A3"), Value::text("Image"));
+    picture(&mut s, "A3");
+    if cfg!(target_os = "macos") {
+        assert_eq!(v(&s, "A4"), Value::text("Image"), "{:?}", kind(&s, "A4"));
+        picture(&mut s, "A4");
+    }
+}
+
+#[test]
+fn what_a_cell_ends_with_decides_whether_it_is_a_picture() {
+    let Some(mut s) = plots_session() else { return };
+    let pictures = [
+        "plt.figure()\nplt.plot([1, 2])",
+        "plt.figure().add_subplot()",
+        "plt.subplots()",
+        "plt.subplots(2, 2)[1]",
+        "plt.figure()\nplt.bar([1], [2])",
+        "plt.figure()\nplt.hist([1, 2, 3])",
+        "plt.figure()\nplt.boxplot([1, 2, 3])",
+        "plt.figure()\nplt.pie([1, 2])",
+        "plt.figure()\nplt.plot([1])\nplt.show()",
+        "plt.figure()\nplt.plot([1])\nz = 1",
+        "plt.figure()\nplt.plot([1])\nNone",
+        "pd.DataFrame({'a': [1, 2]}).plot()",
+        "pd.DataFrame({'a': [1, 2]}).hist()",
+        "pd.DataFrame({'a': [1, 2]})['a'].plot.bar()",
+        "sns.relplot(pd.DataFrame({'a': [1, 2], 'b': [3, 4]}), x='a', y='b')",
+        "sns.lineplot(pd.DataFrame({'a': [1, 2], 'b': [3, 4]}), x='a', y='b')",
+        "import seaborn.objects as so\nso.Plot(pd.DataFrame({'a': [1, 2], 'b': [3, 4]}), x='a', y='b').add(so.Line())",
+        "from PIL import Image\nImage.new('RGB', (40, 30), (10, 120, 200))",
+        "from PIL import Image\nImage.new('L', (5, 6))",
+        "from matplotlib.figure import Figure\nf = Figure()\nf.add_subplot().plot([1])\nf",
+        "class P:\n    def _repr_png_(self):\n        from PIL import Image\n        import io\n        b = io.BytesIO()\n        Image.new('RGB', (9, 7)).save(b, 'PNG')\n        return b.getvalue()\nP()",
+        "class J:\n    def _repr_jpeg_(self):\n        from PIL import Image\n        import io\n        b = io.BytesIO()\n        Image.new('RGB', (9, 7)).save(b, 'JPEG')\n        return b.getvalue(), {}\nJ()",
+    ];
+    for code in pictures {
+        py(&mut s, "A1", code);
+        settle(&mut s);
+        assert_eq!(v(&s, "A1"), Value::text("Image"), "{code}: {:?}", s.python_diagnostic(0, CellRef::parse("A1").unwrap()));
+    }
+    // A number or a table comes first, an open figure doesn't matter, and an object that can't draw
+    // itself stays an object.
+    for (code, want) in [
+        ("plt.figure()\nplt.plot([1])\n5", num(5.0)),
+        ("plt.figure()\nplt.plot([1])\n'text'", Value::text("text")),
+        ("x = 5\nx", num(5.0)),
+        ("[1.0]", num(1.0)),
+    ] {
+        py(&mut s, "A1", code);
+        settle(&mut s);
+        assert_eq!(v(&s, "A1"), want, "{code}");
+    }
+    for (code, label) in [
+        ("class Bad:\n    def _repr_png_(self):\n        raise ValueError()\nBad()", "Bad"),
+        ("class Empty:\n    def _repr_png_(self):\n        return None\nEmpty()", "Empty"),
+        ("class NotOne:\n    def _repr_png_(self):\n        return b'nothing like a picture'\nNotOne()", "NotOne"),
+        ("class Svg:\n    def _repr_svg_(self):\n        return '<svg/>'\nSvg()", "Svg"),
+    ] {
+        py(&mut s, "A1", code);
+        settle(&mut s);
+        assert_eq!(v(&s, "A1"), Value::text(label), "{code}");
+    }
+}
+
+#[test]
+fn a_figure_nobody_changed_is_no_result() {
+    let Some(mut s) = plots_session() else { return };
+    py(&mut s, "A1", "plt.figure()\nplt.plot([1, 2])");
+    py(&mut s, "A2", "y = 2");
+    py(&mut s, "A3", "print('hello')");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("Image"));
+    assert_eq!(v(&s, "A2"), Value::Empty);
+    assert_eq!(v(&s, "A3"), Value::Empty);
+}
+
+#[test]
+fn lines_dont_pile_up_when_cells_run_again() {
+    let Some(mut s) = plots_session() else { return };
+    let lines = "len(plt.gcf().axes[0].lines)";
+    set(&mut s, "C1", "1");
+    py(&mut s, "A1", "plt.plot([xl('C1'), 2])\nplt.gcf()");
+    py(&mut s, "A2", "plt.plot([2, 1])");
+    py(&mut s, "A3", lines);
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("Image"));
+    assert_eq!(v(&s, "A2"), Value::text("Image"));
+    assert_eq!(v(&s, "A3"), num(2.0), "a later cell draws on the same figure");
+    for n in 2..5 {
+        set(&mut s, "C1", &n.to_string());
+        settle(&mut s);
+        assert_eq!(v(&s, "A3"), num(2.0), "after run {n}");
+    }
+    // A2 changed A1's figure, so running A2 on its own would add a line each time: it starts from A1.
+    py(&mut s, "A2", "plt.plot([2, 2])");
+    settle(&mut s);
+    assert_eq!(v(&s, "A3"), num(2.0));
+    py(&mut s, "A2", "plt.plot([2, 3])");
+    settle(&mut s);
+    assert_eq!(v(&s, "A3"), num(2.0));
+    // Run All, and Reset, start clean.
+    s.execute("python.runAll", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "A3"), num(2.0));
+    s.execute("python.reset", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "A3"), num(2.0));
+}
+
+#[test]
+fn a_later_cell_can_finish_an_earlier_cells_plot() {
+    let Some(mut s) = plots_session() else { return };
+    py(&mut s, "A1", "plt.plot([1, 2])");
+    py(&mut s, "A2", "plt.title('Late')");
+    py(&mut s, "A3", "plt.gca().get_title()");
+    settle(&mut s);
+    assert_eq!(v(&s, "A2"), Value::text("Image"));
+    assert_eq!(v(&s, "A3"), Value::text("Late"));
+}
+
+#[test]
+fn a_figure_too_large_to_draw_says_so_and_costs_no_memory() {
+    let Some(mut s) = plots_session() else { return };
+    for code in [
+        "plt.figure(figsize=(200, 200))\nplt.plot([1])",
+        "plt.figure(figsize=(90, 1), dpi=100)\nplt.plot([1])",
+        "plt.figure(dpi=5000)\nplt.plot([1])",
+        "plt.figure()\nplt.text(1e7, 1e7, 'far away')\nplt.gcf()",
+    ] {
+        py(&mut s, "A1", code);
+        settle(&mut s);
+        assert_eq!(kind(&s, "A1"), Some("plot.tooLarge"), "{code}");
+    }
+    // A picture at the limit comes back at its own resolution, not twice it.
+    py(&mut s, "A1", "plt.figure(figsize=(80, 5), dpi=100)\nplt.plot([1])\nplt.gca().set_title('wide')");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("Image"), "{:?}", kind(&s, "A1"));
+    assert_eq!(picture(&mut s, "A1").2, 1);
+    // A figure that breaks while it draws is the code's own error.
+    py(&mut s, "A1", "plt.figure()\nplt.title('$\\\\frac{$')\nplt.gcf()");
+    settle(&mut s);
+    assert_eq!(kind(&s, "A1"), Some("python.exception"));
+    // The worker is still there.
+    py(&mut s, "A1", "1 + 1");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), num(2.0));
+}
+
+#[test]
+fn text_in_other_scripts_draws_without_choosing_a_font() {
+    let Some(mut s) = plots_session() else { return };
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    py(
+        &mut s,
+        "A1",
+        "import warnings\nwith warnings.catch_warnings(record=True) as w:\n    warnings.simplefilter('always')\n    plt.figure()\n    plt.title('\u{6b27}\u{6587} \u{d55c}\u{ae00}')\n    plt.gcf().canvas.draw()\nlen(w)",
+    );
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), num(0.0), "no glyph was missing");
+    py(&mut s, "A2", "excel.FontPath.KOREAN.endswith(('.ttf', '.ttc', '.otf'))");
+    py(&mut s, "A3", "excel.FontPath.NOT_A_LANGUAGE");
+    settle(&mut s);
+    assert_eq!(v(&s, "A2"), Value::Bool(true));
+    assert_eq!(kind(&s, "A3"), Some("python.exception"));
 }

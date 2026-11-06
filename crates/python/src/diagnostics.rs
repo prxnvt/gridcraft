@@ -154,6 +154,7 @@ pub const CATALOG: &[Kind] = &[
     k("denied.file", Error, Cell, "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl().", A::None),
     k("denied.network", Error, Cell, "Python cells can't use the network. Put the data on a sheet and read it with xl().", A::None),
     k("denied.process", Error, Cell, "Python cells can't start other programs or processes.", A::None),
+    k("plot.tooLarge", Error, Cell, "This picture is too large to draw. Make figsize or dpi smaller.", A::None),
     k("xl.notLiteral", Error, Cell, "xl() needs its reference written as text in the code, such as xl(\"A1:B5\").", A::None),
     k("xl.tooLarge", Error, Cell, "This range is too large to send to Python.", A::None),
     k("xl.badReference", Error, Cell, "xl() names something that isn't a cell, range, table or defined name here.", A::None),
@@ -221,7 +222,7 @@ const PYTHON_EXCEPTION: &Kind = &k("python.exception", Error, Cell, "The code ra
 
 /// Which kinds a worker may report for an error it raised: only the cell-level ones about code.
 /// Anything else it names (it is untrusted) reads as a plain error.
-const WORKER_KINDS: [&str; 9] = [
+const WORKER_KINDS: [&str; 10] = [
     "python.syntax",
     "python.exception",
     "python.name",
@@ -230,6 +231,7 @@ const WORKER_KINDS: [&str; 9] = [
     "denied.file",
     "denied.network",
     "denied.process",
+    "plot.tooLarge",
     "xl.notLiteral",
 ];
 

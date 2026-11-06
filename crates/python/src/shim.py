@@ -13,6 +13,7 @@
 
 def _gridcraft_worker():
     import ast
+    import base64
     import builtins
     import datetime
     import errno
@@ -44,6 +45,9 @@ def _gridcraft_worker():
     MAX_TABLE_BYTES = 1048576
     MAX_STDOUT_BYTES = 1048576
     MAX_ARRAY_CELLS = 1000000
+    MAX_PICTURE_BYTES = 16777216
+    MAX_PICTURE_SIDE = 8192
+    MAX_PICTURE_PIXELS = 16000000
 
     ERRORS = frozenset(
         ("#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA", "#SPILL!",
@@ -219,8 +223,61 @@ def _gridcraft_worker():
 
         tempfile.mkdtemp = only_for_others
 
+    # Fonts that cover the scripts matplotlib's own font doesn't, in the order they are tried. A few
+    # are enough, and each one costs time at a plot's first text.
+    NON_LATIN_FONTS = (
+        "Arial Unicode MS",
+        "Noto Sans CJK SC",
+        "Noto Sans CJK JP",
+        "Hiragino Sans GB",
+        "Apple SD Gothic Neo",
+        "Noto Sans Thai",
+        "Thonburi",
+        "WenQuanYi Zen Hei",
+        "Droid Sans Fallback",
+        "Microsoft YaHei",
+        "Malgun Gothic",
+        "Leelawadee UI",
+    )
+
+    def use_non_latin_fonts():
+        # Text in any script draws without the code choosing a font: matplotlib falls back along the
+        # font families, and only a list of families gives it anywhere to fall back to.
+        matplotlib = sys.modules["matplotlib"]
+        fonts = sys.modules["matplotlib.font_manager"].fontManager.ttflist
+        have = {f.name for f in fonts}
+        extra = [name for name in NON_LATIN_FONTS if name in have][:3]
+        if extra and "DejaVu Sans" in have and list(matplotlib.rcParams["font.family"]) == ["sans-serif"]:
+            matplotlib.rcParams["font.family"] = ["DejaVu Sans"] + extra
+
+    # The file of each kind of font Excel's excel.FontPath names, so code written for it runs here.
+    EXCEL_FONTS = {
+        "CHINESE_SIMPLIFIED": ("Noto Sans CJK SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Zen Hei", "Songti SC", "Arial Unicode MS"),
+        "CHINESE_TRADITIONAL": ("Noto Sans CJK TC", "Heiti TC", "Microsoft JhengHei", "Arial Unicode MS"),
+        "JAPANESE": ("Noto Sans CJK JP", "Hiragino Sans", "Yu Gothic", "Arial Unicode MS"),
+        "KOREAN": ("Noto Sans CJK KR", "Apple SD Gothic Neo", "AppleGothic", "Malgun Gothic", "Arial Unicode MS"),
+        "THAI": ("Noto Sans Thai", "Thonburi", "Leelawadee UI", "Arial Unicode MS"),
+    }
+
+    class FontPaths:
+        def __getattr__(self, name):
+            names = EXCEL_FONTS.get(name)
+            if names is None:
+                raise AttributeError("excel.FontPath has no %s" % name)
+            manager = importlib.import_module("matplotlib.font_manager").fontManager
+            for wanted in names:
+                for font in manager.ttflist:
+                    if font.name == wanted:
+                        return font.fname
+            raise AttributeError("no font for %s on this machine" % name)
+
+    excel = types.ModuleType("excel")
+    excel.FontPath = FontPaths()
+    sys.modules["excel"] = excel
+
     class PlotHook:
-        # A finder that finds nothing: the import system asks it first, which is the moment to act.
+        # A finder that finds nothing of its own: the import system asks it first, which is the
+        # moment to act.
         @staticmethod
         def find_spec(name, path=None, target=None):
             if name == "matplotlib":
@@ -228,7 +285,26 @@ def _gridcraft_worker():
                     before_matplotlib()
                 except Exception:
                     pass
+            elif name == "matplotlib.figure":
+                return figure_module_spec(name, path, target)
             return None
+
+    def figure_module_spec(name, path, target):
+        machinery = importlib.import_module("importlib.machinery")
+        spec = machinery.PathFinder.find_spec(name, path, target)
+        loader = getattr(spec, "loader", None)
+        if loader is not None:
+            run_module = loader.exec_module
+
+            def exec_module(module):
+                run_module(module)
+                try:
+                    use_non_latin_fonts()
+                except Exception:
+                    pass
+
+            loader.exec_module = exec_module
+        return spec
 
     sys.meta_path.insert(0, PlotHook)
 
@@ -646,6 +722,214 @@ def _gridcraft_worker():
                 o["table"] = table
         return {"object": o}
 
+    # Pictures. A figure is drawn at twice its own resolution, so it stays sharp on a dense screen and
+    # when it is enlarged; `size` is what its own resolution gives, as Excel reports it.
+    DENSITY = 2
+
+    class PictureTooLarge(ValueError):
+        pass
+
+    PictureTooLarge.__name__ = "ValueError"
+    PictureTooLarge.__qualname__ = "ValueError"
+
+    def too_large(width, height):
+        return not (0 < width <= MAX_PICTURE_SIDE and 0 < height <= MAX_PICTURE_SIDE and width * height <= MAX_PICTURE_PIXELS)
+
+    def too_large_message(width, height):
+        return "This picture would be %d x %d pixels. The limit is %d pixels a side and %d pixels in all. Make figsize or dpi smaller." % (
+            width,
+            height,
+            MAX_PICTURE_SIDE,
+            MAX_PICTURE_PIXELS,
+        )
+
+    def root_figure(fig):
+        # A subfigure belongs to a figure, which is what can be drawn.
+        for _ in range(16):
+            if instance_of(fig, "matplotlib.figure", "Figure"):
+                return fig
+            fig = getattr(fig, "figure", None)
+            if fig is None:
+                return None
+        return None
+
+    def figure_of(v, depth=0):
+        """The matplotlib figure a value stands for, or None. Only a package that is loaded can have
+        made one. A plot call's result counts: a line, a list of lines, the tuple plt.hist gives, the
+        dictionary plt.boxplot gives, a seaborn grid, and an array of axes."""
+        if "matplotlib.figure" not in sys.modules or depth > 3:
+            return None
+        if instance_of(v, "matplotlib.figure", "FigureBase"):
+            return root_figure(v)
+        if instance_of(v, "matplotlib.artist", "Artist") or instance_of(v, "seaborn.axisgrid", "_BaseGrid"):
+            return root_figure(getattr(v, "figure", None))
+        # What else a plot call gives, such as plt.pie's container: the figure it drew on.
+        if (type(v).__module__ or "").split(".")[0] == "matplotlib":
+            return changed_figure()
+        if isinstance(v, tuple):
+            for x in v[:8]:
+                fig = figure_of(x, depth + 1)
+                if fig is not None:
+                    return fig
+            return None
+        if isinstance(v, list):
+            return figure_of(v[0], depth + 1) if v else None
+        if isinstance(v, dict):
+            for x in v.values():
+                return figure_of(x, depth + 1)
+            return None
+        if instance_of(v, "numpy", "ndarray") and v.dtype == object and v.size:
+            return figure_of(v.flat[0], depth + 1)
+        return None
+
+    def current_figures():
+        helpers = sys.modules.get("matplotlib._pylab_helpers")
+        return [m.canvas.figure for m in helpers.Gcf.get_all_fig_managers()] if helpers is not None else []
+
+    def changed_figure():
+        # pyplot's current figure, when this cell changed it.
+        helpers = sys.modules.get("matplotlib._pylab_helpers")
+        manager = helpers.Gcf.get_active() if helpers is not None else None
+        fig = manager.canvas.figure if manager is not None else None
+        return fig if fig is not None and fig.stale else None
+
+    def draw_figure(fig, dpi, tight):
+        buffer = io.BytesIO()
+        options = {"bbox_inches": "tight"} if tight else {}
+        fig.savefig(buffer, format="png", dpi=dpi, metadata={"Software": None}, **options)
+        return buffer.getvalue()
+
+    def picture_of_figure(fig):
+        """The figure's bytes, drawn as a picture, and how many pixels stand for one of its own."""
+        dpi = float(fig.get_dpi())
+        inches = fig.get_size_inches()
+        width, height = float(inches[0]) * dpi, float(inches[1]) * dpi
+        if too_large(width, height):
+            raise PictureTooLarge(too_large_message(width, height))
+        # What sticks out of the figure makes a tight picture larger: anything far out would ask for
+        # more memory than the worker has.
+        get_renderer = getattr(fig.canvas, "get_renderer", None)
+        if get_renderer is not None:
+            box = fig.get_tightbbox(get_renderer())
+            width, height = (float(box.width) + 0.2) * dpi, (float(box.height) + 0.2) * dpi
+            if too_large(width, height):
+                raise PictureTooLarge(too_large_message(width, height))
+        density = 1 if too_large(width * DENSITY, height * DENSITY) else DENSITY
+        data = draw_figure(fig, dpi * density, True)
+        if len(data) > MAX_PICTURE_BYTES and density > 1:
+            density = 1
+            data = draw_figure(fig, dpi, True)
+        fig.stale = False
+        return data, density
+
+    def displayed(v):
+        """What an object's own _repr_png_ or _repr_jpeg_ gives, or None."""
+        for name in ("_repr_png_", "_repr_jpeg_"):
+            method = getattr(type(v), name, None)
+            if method is None:
+                continue
+            data = method(v)
+            if isinstance(data, tuple) and data:
+                data = data[0]
+            if isinstance(data, (bytes, bytearray)) and data:
+                return bytes(data)
+        return None
+
+    JPEG_FRAMES = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+
+    def picture_format(data):
+        """The type, width and height a picture's header gives, or None for anything else."""
+        if data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR" and len(data) >= 24:
+            return "image/png", int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+        if data[:2] != b"\xff\xd8":
+            return None
+        i = 2
+        while i + 9 <= len(data):
+            if data[i] != 0xFF:
+                return None
+            marker = data[i + 1]
+            if marker == 0xFF:
+                i += 1
+            elif marker in JPEG_FRAMES:
+                return "image/jpeg", int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
+            elif marker == 0x01 or 0xD0 <= marker <= 0xD8:
+                i += 2
+            else:
+                i += 2 + max(2, int.from_bytes(data[i + 2:i + 4], "big"))
+        return None
+
+    def picture_on_wire(data, density):
+        found = picture_format(data)
+        if found is None:
+            return None
+        mime, width, height = found
+        if too_large(width, height):
+            raise PictureTooLarge(too_large_message(width, height))
+        if len(data) > MAX_PICTURE_BYTES:
+            raise PictureTooLarge("This picture takes more than %d bytes. Make figsize or dpi smaller." % MAX_PICTURE_BYTES)
+        image = {"mime": mime, "base64": base64.b64encode(data).decode("ascii")}
+        if density != 1:
+            image["density"] = density
+        size = [max(1, width // density), max(1, height // density)]
+        return {"object": {"typeName": "Image", "preview": "Image", "size": size, "image": image}}
+
+    def picture_result(v, at):
+        """A cell's result as a picture, or None for any other result. A value that can give a
+        picture does; with no value, a figure this cell changed does; a number or a table takes
+        priority over an open figure."""
+        fig = figure_of(v)
+        if fig is None and v is not None:
+            data = unless_it_fails(displayed, v)
+            return picture_on_wire(data, 1) if data is not None else None
+        if fig is None:
+            fig = changed_figure()
+        if fig is None:
+            return None
+        if at is not None:
+            kept[at] = fig
+        return picture_on_wire(*picture_of_figure(fig))
+
+    # Which cell made each figure, and the figure each cell gave. A cell runs again from a clean
+    # start: the figures it or a later cell made are closed, or lines would pile up on every run.
+    # Figures of earlier cells stay, so a later cell can add a title.
+    FIRST = (-1, -1, -1)
+    kept = {}
+
+    def position(req):
+        at = req.get("at")
+        if isinstance(at, list) and len(at) == 3 and all(isinstance(n, int) for n in at):
+            return tuple(at)
+        return None
+
+    def before_cell(at):
+        for fig in current_figures():
+            owner = getattr(fig, "_gridcraft_at", FIRST)
+            if at is not None and owner >= at:
+                sys.modules["matplotlib.pyplot"].close(fig)
+            else:
+                fig.stale = False
+        kept.pop(at, None)
+
+    def after_cell(at):
+        """Marks the figures this cell made, and returns the first cell before it whose figure this
+        one changed: running this cell again has to start from there."""
+        touched = None
+        for fig in current_figures():
+            owner = getattr(fig, "_gridcraft_at", None)
+            if owner is None:
+                fig._gridcraft_at = at if at is not None else FIRST
+            elif at is not None and FIRST < owner < at and fig.stale and (touched is None or owner < touched):
+                touched = owner
+        return touched
+
+    def reset_plots():
+        kept.clear()
+        pyplot = sys.modules.get("matplotlib.pyplot")
+        if pyplot is not None:
+            pyplot.close("all")
+            sys.modules["matplotlib"].rcdefaults()
+            use_non_latin_fonts()
+
     def output(v, want_object):
         s = scalar(v)
         if s is not NOT_SCALAR:
@@ -763,6 +1047,8 @@ def _gridcraft_worker():
             return "python.syntax", None
         if isinstance(e, XlReference):
             return "xl.notLiteral", None
+        if isinstance(e, PictureTooLarge):
+            return "plot.tooLarge", None
         if isinstance(e, ModuleNotFoundError):
             return "module.missing", e.name
         # seaborn asks for scipy in its own words.
@@ -841,7 +1127,8 @@ def _gridcraft_worker():
             return gone[e.name]
         modules = modules_of(stmt)
         if not from_file:
-            return "excel" if modules == ["excel"] and isinstance(e, ImportError) else None
+            # A person's code can keep Excel's own options: only that module's are excused.
+            return "excel" if isinstance(e, AttributeError) and module_call(stmt, g) == "excel" else None
         if modules:
             name = getattr(e, "name", None)
             return (name if isinstance(name, str) and name else modules[0]).split(".")[0]
@@ -880,6 +1167,7 @@ def _gridcraft_worker():
         main = types.ModuleType("__main__")
         main.__dict__["__builtins__"] = builtins
         main.__dict__["xl"] = xl
+        main.__dict__["excel"] = excel
         for name, module in DEFAULT_IMPORTS.items():
             main.__dict__[name] = Lazy(module)
         sys.modules["__main__"] = main
@@ -897,8 +1185,10 @@ def _gridcraft_worker():
                 raise TypeError("no code")
             # xl() has no cell to read for while initialization code runs.
             state["inputs"] = None if init else inputs if isinstance(inputs, dict) else {}
+            at = None if init else position(req)
             sys.stdout = capture
             try:
+                before_cell(at)
                 if init:
                     value = initialize(code, init == "file")
                 else:
@@ -909,7 +1199,11 @@ def _gridcraft_worker():
             finally:
                 sys.stdout = saved
                 state["inputs"] = None
-            msg = {"type": "done", "id": rid, "ok": True, "value": output(value, req.get("output") == "object")}
+            touched = after_cell(at)
+            picture = None if init else picture_result(value, at)
+            msg = {"type": "done", "id": rid, "ok": True, "value": picture if picture is not None else output(value, req.get("output") == "object")}
+            if touched is not None:
+                msg["touched"] = list(touched)
             if capture.text():
                 msg["stdout"] = capture.text()
             return msg
@@ -958,6 +1252,10 @@ def _gridcraft_worker():
             send(with_peak(run(req)))
         elif kind == "reset":
             fresh()
+            try:
+                reset_plots()
+            except Exception:
+                pass
             send(with_peak({"type": "done", "id": req.get("id"), "ok": True, "value": None}))
         else:
             break

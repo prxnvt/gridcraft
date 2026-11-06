@@ -186,10 +186,10 @@ fn stdout_is_captured_and_the_protocol_is_out_of_reach() {
     assert_eq!(value(run(&mut c, "import sys\nsys.stdin.read()")), Value::text(""));
     // The shim's names aren't in __main__ (after a reset, which drops the names set above).
     assert_eq!(value(c.reset().unwrap()), Value::Empty);
-    assert_eq!(value(run(&mut c, "','.join(sorted(k for k in globals() if not k.startswith('__')))")), Value::text("np,pd,plt,sm,sns,xl"));
+    assert_eq!(value(run(&mut c, "','.join(sorted(k for k in globals() if not k.startswith('__')))")), Value::text("excel,np,pd,plt,sm,sns,xl"));
     assert_eq!(
         value(run(&mut c, "','.join(sorted(k for k in vars(__import__('sys').modules['__main__']) if not k.startswith('__')))")),
-        Value::text("np,pd,plt,sm,sns,xl")
+        Value::text("excel,np,pd,plt,sm,sns,xl")
     );
     // The same worker still answers after all that.
     assert_eq!(value(run(&mut c, "2")), Value::Number(2.0));
@@ -379,19 +379,19 @@ fn a_range_is_a_dataframe_when_pandas_is_there() {
 fn the_return_type_decides_between_cells_and_an_object() {
     let Some(p) = python() else { return };
     let mut c = client(p);
-    let id = c.submit_cell("[1, 2]", BTreeMap::new(), false).unwrap();
+    let id = c.submit_cell("[1, 2]", BTreeMap::new(), false, None).unwrap();
     let Some(RunResult { outcome: Outcome::Ok { output: Output::Value(Value::Array(a)), .. }, .. }) = c.wait().filter(|r| r.id == id) else {
         panic!("cells")
     };
     assert_eq!((a.rows, a.cols), (2, 1));
-    let id = c.submit_cell("[1, 2]", BTreeMap::new(), true).unwrap();
+    let id = c.submit_cell("[1, 2]", BTreeMap::new(), true, None).unwrap();
     let Some(RunResult { outcome: Outcome::Ok { output: Output::Object { type_name, preview, .. }, .. }, .. }) = c.wait().filter(|r| r.id == id)
     else {
         panic!("object")
     };
     assert_eq!((type_name.as_str(), preview.as_str()), ("list", "[1, 2]"));
     // A number stays a number either way.
-    let id = c.submit_cell("3", BTreeMap::new(), true).unwrap();
+    let id = c.submit_cell("3", BTreeMap::new(), true, None).unwrap();
     let Some(RunResult { outcome: Outcome::Ok { output: Output::Value(Value::Number(n)), .. }, .. }) = c.wait().filter(|r| r.id == id) else {
         panic!("number")
     };
@@ -752,7 +752,7 @@ fn a_range_of_dates_survives_a_pandas_it_cannot_ask() {
 
 /// What a Python Object cell gets: the object's name, its size and its table.
 fn object(c: &mut Client, code: &str) -> (String, Vec<u64>, Option<Table>) {
-    let id = c.submit_cell(code, BTreeMap::new(), true).unwrap();
+    let id = c.submit_cell(code, BTreeMap::new(), true, None).unwrap();
     match c.wait().filter(|r| r.id == id).map(|r| r.outcome) {
         Some(Outcome::Ok { output: Output::Object { type_name, size, table, .. }, .. }) => (type_name, size, table),
         other => panic!("{code}: {other:?}"),
@@ -812,7 +812,7 @@ fn a_list_of_rows_gives_a_table_and_a_flat_list_none() {
     // A list whose methods fail has no table, and still its result.
     assert_eq!(object(&mut c, "class Rows(list):\n    def __getitem__(self, i): raise SystemExit(4)\nRows([[1]])").2, None);
     // In an Excel value cell a dict has neither size nor table.
-    let id = c.submit_cell("{'a': 1}", BTreeMap::new(), false).unwrap();
+    let id = c.submit_cell("{'a': 1}", BTreeMap::new(), false, None).unwrap();
     match c.wait().filter(|r| r.id == id).map(|r| r.outcome) {
         Some(Outcome::Ok { output: Output::Object { size, table, .. }, .. }) => assert!(size.is_empty() && table.is_none()),
         other => panic!("{other:?}"),
