@@ -284,6 +284,9 @@ pub fn reason(app: &SheetApp) -> Option<Diagnostic> {
     if !urgent && !app.session.python_workbook_enabled() && app.session.python_has_cells() {
         return Some(Diagnostic::new("off.workbook", "", None));
     }
+    if !urgent && let Some(failed) = app.session.python_init_failure() {
+        return Some(failed.clone());
+    }
     report
 }
 
@@ -305,7 +308,8 @@ pub fn sentence(lang: Language, d: &Diagnostic) -> String {
 pub fn run_blocked(app: &SheetApp) -> Option<String> {
     let lang = app.ui.language;
     match reason(app) {
-        Some(d) if d.kind.id == "connect.failed" || d.kind.id == "packages.noPandas" => {}
+        // Running is how a failed initialization is tried again.
+        Some(d) if matches!(d.kind.id, "connect.failed" | "packages.noPandas" | "init.failed") => {}
         Some(d) => return Some(sentence(lang, &d)),
         None => {}
     }
@@ -596,7 +600,11 @@ pub fn status_item(app: &mut SheetApp, ui: &mut Ui) {
     let shown = state(app);
     let text = match app.session.python_running() {
         Some(r) => {
-            let cell = format!("{}!{}", gridcraft_engine::formula::quote_sheet(&r.sheet), r.cell.a1());
+            let cell = if r.initialization {
+                lang.tr(crate::python_window::INITIALIZATION).to_string()
+            } else {
+                format!("{}!{}", gridcraft_engine::formula::quote_sheet(&r.sheet), r.cell.a1())
+            };
             lang.tr("Python: running {cell}, {seconds} s").replace("{cell}", &cell).replace("{seconds}", &r.elapsed.as_secs().to_string())
         }
         None => lang.tr("Python: {state}").replace("{state}", lang.tr(state_label(shown))),
@@ -615,7 +623,19 @@ pub fn inspect(app: &SheetApp) -> Json {
     let report = app.session.python_report();
     let pane = app.grid.pane.as_deref();
     let d = reason(app);
-    let running = app.session.python_running().map(|r| json!({"sheet": r.sheet, "cell": r.cell.a1(), "ms": r.elapsed.as_secs_f64() * 1000.0}));
+    let running = app.session.python_running().map(|r| {
+        let ms = r.elapsed.as_secs_f64() * 1000.0;
+        if r.initialization { json!({"initialization": true, "ms": ms}) } else { json!({"sheet": r.sheet, "cell": r.cell.a1(), "ms": ms}) }
+    });
+    let initialization = app.session.active().and_then(|d| d.wb.python_env.as_ref()).map(|e| {
+        json!({
+            "userModified": e.user_modified,
+            "fits": e.fits(),
+            "chars": e.code.chars().count(),
+            "failed": app.session.python_init_failure().map(|f| json!({"detail": f.detail, "line": f.line})),
+            "skipped": app.session.python_init_diagnostics().iter().filter(|x| x.diagnostic.kind.id == "init.skipped").map(|x| x.diagnostic.detail.clone()).collect::<Vec<_>>(),
+        })
+    });
     // What the checks found in code being edited, unless that code is out of view.
     let bar_shown = app.editor.as_ref().is_some_and(|e| e.python && !crate::control::draft_hidden(app, e));
     let window_shown = app.py_window.is_some() && crate::python_window::state(app).get("hidden").and_then(Json::as_bool) != Some(true);
@@ -630,6 +650,7 @@ pub fn inspect(app: &SheetApp) -> Json {
         "calculation": app.session.python_calculation(),
         "interpreter": report.interpreter.as_ref().map(|i| i.path.display().to_string()),
         "running": running,
+        "initialization": initialization,
         "findings": {"formulaBar": findings(bar_shown, &app.python.bar_checks), "editor": findings(window_shown, &app.python.window_checks)},
         "optionsPage": app.backstage.as_ref().is_some_and(|b| b.page == crate::backstage::Page::Options && b.options_tab == crate::backstage::OptionsTab::Python),
         "panes": {
@@ -670,7 +691,7 @@ pub enum Guard {
 pub fn packages_for(d: &Diagnostic) -> Vec<String> {
     match d.kind.id {
         "packages.noPandas" => vec!["pandas".to_string()],
-        "packages.missing" => vec![install_name(&d.detail)],
+        "packages.missing" | "init.skipped" => python::install_name_of(&d.detail).into_iter().collect(),
         // A finding's detail is the name to install already.
         "lint.importMissing" => vec![d.detail.clone()],
         "module.missing" => module_named(&d.detail).map(|m| install_name(&m)).into_iter().collect(),
@@ -700,7 +721,7 @@ pub fn cell_it_points_at(d: &Diagnostic) -> Option<(Option<String>, String)> {
 
 /// The button for what a diagnostic's kind offers, when there is something to do: Open Settings,
 /// Choose Interpreter, Copy Install Command with pip behind a collapsed section, Enable, Run Again,
-/// Reset, Go To Cell. `cell` is the cell it is about, for what runs. Returns whether it was pressed.
+/// Open Initialization and Reset, Go To Cell. `cell` is the cell it is about, for what runs. Returns whether it was pressed.
 pub(crate) fn action_button(app: &mut SheetApp, ui: &mut Ui, d: &Diagnostic, cell: Option<(usize, CellRef)>) -> bool {
     let lang = app.ui.language;
     let ctx = ui.ctx().clone();
@@ -756,12 +777,21 @@ pub(crate) fn action_button(app: &mut SheetApp, ui: &mut Ui, d: &Diagnostic, cel
             }
             pressed
         }
-        Action::Reset => {
-            let pressed = ui.button(lang.tr("Reset")).clicked();
-            if pressed {
+        Action::OpenInitialization => {
+            // The code can be fixed there, or was fine and lacked something that has come since.
+            let (open, reset) = ui
+                .horizontal_wrapped(|ui| {
+                    let open = ui.button(lang.tr("Open Initialization")).clicked();
+                    (open, ui.button(lang.tr("Reset")).clicked())
+                })
+                .inner;
+            if open {
+                crate::python_window::open_initialization(app);
+            }
+            if reset {
                 app.run_or_alert("python.reset", json!({}));
             }
-            pressed
+            open || reset
         }
         Action::GoToCell => {
             let Some((sheet, target)) = cell_it_points_at(d) else { return false };
@@ -933,8 +963,14 @@ mod tests {
         "At a limit Python is restarted and its variables are cleared; the next run starts fresh.",
         "On macOS the memory limit is a check twice a second, not a hard cap.",
         "Editor",
-        "Initialization code isn't available yet",
         "Initialization",
+        "The code that runs before this workbook's Python cells",
+        "Open Initialization",
+        "The initialization code has unsaved changes.",
+        "The initialization code of {workbook} has unsaved changes.",
+        "The code can't be longer: initialization code holds {max} characters.",
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again.",
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again.",
         "Select a Python cell first.",
         "Output As",
         "Run\nCell",
@@ -1007,7 +1043,7 @@ mod tests {
                 assert!(!language.tr(key).contains('|'), "{code} shows a context prefix for {key:?}");
                 let label = key.rsplit_once('|').map_or(*key, |(_, label)| label);
                 assert_eq!(label.contains('\n'), language.tr(key).contains('\n'), "{code}: the lines of {key:?}");
-                for placeholder in ["{cell}", "{seconds}", "{state}", "{count}", "{version}", "{line}", "{message}"] {
+                for placeholder in ["{cell}", "{seconds}", "{state}", "{count}", "{version}", "{line}", "{message}", "{workbook}", "{max}"] {
                     assert_eq!(key.contains(placeholder), language.tr(key).contains(placeholder), "{code}: {placeholder} in {key:?}");
                 }
             }

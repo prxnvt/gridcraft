@@ -1199,8 +1199,23 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Pe macOS limita de memorie este verificată de două ori pe secundă; nu este o limită strictă."
         }
         "Editor" => "Editor",
-        "Initialization code isn't available yet" => "Codul de inițializare nu este încă disponibil",
         "Initialization" => "Inițializare",
+        "The code that runs before this workbook's Python cells" => "Codul care rulează înaintea celulelor Python din acest registru",
+        "Open Initialization" => "Deschide inițializarea",
+        "The initialization code has unsaved changes." => "Codul de inițializare are modificări nesalvate.",
+        "The initialization code of {workbook} has unsaved changes." => "Codul de inițializare din {workbook} are modificări nesalvate.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Codul nu poate fi mai lung: codul de inițializare are cel mult {max} caractere."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Codul de inițializare s-a schimbat cât timp era deschis în editor. Copiați codul dvs. sau închideți editorul și deschideți-l din nou."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Codul de inițializare s-a schimbat cât timp era deschis în editor, așa că nu s-a aplicat codul dvs. Copiați-l sau închideți editorul și deschideți-l din nou."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Codul de inițializare folosește un pachet pe care acest Python nu îl are. GridCraft a omis liniile care au nevoie de el și a rulat restul."
+        }
         "Select a Python cell first." => "Selectați mai întâi o celulă Python.",
         "Output As" => "Ieșire ca",
         "Run\nCell" => "Rulare\ncelulă",

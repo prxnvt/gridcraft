@@ -609,8 +609,23 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Na macOS-u se ograničenje memorije proverava dvaput u sekundi i nije tvrda granica."
         }
         "Editor" => "Uređivač",
-        "Initialization code isn't available yet" => "Kod za inicijalizaciju još nije dostupan",
         "Initialization" => "Inicijalizacija",
+        "The code that runs before this workbook's Python cells" => "Kod koji se pokreće pre Python ćelija ove radne sveske",
+        "Open Initialization" => "Otvori inicijalizaciju",
+        "The initialization code has unsaved changes." => "Kod za inicijalizaciju ima nesačuvane izmene.",
+        "The initialization code of {workbook} has unsaved changes." => "Kod za inicijalizaciju u {workbook} ima nesačuvane izmene.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Kod ne može biti duži: kod za inicijalizaciju prima {max} znakova."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Kod za inicijalizaciju se promenio dok je bio otvoren u uređivaču. Kopirajte svoj kod ili zatvorite uređivač i ponovo ga otvorite."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Kod za inicijalizaciju se promenio dok je bio otvoren u uređivaču, pa vaš kod nije primenjen. Kopirajte ga ili zatvorite uređivač i ponovo ga otvorite."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Kod za inicijalizaciju koristi paket koji ovaj Python nema. GridCraft je preskočio redove kojima je potreban i pokrenuo ostatak."
+        }
         "Select a Python cell first." => "Prvo izaberite Python ćeliju.",
         "Output As" => "Izlaz kao",
         "Run\nCell" => "Pokreni\nćeliju",

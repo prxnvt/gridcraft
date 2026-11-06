@@ -6,7 +6,8 @@
 //!   cell's code. `output` is there when the cell's return type is a Python object.
 //!   `inputs` maps each literal `xl()` reference text in the code to its value, resolved by the
 //!   parent before the request; there are no callbacks. An entry may carry `"headers":true`,
-//!   which the worker accepts and does not use.
+//!   which the worker accepts and does not use. With `"init":"person"` or `"init":"file"` the code is
+//!   the workbook's initialization code ([`Init`]), and `value` in its reply lists what it skipped.
 //! - `{"type":"reset","id":N}` clears the shared globals.
 //!
 //! The worker writes [`Reply`] lines to its standard output:
@@ -86,12 +87,40 @@ impl Input {
     }
 }
 
+/// Whose initialization code a request runs, which decides what a failing line means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Init {
+    /// A person wrote or changed it: any error is the code's failure. Only lines that import or use
+    /// `excel`, Excel's own module that no other Python has, are skipped.
+    Person,
+    /// The application that wrote the file put it there. Such code imports packages and sets options
+    /// (Excel's default does), so what it can't have doesn't stop the cells: a line that fails to
+    /// import, what needs that line, and a setting on a module that fails, are skipped and reported.
+    /// Any other error is the code's failure.
+    File,
+}
+
+impl Init {
+    fn id(self) -> &'static str {
+        match self {
+            Init::Person => "person",
+            Init::File => "file",
+        }
+    }
+
+    fn parse(id: &str) -> Option<Init> {
+        [Init::Person, Init::File].into_iter().find(|i| i.id() == id)
+    }
+}
+
 /// Parent to worker.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     /// Run one cell's code in the shared globals. With `object`, a result with no single-cell form
-    /// comes back as a Python object, not as cells to spill.
-    Run { id: u64, code: String, inputs: BTreeMap<String, Input>, object: bool },
+    /// comes back as a Python object, not as cells to spill. With `init`, the code is initialization
+    /// code rather than a cell's: `xl()` isn't there, and the reply's value is empty or a row of
+    /// `module, line` for each package it skipped.
+    Run { id: u64, code: String, inputs: BTreeMap<String, Input>, object: bool, init: Option<Init> },
     /// Clear the shared globals.
     Reset { id: u64 },
 }
@@ -122,7 +151,8 @@ impl Request {
             RequestKind::Run => {
                 let input = |v: RawInput| Input { value: v.value.0.value, headers: v.headers, stamps: v.value.0.stamps };
                 let inputs = raw.inputs.unwrap_or_default().into_iter().map(|(k, v)| (k, input(v))).collect();
-                Ok(Request::Run { id: raw.id, code: raw.code.unwrap_or_default(), inputs, object: raw.output.as_deref() == Some("object") })
+                let init = raw.init.as_deref().and_then(Init::parse);
+                Ok(Request::Run { id: raw.id, code: raw.code.unwrap_or_default(), inputs, object: raw.output.as_deref() == Some("object"), init })
             }
             RequestKind::Reset => Ok(Request::Reset { id: raw.id }),
         }
@@ -313,6 +343,7 @@ struct RawRequest {
     code: Option<String>,
     inputs: Option<BTreeMap<String, RawInput>>,
     output: Option<String>,
+    init: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -720,13 +751,16 @@ impl Serialize for WireRequest<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut m = s.serialize_map(None)?;
         match self.0 {
-            Request::Run { id, code, inputs, object } => {
+            Request::Run { id, code, inputs, object, init } => {
                 m.serialize_entry("type", "run")?;
                 m.serialize_entry("id", id)?;
                 m.serialize_entry("code", code)?;
                 m.serialize_entry("inputs", &WireInputs(inputs))?;
                 if *object {
                     m.serialize_entry("output", "object")?;
+                }
+                if let Some(init) = init {
+                    m.serialize_entry("init", init.id())?;
                 }
             }
             Request::Reset { id } => {

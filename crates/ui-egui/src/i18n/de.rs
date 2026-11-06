@@ -654,8 +654,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Unter macOS ist das Speicherlimit eine Prüfung zweimal pro Sekunde, keine feste Obergrenze."
         }
         "Editor" => "Editor",
-        "Initialization code isn't available yet" => "Initialisierungscode ist noch nicht verfügbar",
         "Initialization" => "Initialisierung",
+        "The code that runs before this workbook's Python cells" => "Der Code, der vor den Python-Zellen dieser Arbeitsmappe ausgeführt wird",
+        "Open Initialization" => "Initialisierung öffnen",
+        "The initialization code has unsaved changes." => "Der Initialisierungscode enthält nicht gespeicherte Änderungen.",
+        "The initialization code of {workbook} has unsaved changes." => {
+            "Der Initialisierungscode von {workbook} enthält nicht gespeicherte Änderungen."
+        }
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Der Code kann nicht länger werden: Initialisierungscode fasst {max} Zeichen."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Der Initialisierungscode wurde geändert, während er im Editor geöffnet war. Kopieren Sie Ihren Code, oder schließen Sie den Editor und öffnen Sie ihn erneut."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Der Initialisierungscode wurde geändert, während er im Editor geöffnet war, daher wurde Ihr Code nicht übernommen. Kopieren Sie ihn, oder schließen Sie den Editor und öffnen Sie ihn erneut."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Der Initialisierungscode verwendet ein Paket, das dieses Python nicht hat. GridCraft hat die Zeilen übersprungen, die es benötigen, und den Rest ausgeführt."
+        }
         "Select a Python cell first." => "Wählen Sie zuerst eine Python-Zelle.",
         "Output As" => "Ausgabe als",
         "Run\nCell" => "Zelle\nausführen",

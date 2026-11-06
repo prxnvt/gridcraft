@@ -136,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | What landed |
 |---|---|
 | 2026-11-05 | Dates and times in Python cells: a cell formatted as a date or time reaches `xl()` as `datetime.date`, `datetime.time` or `datetime.datetime`, and a range of them as a DataFrame's datetime column. `date`, `datetime`, `time`, numpy's `datetime64` and `timedelta64`, and pandas's `Timestamp`, `Timedelta` and `NaT` come back as serial numbers in the workbook's date system, 1900 or 1904, and a cell with no format of its own takes a matching one, across a spill too, with no undo step. A date a serial can't hold gives `#NUM!` |
+| 2026-11-05 | Python initialization code, as in Excel ([python.md](docs/python.md#initialization-code)): the workbook's code runs before its cells in their shared variables, and changing it runs everything again from the top. Initialization on the Python tab and Formulas › Python opens it in the editor window. A failure shows in every Python cell, and its card offers the code. `.xlsx` round-trips the Python part's `environmentDefinition`, keeping what GridCraft doesn't read. An Excel file's default code doesn't stop the cells when a package is missing: what it can't import is skipped and reported, and `np`, `pd`, `sm` and the plot names stay as the worker gives them |
 | 2026-11-05 | Python says what is wrong where it happens: the PY tag shows a cell's state by shape and colour, the card gives the reason, Python's own message and one action, and both editors check the code as it is typed, with no Python running, by wavy underlines, gutter marks and a list that goes to the line. Missing packages are found across the workbook, with the uv command to install them |
 | 2026-11-05 | Python runs in the app ([python.md](docs/python.md)): File › Options › Python turns it on and chooses the interpreter, an Enable bar turns on a workbook from a file, and a contextual Python tab, there while the person is on a Python cell or editing Python code, has Run Cell, Run All, Stop and Reset, the state of Python with what to do about it, the packages, the permissions, problems and a run log, with the state in the status bar. Only a person can turn it on, and setup speaks uv first; GridCraft copies commands and never runs them |
 | 2026-11-05 | The engine runs Python cells in a confined worker: `xl()` inputs, spills, Python objects, shared variables, manual calculation, a diagnostic for each cell and a run log, without ever blocking the caller. In the CLI and MCP cells show `#BLOCKED!` or their saved values |
@@ -273,6 +274,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Progress log: Python initialization code |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
 | 2026-11-05 | minor | Progress log: dates and times in Python cells |
 | 2026-11-05 | minor | Progress log: Python says what is wrong where it happens |

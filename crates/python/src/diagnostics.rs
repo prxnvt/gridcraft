@@ -68,8 +68,8 @@ pub enum Action {
     EnableWorkbook,
     /// Run the cells again.
     RunAgain,
-    /// Clear the variables and run the cells again.
-    Reset,
+    /// Open the initialization code, or clear the variables and run the cells again.
+    OpenInitialization,
     /// Go to the cell that is in the way.
     GoToCell,
 }
@@ -83,7 +83,7 @@ impl Action {
             Action::CopyInstallCommand => "copyInstallCommand",
             Action::EnableWorkbook => "enableWorkbook",
             Action::RunAgain => "runAgain",
-            Action::Reset => "reset",
+            Action::OpenInitialization => "openInitialization",
             Action::GoToCell => "goToCell",
         }
     }
@@ -136,7 +136,14 @@ pub const CATALOG: &[Kind] = &[
     k("off.headless", Info, Workbook, "This session doesn't run Python: cells keep the values saved in the file.", A::None),
     k("packages.missing", Warning, Workbook, "This workbook imports packages this Python doesn't have.", A::CopyInstallCommand),
     k("packages.noPandas", Info, Workbook, "pandas isn't installed in this Python, so ranges come back as lists of rows.", A::CopyInstallCommand),
-    k("init.failed", Error, Workbook, "The initialization code failed, so Python cells can't run.", A::Reset),
+    k("init.failed", Error, Workbook, "The initialization code failed, so Python cells can't run.", A::OpenInitialization),
+    k(
+        "init.skipped",
+        Warning,
+        Workbook,
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest.",
+        A::CopyInstallCommand,
+    ),
     // One cell, when it runs.
     k("python.syntax", Error, Cell, "This code isn't valid Python.", A::None),
     k("python.exception", Error, Cell, "The code raised an error.", A::None),

@@ -878,9 +878,10 @@ fn is_plotting_module(path: &str) -> bool {
 }
 
 /// Whether a person should be told to install the top-level `module`. Not a plotting package: with
-/// one installed, a cell still draws nothing.
+/// one installed, a cell still draws nothing. Not `excel`, Excel's own module: no package gives it,
+/// and what is on the package index under that name is something else.
 fn is_missing(module: &str, installed: &Installed) -> bool {
-    !is_plotting_module(module) && !in_standard_library(module) && !installed.provides(module)
+    !is_plotting_module(module) && top_level(module) != "excel" && !in_standard_library(module) && !installed.provides(module)
 }
 
 /// The modules `code` imports that are neither in Python's standard library nor among the
@@ -1329,6 +1330,13 @@ impl Linter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn excels_own_module_isnt_a_package_to_install() {
+        let installed = ["pandas".to_string()];
+        assert_eq!(missing_modules("import excel\nimport excel.foo\nfrom excel import x\nimport nope", &installed), ["nope"]);
+        assert!(lint("import excel\n", Some(&installed)).is_empty());
+    }
 
     fn modules(code: &str) -> Vec<String> {
         imported_modules(code)

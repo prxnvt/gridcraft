@@ -994,6 +994,10 @@ fn python_ui_commands_are_listed() {
             "ui.pythonEditor",
             "{on?: bool (toggles without it), cell?: \"A1\" | \"Sheet2!B3\" (default: the active cell), force?: bool (discards unsaved code instead of refusing)} → {open, sheet?, cell?, text? (null while the code is hidden), hidden?, dirty?, pending?, notice?, rect?}",
         ),
+        (
+            "ui.pythonInitialization",
+            "{on?: bool (toggles without it), force?: bool (discards unsaved code instead of refusing)} → the state ui.pythonEditor gives, with initialization: true while the window has the workbook's initialization code",
+        ),
     ];
     for (id, docs) in listed {
         let command = commands.iter().find(|c| c["id"] == id).unwrap_or_else(|| panic!("engine.commands lists {id}"));

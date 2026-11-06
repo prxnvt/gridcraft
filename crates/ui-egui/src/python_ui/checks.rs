@@ -189,13 +189,28 @@ fn run_of(app: &SheetApp, doc: u64, sheet: Option<usize>, cell: CellRef, text: &
     let Some(d) = app.session.active().filter(|d| d.uid == doc) else { return (None, false) };
     let Some(sheet) = sheet else { return (None, false) };
     let current = d.wb.sheet(sheet).and_then(|sh| sh.cell(cell)).and_then(|c| c.py.as_deref()).is_some_and(|py| py.code == text);
-    (app.session.python_diagnostic(sheet, cell).cloned(), current)
+    // The line of a failure of the initialization code is in that code, not this.
+    let run = app
+        .session
+        .python_diagnostic(sheet, cell)
+        .map(|x| if x.kind.id == "init.failed" { Diagnostic { line: None, ..x.clone() } } else { x.clone() });
+    (run, current)
 }
 
 /// Brings `checks` up to date with code being edited for `cell` of workbook `doc`.
 pub(crate) fn update(app: &mut SheetApp, checks: &mut CodeChecks, text: &str, doc: u64, sheet: Option<usize>, cell: CellRef) {
     let (names, generation) = installed(app);
     let (run, current) = run_of(app, doc, sheet, cell, text);
+    checks.update(text, names.as_ref().map(|n| n.as_slice()), generation, app.ui.language, run.as_ref(), current);
+}
+
+/// Brings `checks` up to date with initialization code being edited for workbook `doc`: its checks, and
+/// its failure, whose line is only used while the text is the code that failed.
+pub(crate) fn update_initialization(app: &mut SheetApp, checks: &mut CodeChecks, text: &str, doc: u64) {
+    let (names, generation) = installed(app);
+    let d = app.session.active().filter(|d| d.uid == doc);
+    let current = d.is_some_and(|d| d.wb.python_env.as_ref().is_some_and(|e| e.code == text));
+    let run = d.and_then(|_| app.session.python_init_failure()).cloned();
     checks.update(text, names.as_ref().map(|n| n.as_slice()), generation, app.ui.language, run.as_ref(), current);
 }
 

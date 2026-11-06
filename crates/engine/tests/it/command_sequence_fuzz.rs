@@ -537,6 +537,10 @@ fn roundtrip_diff(wb: &Workbook) -> Result<(), String> {
     if names(wb) != names(&back) {
         return Err(format!("sheets {:?} reload as {:?}", names(wb), names(&back)));
     }
+    let init = |wb: &Workbook| wb.python_env.as_ref().map(|e| (e.code.clone(), e.user_modified));
+    if init(wb) != init(&back) {
+        return Err(format!("initialization code {:?} reloads as {:?}", init(wb), init(&back)));
+    }
     for (x, y) in wb.sheets.iter().zip(&back.sheets) {
         let formulas = |s: &Sheet| s.cells.iter().filter_map(|(c, cell)| Some((c, normalized_formula(cell.formula.as_ref()?)))).collect::<Vec<_>>();
         let (fx, fy) = (formulas(x), formulas(y));
@@ -876,6 +880,7 @@ fn generate(rng: &mut Rng, s: &Session, python: bool) -> Step {
             "python.runAll",
             "python.reset",
             "python.stop",
+            "python.initialization",
         ]);
         return (id.to_string(), python_params(rng, wb, id));
     }
@@ -901,6 +906,14 @@ fn python_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
     match id {
         "python.run" => json!({"cell": near_cell(rng).a1()}),
         "python.runAll" | "python.reset" | "python.stop" => json!({}),
+        // Code that works, code that fails, no code, and asking what it is.
+        "python.initialization" => match rng.below(5) {
+            0 => json!({}),
+            1 => json!({"code": ""}),
+            2 => json!({"code": "\"not valid"}),
+            3 => json!({"code": "a = 1\nb = 2"}),
+            _ => json!({"code": "x".repeat(rng.int(1, 100) as usize)}),
+        },
         other => curated_params(rng, wb, other),
     }
 }

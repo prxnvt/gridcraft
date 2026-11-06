@@ -1137,8 +1137,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "W macOS limit pamięci jest sprawdzany dwa razy na sekundę i nie jest twardym ograniczeniem."
         }
         "Editor" => "Edytor",
-        "Initialization code isn't available yet" => "Kod inicjujący nie jest jeszcze dostępny",
         "Initialization" => "Inicjowanie",
+        "The code that runs before this workbook's Python cells" => "Kod uruchamiany przed komórkami Pythona w tym skoroszycie",
+        "Open Initialization" => "Otwórz inicjowanie",
+        "The initialization code has unsaved changes." => "Kod inicjujący ma niezapisane zmiany.",
+        "The initialization code of {workbook} has unsaved changes." => "Kod inicjujący skoroszytu {workbook} ma niezapisane zmiany.",
+        "The code can't be longer: initialization code holds {max} characters." => "Kod nie może być dłuższy: kod inicjujący mieści {max} znaków.",
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Kod inicjujący zmienił się, gdy był otwarty w edytorze. Skopiuj swój kod albo zamknij edytor i otwórz go ponownie."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Kod inicjujący zmienił się, gdy był otwarty w edytorze, więc Twój kod nie został zastosowany. Skopiuj go albo zamknij edytor i otwórz go ponownie."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Kod inicjujący używa pakietu, którego ten Python nie ma. GridCraft pominął wiersze, które go potrzebują, i uruchomił resztę."
+        }
         "Select a Python cell first." => "Najpierw zaznacz komórkę Pythona.",
         "Output As" => "Wynik jako",
         "Run\nCell" => "Uruchom\nkomórkę",

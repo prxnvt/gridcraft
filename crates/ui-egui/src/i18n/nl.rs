@@ -692,8 +692,23 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Op macOS wordt de geheugenlimiet twee keer per seconde gecontroleerd; het is geen harde grens."
         }
         "Editor" => "Editor",
-        "Initialization code isn't available yet" => "Initialisatiecode is nog niet beschikbaar",
         "Initialization" => "Initialisatie",
+        "The code that runs before this workbook's Python cells" => "De code die wordt uitgevoerd vóór de Python-cellen van deze werkmap",
+        "Open Initialization" => "Initialisatie openen",
+        "The initialization code has unsaved changes." => "De initialisatiecode bevat niet-opgeslagen wijzigingen.",
+        "The initialization code of {workbook} has unsaved changes." => "De initialisatiecode van {workbook} bevat niet-opgeslagen wijzigingen.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "De code kan niet langer worden: initialisatiecode bevat maximaal {max} tekens."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "De initialisatiecode is gewijzigd terwijl deze in de editor geopend was. Kopieer uw code, of sluit de editor en open deze opnieuw."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "De initialisatiecode is gewijzigd terwijl deze in de editor geopend was, dus uw code is niet toegepast. Kopieer de code, of sluit de editor en open deze opnieuw."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "De initialisatiecode gebruikt een pakket dat deze Python niet heeft. GridCraft heeft de regels die het nodig hebben overgeslagen en de rest uitgevoerd."
+        }
         "Select a Python cell first." => "Selecteer eerst een Python-cel.",
         "Output As" => "Uitvoer als",
         "Run\nCell" => "Cel\nuitvoeren",

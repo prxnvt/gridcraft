@@ -624,8 +624,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "В macOS ограничение памяти проверяется два раза в секунду и не является жёстким пределом."
         }
         "Editor" => "Редактор",
-        "Initialization code isn't available yet" => "Код инициализации пока недоступен",
         "Initialization" => "Инициализация",
+        "The code that runs before this workbook's Python cells" => "Код, который выполняется перед ячейками Python этой книги",
+        "Open Initialization" => "Открыть инициализацию",
+        "The initialization code has unsaved changes." => "В коде инициализации есть несохранённые изменения.",
+        "The initialization code of {workbook} has unsaved changes." => "В коде инициализации книги {workbook} есть несохранённые изменения.",
+        "The code can't be longer: initialization code holds {max} characters." => "Код нельзя удлинить: код инициализации вмещает {max} символов.",
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Код инициализации изменился, пока был открыт в редакторе. Скопируйте свой код либо закройте редактор и откройте его снова."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Код инициализации изменился, пока был открыт в редакторе, поэтому ваш код не применён. Скопируйте его либо закройте редактор и откройте его снова."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Код инициализации использует пакет, которого нет в этом Python. GridCraft пропустил строки, которым он нужен, и выполнил остальное."
+        }
         "Select a Python cell first." => "Сначала выберите ячейку Python.",
         "Output As" => "Вывод как",
         "Run\nCell" => "Выполнить\nячейку",

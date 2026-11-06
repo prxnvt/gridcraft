@@ -1940,6 +1940,14 @@ fn keytip_mzr_() {
 }
 
 #[test]
+fn keytip_mzi_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "MZI", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "MZI must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
 fn keytip_mzd_() {
     let mut h = harness(blank());
     sequence(&mut h, "MZD", false);
@@ -2045,6 +2053,14 @@ fn keytip_ys_() {
     let mut h = harness(python_cell());
     sequence(&mut h, "YS", false);
     assert!(h.state().session.journal.iter().any(|(id, _)| id == "python.stop"), "YS must journal python.stop");
+}
+
+#[test]
+fn keytip_yt_() {
+    let mut h = harness(python_cell());
+    sequence(&mut h, "YT", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "YT must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -3249,7 +3265,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 433;
+    const EXPECTED: usize = 435;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

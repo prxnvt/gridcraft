@@ -727,8 +727,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "V macOS je limit paměti kontrola dvakrát za sekundu, ne pevný strop."
         }
         "Editor" => "Editor",
-        "Initialization code isn't available yet" => "Inicializační kód zatím není k dispozici",
         "Initialization" => "Inicializace",
+        "The code that runs before this workbook's Python cells" => "Kód, který se spustí před buňkami Pythonu tohoto sešitu",
+        "Open Initialization" => "Otevřít inicializaci",
+        "The initialization code has unsaved changes." => "Inicializační kód má neuložené změny.",
+        "The initialization code of {workbook} has unsaved changes." => "Inicializační kód sešitu {workbook} má neuložené změny.",
+        "The code can't be longer: initialization code holds {max} characters." => "Kód nemůže být delší: inicializační kód pojme {max} znaků.",
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Inicializační kód se změnil, zatímco byl otevřený v editoru. Zkopírujte svůj kód, nebo editor zavřete a znovu otevřete."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Inicializační kód se změnil, zatímco byl otevřený v editoru, proto váš kód nebyl použit. Zkopírujte ho, nebo editor zavřete a znovu otevřete."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Inicializační kód používá balíček, který tento Python nemá. GridCraft vynechal řádky, které ho potřebují, a spustil zbytek."
+        }
         "Select a Python cell first." => "Nejprve vyberte buňku Pythonu.",
         "Output As" => "Výstup jako",
         "Run\nCell" => "Spustit\nbuňku",

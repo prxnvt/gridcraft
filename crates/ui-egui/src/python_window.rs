@@ -3,6 +3,11 @@
 //! selected Python cell), from "Edit in Python Editor" in a Python cell's menu, and from
 //! `ui.pythonEditor`.
 //!
+//! The same window, titled Initialization, edits the workbook's initialization code. It opens from the
+//! Python tab and Formulas › Python, from what says the code failed, and from
+//! `ui.pythonInitialization`. There is no cell then: Apply is `python.initialization`, and the rules
+//! below hold for the workbook's code as they do for a cell's, with its own limit.
+//!
 //! The window keeps its own copy of the code. Enter and Tab work as in the formula bar's Python
 //! mode; Ctrl+Enter (Cmd+Enter on macOS) or Apply puts the code in the cell through `python.set`,
 //! and the window stays open; Esc or Close closes it. There is one editor at a time, and it belongs
@@ -29,7 +34,7 @@ use std::sync::Arc;
 
 use egui::{Align, Id, Layout, Rect, RichText, Ui, pos2, vec2};
 use gridcraft_engine::core::{CellRef, RangeRef, Value, quote_sheet, split_sheet};
-use gridcraft_engine::model::python::{MAX_FORMULA_CHARS, normalize_code};
+use gridcraft_engine::model::python::{MAX_FORMULA_CHARS, MAX_INIT_CHARS, init_fits, normalize_code};
 use gridcraft_engine::model::{CellPicture, PyCode, Sheet};
 use serde_json::{Value as Json, json};
 
@@ -53,6 +58,21 @@ pub const TOO_LONG: &str = "The code can't be longer: a Python cell holds {max} 
 /// The cell no longer holds what it held when the window opened it or last applied (another cell
 /// moved to its address, or its code changed elsewhere) while the window has unsaved changes.
 pub const CHANGED: &str = "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell.";
+/// The window's title for the initialization code, and its label wherever it is named.
+pub const INITIALIZATION: &str = "Initialization";
+/// What the initialization code is, under the window's title and on the ribbon.
+pub const INITIALIZATION_TIP: &str = "The code that runs before this workbook's Python cells";
+/// The questions about unsaved initialization code.
+pub const ASK_INIT: &str = "The initialization code has unsaved changes.";
+pub const ASK_INIT_IN: &str = "The initialization code of {workbook} has unsaved changes.";
+/// Typing or pasting past the initialization code's limit.
+pub const TOO_LONG_INIT: &str = "The code can't be longer: initialization code holds {max} characters.";
+/// The workbook's code changed while the window has unsaved changes.
+pub const CHANGED_INIT: &str =
+    "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again.";
+/// Apply refused for the same reason.
+pub const STALE_INIT: &str =
+    "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again.";
 /// Apply refused for the same reason.
 pub const STALE: &str = "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell.";
 /// The keys, under the code.
@@ -73,12 +93,21 @@ const FRAME: egui::Vec2 = egui::Vec2::new(20.0, 52.0);
 /// The header and footer of the contents, around the code.
 const CHROME_HEIGHT: f32 = 92.0;
 
-/// The cell the editor edits: its workbook (by uid), sheet and address.
+/// What the editor edits: a cell, by its workbook (by uid), sheet and address, or the workbook's
+/// initialization code, which has no sheet or cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target {
     pub doc: u64,
     pub sheet: usize,
     pub cell: CellRef,
+    pub initialization: bool,
+}
+
+impl Target {
+    /// The initialization code of workbook `doc`.
+    pub fn initialization(doc: u64) -> Target {
+        Target { doc, sheet: 0, cell: CellRef::new(0, 0), initialization: true }
+    }
 }
 
 /// What the window asks about before unsaved code would be lost, and what happens after.
@@ -156,6 +185,8 @@ pub struct PyWindow {
     pub sheet: usize,
     /// The sheet's name, as it was when the window last saw its sheet.
     pub sheet_name: String,
+    /// It edits the workbook's initialization code: `sheet`, `sheet_name` and `cell` mean nothing.
+    pub initialization: bool,
     /// The sheet's identity ([`gridcraft_engine::model::SheetUid`]): the window follows its sheet
     /// by it when sheets move or are renamed, and never takes another sheet for it, even one of
     /// the same name in the same place.
@@ -187,7 +218,7 @@ pub struct PyWindow {
 
 impl PyWindow {
     pub fn target(&self) -> Target {
-        Target { doc: self.doc, sheet: self.sheet, cell: self.cell }
+        Target { doc: self.doc, sheet: self.sheet, cell: self.cell, initialization: self.initialization }
     }
 
     /// Whether the code differs from the cell's code as last loaded or applied.
@@ -195,9 +226,14 @@ impl PyWindow {
         self.text != self.saved && normalize_code(&self.text) != self.saved
     }
 
-    /// The cell's address, with its sheet: `Sheet1!A1`.
+    /// The cell's address, with its sheet: `Sheet1!A1`. Initialization code is called that.
     pub fn address(&self) -> String {
-        format!("{}!{}", quote_sheet(&self.sheet_name), self.cell.a1())
+        if self.initialization { INITIALIZATION.to_string() } else { format!("{}!{}", quote_sheet(&self.sheet_name), self.cell.a1()) }
+    }
+
+    /// The window's title, as a translation key.
+    pub fn title(&self) -> &'static str {
+        if self.initialization { INITIALIZATION } else { TITLE }
     }
 
     fn set_text(&mut self, text: String) {
@@ -223,6 +259,12 @@ pub fn accept_code(new: &str, old: &str) -> bool {
     fits(new) || (new.len() <= old.len() && formula_len(new) <= formula_len(old))
 }
 
+/// [`accept_code`] for initialization code, whose limit is on its characters. The work is bounded by
+/// the limit, not by the length of `new`.
+pub fn accept_init_code(new: &str, old: &str) -> bool {
+    init_fits(new) || (new.len() <= old.len() && new.chars().nth(old.chars().count().saturating_add(1)).is_none())
+}
+
 /// The window, for egui (its position and size are kept under this id).
 pub fn window_id() -> Id {
     Id::unique("gridcraft.python_editor.window")
@@ -240,8 +282,18 @@ fn doc_index(app: &SheetApp, uid: u64) -> Option<usize> {
     app.session.documents().iter().position(|d| d.uid == uid)
 }
 
+/// The workbook's initialization code (empty for a workbook without any).
+fn init_code(app: &SheetApp, doc: u64) -> String {
+    let d = app.session.documents().iter().find(|d| d.uid == doc);
+    d.and_then(|d| d.wb.python_env.as_ref()).map(|e| e.code.clone()).unwrap_or_default()
+}
+
 /// The Python code of a cell (empty for a cell without code), and whether it is a Python object.
+/// For the initialization code, that code.
 fn cell_code(app: &SheetApp, t: Target) -> (String, bool) {
+    if t.initialization {
+        return (init_code(app, t.doc), false);
+    }
     let py = app
         .session
         .documents()
@@ -253,8 +305,12 @@ fn cell_code(app: &SheetApp, t: Target) -> (String, bool) {
     py.map(|p: Arc<PyCode>| (p.code.clone(), p.object)).unwrap_or_default()
 }
 
-/// What cell `t` holds, while its workbook and sheet are there.
+/// What cell `t` holds, while its workbook and sheet are there. Initialization code is checked by its
+/// text.
 fn held(app: &SheetApp, t: Target) -> Option<Held> {
+    if t.initialization {
+        return None;
+    }
     let d = app.session.documents().iter().find(|d| d.uid == t.doc)?;
     d.wb.sheet(t.sheet).map(|sh| Held::of(sh, t.cell))
 }
@@ -268,6 +324,9 @@ fn own_sheet<'a>(app: &'a SheetApp, w: &PyWindow) -> Option<&'a Sheet> {
 
 /// The window's cell's code and return type, while its sheet is there (see `sync`).
 fn window_cell(app: &SheetApp, w: &PyWindow) -> Option<(String, bool)> {
+    if w.initialization {
+        return None;
+    }
     own_sheet(app, w)?;
     Some(cell_code(app, w.target()))
 }
@@ -277,6 +336,9 @@ fn window_cell(app: &SheetApp, w: &PyWindow) -> Option<(String, bool)> {
 /// at the window's place under its name: its sheet was deleted and another put there (by a macro,
 /// say) before the window saw it, and that sheet's cells are not the window's.
 fn stale(app: &SheetApp, w: &PyWindow) -> bool {
+    if w.initialization {
+        return init_code(app, w.doc) != w.saved;
+    }
     let d = app.session.documents().iter().find(|d| d.uid == w.doc);
     match d.and_then(|d| d.wb.sheet(w.sheet)).filter(|sh| sh.name == w.sheet_name) {
         Some(sh) if sh.uid.get() == w.sheet_uid => Held::of(sh, w.cell) != w.held,
@@ -288,6 +350,9 @@ fn stale(app: &SheetApp, w: &PyWindow) -> bool {
 /// Whether the code of `t` is out of view: a Hidden cell, or the cell whose result spills over
 /// it, on a protected sheet. The editor never shows such code.
 fn target_hidden(app: &SheetApp, t: Target) -> bool {
+    if t.initialization {
+        return false;
+    }
     let d = app.session.documents().iter().find(|d| d.uid == t.doc);
     d.and_then(|d| d.wb.sheet(t.sheet).map(|sh| gridcraft_engine::display::formula_hidden(&d.wb, sh, t.cell))).unwrap_or(false)
 }
@@ -307,6 +372,9 @@ fn followed(app: &SheetApp, w: &PyWindow) -> Option<(usize, String)> {
 /// follows none, and a copy of that sheet protected with the cell Hidden never keeps the code in
 /// view.
 fn saved_code_hidden(app: &SheetApp, w: &PyWindow) -> bool {
+    if w.initialization {
+        return false;
+    }
     let Some(d) = app.session.documents().iter().find(|d| d.uid == w.doc) else { return false };
     let holds = |sh: &Sheet| sh.cell(w.cell).and_then(|c| c.py.as_ref()).is_some_and(|p| p.code == w.saved);
     d.wb.sheets.iter().any(|sh| holds(sh) && gridcraft_engine::display::formula_hidden(&d.wb, sh, w.cell))
@@ -318,6 +386,9 @@ fn saved_code_hidden(app: &SheetApp, w: &PyWindow) -> bool {
 /// next frame; `state` checks it when called, since a control batch can protect the sheet before
 /// that frame.
 fn code_hidden(app: &SheetApp, w: &PyWindow) -> bool {
+    if w.initialization {
+        return false;
+    }
     followed(app, w).is_some_and(|(sheet, _)| target_hidden(app, Target { sheet, ..w.target() })) || saved_code_hidden(app, w)
 }
 
@@ -350,7 +421,7 @@ pub fn target(app: &SheetApp, sheet: usize, cell: CellRef) -> Result<Target, Str
         Some(anchor) => return Err(format!("{} is part of the result spilled from {}; it can't hold Python code.", at.a1(), anchor.a1())),
         None => at,
     };
-    Ok(Target { doc: d.uid, sheet, cell: at })
+    Ok(Target { doc: d.uid, sheet, cell: at, initialization: false })
 }
 
 /// Opens the window on `t`, replacing what it showed: the cell's code, or `text` (with the caret
@@ -369,6 +440,7 @@ fn open_fresh(app: &mut SheetApp, t: Target, text: Option<(String, usize)>) {
         window,
         sheet: t.sheet,
         sheet_name: sheet_name.unwrap_or_default(),
+        initialization: t.initialization,
         sheet_uid,
         serial: OPENINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         cell: t.cell,
@@ -535,6 +607,41 @@ fn open_from_ui(app: &mut SheetApp, sheet: usize, cell: CellRef, from_bar: bool)
     }
 }
 
+/// Whether the window has the initialization code of workbook `doc`.
+pub fn has_initialization(app: &SheetApp, doc: u64) -> bool {
+    app.py_window.as_ref().is_some_and(|w| w.initialization && w.doc == doc)
+}
+
+/// The Python tab's and Formulas' Initialization buttons, and what says the code failed: opens the
+/// editor on the active workbook's initialization code. An open window with unsaved code asks first.
+pub fn open_initialization(app: &mut SheetApp) {
+    let Some(doc) = app.session.active().map(|d| d.uid) else { return };
+    let _ = request_open(app, Target::initialization(doc), None, true, false);
+}
+
+/// `ui.pythonInitialization {on?, force?}`: opens the editor on the active workbook's initialization
+/// code (`on: true`), or closes it (`on: false`); without `on` it opens or closes. As with
+/// `ui.pythonEditor` it never asks: with unsaved changes it refuses, unless `force: true` discards
+/// them. Replies with the editor's state.
+pub fn initialization_command(app: &mut SheetApp, p: &Json) -> Result<Json, String> {
+    let force = p.get("force").and_then(Json::as_bool).unwrap_or(false);
+    let doc = app.session.active().map(|d| d.uid).ok_or("No workbook is open.")?;
+    let on = match p.get("on") {
+        None | Some(Json::Null) => !has_initialization(app, doc),
+        Some(Json::Bool(b)) => *b,
+        Some(_) => return Err("`on` is true or false".into()),
+    };
+    if on {
+        request_open(app, Target::initialization(doc), None, false, force)?;
+    } else {
+        // Only closes what it opens: a window on a cell stays.
+        if has_initialization(app, doc) {
+            request_close(app, false, force)?;
+        }
+    }
+    Ok(state(app))
+}
+
 /// Closes the editor. With unsaved changes it asks first (`ask`), discards them (`force`), or
 /// refuses.
 pub fn request_close(app: &mut SheetApp, ask: bool, force: bool) -> Result<(), String> {
@@ -617,14 +724,18 @@ pub fn apply(app: &mut SheetApp) -> bool {
     let Some(w) = app.py_window.as_ref() else { return false };
     // Only into its own sheet: `python.set` finds the sheet by name, and a sheet deleted and
     // another of its name added (anywhere) would take the code.
-    if stale(app, w) || own_sheet(app, w).is_none() {
+    if stale(app, w) || (!w.initialization && own_sheet(app, w).is_none()) {
         if let Some(w) = app.py_window.as_mut() {
             w.notice = Some(Notice::Stale);
             w.focus = true;
         }
         return false;
     }
-    let params = json!({"sheet": w.sheet_name, "cell": w.cell.a1(), "code": w.text});
+    let (command, params) = if w.initialization {
+        ("python.initialization", json!({"code": w.text}))
+    } else {
+        ("python.set", json!({"sheet": w.sheet_name, "cell": w.cell.a1(), "code": w.text}))
+    };
     let t = w.target();
     let Some(i) = doc_index(app, t.doc) else {
         if let Some(w) = app.py_window.as_mut() {
@@ -634,7 +745,7 @@ pub fn apply(app: &mut SheetApp) -> bool {
     };
     let before = app.session.active_index();
     app.session.set_active(i);
-    let r = app.session.run("python.set", params);
+    let r = app.session.run(command, params);
     app.session.set_active(before);
     app.after_engine();
     let (code, _) = cell_code(app, t);
@@ -647,6 +758,7 @@ pub fn apply(app: &mut SheetApp) -> bool {
                 w.held = now;
             }
             w.notice = None;
+            w.count = None;
             true
         }
         Err(e) => {
@@ -759,14 +871,19 @@ pub fn state(app: &SheetApp) -> Json {
         Pending::Quit => "quit",
     });
     let notice = w.notice.as_ref().map(|n| match n {
+        Notice::TooLong if w.initialization => TOO_LONG_INIT.replace("{max}", &MAX_INIT_CHARS.to_string()),
         Notice::TooLong => TOO_LONG.replace("{max}", &MAX_FORMULA_CHARS.to_string()),
         Notice::Refused(m) => m.clone(),
+        Notice::Stale if w.initialization => STALE_INIT.to_string(),
         Notice::Stale => STALE.replace("{cell}", &w.address()),
     });
+    let place = |text: String| if w.initialization { Json::Null } else { json!(text) };
     json!({
         "open": true,
-        "sheet": w.sheet_name,
-        "cell": w.cell.a1(),
+        "initialization": w.initialization,
+        "title": w.title(),
+        "sheet": place(w.sheet_name.clone()),
+        "cell": place(w.cell.a1()),
         "text": if hidden { Json::Null } else { json!(w.text) },
         "hidden": hidden,
         "dirty": w.dirty(),
@@ -798,6 +915,9 @@ fn sync(app: &mut SheetApp, ctx: &egui::Context) {
         // are refused): the code is not lost silently.
         close_keeping_code(app, ctx);
         return;
+    }
+    if w.initialization {
+        return sync_initialization(app);
     }
     let found = followed(app, w);
     // Its sheet was protected with the cell Hidden: the window stops showing the code at once.
@@ -842,6 +962,29 @@ fn sync(app: &mut SheetApp, ctx: &egui::Context) {
         }
         _ => {}
     }
+    follow_active(app, active);
+}
+
+/// With no cell to follow, the window takes in the workbook's code when it has no changes of its own.
+fn sync_initialization(app: &mut SheetApp) {
+    let Some(doc) = app.py_window.as_ref().map(|w| w.doc) else { return };
+    let code = init_code(app, doc);
+    let active = app.session.active().map(|d| d.uid);
+    if let Some(w) = app.py_window.as_mut()
+        && code != w.saved
+        && (!w.dirty() || normalize_code(&w.text) == code)
+    {
+        if !w.dirty() {
+            w.set_text(code.clone());
+        }
+        w.saved = code;
+    }
+    follow_active(app, active);
+}
+
+/// Closes when another workbook is active, asking first when it has changes.
+fn follow_active(app: &mut SheetApp, active: Option<u64>) {
+    let Some(w) = app.py_window.as_mut() else { return };
     if active != Some(w.doc) {
         if !w.dirty() {
             app.py_window = None;
@@ -885,7 +1028,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         return;
     }
     let t = Tokens::get(ctx);
-    let title = app.ui.language.tr(TITLE).to_string();
+    let title = app.py_window.as_ref().map_or_else(String::new, |w| app.ui.language.tr(w.title()).to_string());
     let screen = ctx.content_rect();
     let row_h = ctx.fonts_mut(|f| f.row_height(&code_editor::font()));
     // The contents fit inside the app window with the window's frame and a margin around them.
@@ -952,14 +1095,24 @@ fn contents(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
 /// Brings the checks of the window's code up to date.
 fn update_checks(app: &mut SheetApp) {
     let Some(w) = app.py_window.as_ref() else { return };
-    let (text, doc, sheet, cell) = (w.text.clone(), w.doc, followed(app, w).map(|(sheet, _)| sheet), w.cell);
+    let (text, doc, sheet, cell, initialization) = (w.text.clone(), w.doc, followed(app, w).map(|(sheet, _)| sheet), w.cell, w.initialization);
     let mut checks = std::mem::take(&mut app.python.window_checks);
-    crate::python_ui::checks::update(app, &mut checks, &text, doc, sheet, cell);
+    if initialization {
+        crate::python_ui::checks::update_initialization(app, &mut checks, &text, doc);
+    } else {
+        crate::python_ui::checks::update(app, &mut checks, &text, doc, sheet, cell);
+    }
     app.python.window_checks = checks;
 }
 
-/// The state of the window's cell, for its PY tag.
+/// The state of the window's cell, or of the initialization code, for its PY tag.
 fn tag_state(app: &SheetApp, w: &PyWindow) -> crate::python_card::TagState {
+    if w.initialization {
+        return match app.session.python_init_failure() {
+            Some(_) if app.session.active().map(|d| d.uid) == Some(w.doc) => crate::python_card::TagState::Error,
+            _ => crate::python_card::TagState::Ready,
+        };
+    }
     let d = app.session.active().filter(|d| d.uid == w.doc);
     let shown = d.and_then(|d| {
         let cell = d.wb.sheet(w.sheet)?.cell(w.cell)?;
@@ -974,7 +1127,8 @@ fn header(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let Some(w) = app.py_window.as_ref() else { return };
     let lang = app.ui.language;
     let object = window_cell(app, w).is_some_and(|(_, object)| object);
-    let address = w.address();
+    let initialization = w.initialization;
+    let address = if initialization { lang.tr(INITIALIZATION).to_string() } else { w.address() };
     let dirty = w.dirty();
     let state = tag_state(app, w);
     let interpreter = app.session.python_report().interpreter.as_ref().map(|i| i.path.display().to_string());
@@ -988,7 +1142,13 @@ fn header(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
             }
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.add(egui::Label::new(RichText::new(address).font(theme::ui_bold(13.0)).color(t.text)).truncate());
-                let output = lang.tr(if object { PYTHON_OBJECT } else { EXCEL_VALUE });
+                let output = lang.tr(if initialization {
+                    INITIALIZATION_TIP
+                } else if object {
+                    PYTHON_OBJECT
+                } else {
+                    EXCEL_VALUE
+                });
                 ui.add(egui::Label::new(RichText::new(output).font(theme::ui_font(12.0)).color(t.text_dim)).truncate());
                 if let Some(path) = &interpreter {
                     ui.add(egui::Label::new(RichText::new(path).font(theme::ui_font(11.5)).color(t.text_dim)).truncate());
@@ -1054,10 +1214,14 @@ fn footer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     }
     let moved = stale(app, w);
     let Some(w) = app.py_window.as_mut() else { return };
+    let initialization = w.initialization;
+    let max = if initialization { MAX_INIT_CHARS } else { MAX_FORMULA_CHARS };
     let message = match &w.notice {
-        Some(Notice::TooLong) => Some(lang.tr(TOO_LONG).replace("{max}", &MAX_FORMULA_CHARS.to_string())),
+        Some(Notice::TooLong) => Some(lang.tr(if initialization { TOO_LONG_INIT } else { TOO_LONG }).replace("{max}", &max.to_string())),
         Some(Notice::Refused(m)) => Some(m.clone()),
+        Some(Notice::Stale) if initialization => Some(lang.tr(STALE_INIT).to_string()),
         Some(Notice::Stale) => Some(lang.tr(STALE).replace("{cell}", &w.address())),
+        None if w.dirty() && moved && initialization => Some(lang.tr(CHANGED_INIT).to_string()),
         None if w.dirty() && moved => Some(lang.tr(CHANGED).replace("{cell}", &w.address())),
         None => None,
     };
@@ -1065,7 +1229,7 @@ fn footer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
         ui.add(egui::Label::new(RichText::new(m).font(theme::ui_font(12.0)).color(t.danger)).wrap());
         ui.add_space(4.0);
     }
-    let count = *w.count.get_or_insert_with(|| formula_len(&w.text));
+    let count = *w.count.get_or_insert_with(|| if initialization { w.text.chars().count() } else { formula_len(&w.text) });
     let keys = if ui.ctx().os() == egui::os::OperatingSystem::Mac { "Cmd+Enter" } else { "Ctrl+Enter" };
     let hint = lang.tr(HINT).replace("{apply}", keys);
     let mut apply_now = false;
@@ -1077,8 +1241,8 @@ fn footer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
         if ui.button(lang.tr(APPLY)).clicked() {
             apply_now = true;
         }
-        let color = if count > MAX_FORMULA_CHARS { t.danger } else { t.text_dim };
-        ui.label(RichText::new(format!("{count} / {MAX_FORMULA_CHARS}")).font(theme::ui_font(11.5)).color(color));
+        let color = if count > max { t.danger } else { t.text_dim };
+        ui.label(RichText::new(format!("{count} / {max}")).font(theme::ui_font(11.5)).color(color));
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.add(egui::Label::new(RichText::new(hint).font(theme::ui_font(11.5)).color(t.text_dim)).truncate());
         });
@@ -1103,9 +1267,10 @@ fn question(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let switched = w.pending == Some(Pending::Switched);
     let text = if switched {
         let title = app.session.documents().iter().find(|d| d.uid == w.doc).map(|d| d.display_title()).unwrap_or_default();
-        lang.tr(ASK_IN).replace("{cell}", &w.address()).replace("{workbook}", &title)
+        let question = lang.tr(if w.initialization { ASK_INIT_IN } else { ASK_IN });
+        question.replace("{cell}", &w.address()).replace("{workbook}", &title)
     } else {
-        lang.tr(ASK).replace("{cell}", &w.address())
+        lang.tr(if w.initialization { ASK_INIT } else { ASK }).replace("{cell}", &w.address())
     };
     ui.add(egui::Label::new(RichText::new(text).font(theme::ui_font(12.5)).color(t.text)).wrap());
     ui.add_space(4.0);
@@ -1132,8 +1297,9 @@ fn question(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
 /// The code, with line numbers, in the code editor.
 fn code(app: &mut SheetApp, ui: &mut Ui) {
     let blocked = app.dialog.is_some() || app.message.is_some();
-    let name = app.ui.language.tr(TITLE).to_string();
+    let name = app.py_window.as_ref().map_or_else(String::new, |w| app.ui.language.tr(w.title()).to_string());
     let Some(w) = app.py_window.as_mut() else { return };
+    let initialization = w.initialization;
     let interactive = !blocked && w.pending.is_none();
     let id = editor_id(w);
     let mut caret = None;
@@ -1148,7 +1314,7 @@ fn code(app: &mut SheetApp, ui: &mut Ui) {
         caret = w.caret.take();
     }
     let stop = |ev: &egui::Event| editor_key(ev).is_some();
-    let accept = |new: &str, old: &str| accept_code(new, old);
+    let accept = move |new: &str, old: &str| if initialization { accept_init_code(new, old) } else { accept_code(new, old) };
     let size = ui.available_size();
     let checks = std::mem::take(&mut app.python.window_checks);
     let options = FieldOptions {
@@ -1206,7 +1372,7 @@ mod tests {
         assert_eq!(app.session.active().map(|d| d.uid), uids.get(1).copied(), "the second workbook is active");
         let cell = CellRef::new(0, 0);
         app.editor = Some(crate::editor::EditState::python(uids[0], 0, cell, "x = 1".into()));
-        (app, Target { doc: uids[1], sheet: 0, cell })
+        (app, Target { doc: uids[1], sheet: 0, cell, initialization: false })
     }
 
     #[test]
@@ -1261,6 +1427,23 @@ mod tests {
         assert!(ask_before_quit(&mut app));
         assert_eq!(app.py_window.as_ref().and_then(|w| w.pending.clone()), Some(Pending::Quit));
         assert!(app.bring_forward, "a minimized window or a hidden app is restored, not only focused");
+    }
+
+    #[test]
+    fn the_initialization_limit_is_the_one_the_command_checks_and_long_code_can_still_shrink() {
+        let at = "x".repeat(MAX_INIT_CHARS);
+        assert!(accept_init_code(&at, ""));
+        assert!(!accept_init_code(&format!("{at}y"), &at), "one more character is refused");
+        // Characters, not bytes.
+        assert!(accept_init_code(&"é".repeat(MAX_INIT_CHARS), ""));
+        assert!(!accept_init_code(&"é".repeat(MAX_INIT_CHARS + 1), ""));
+        // Code that came in past the limit can be shortened, not lengthened.
+        let over = format!("{at}y");
+        assert!(accept_init_code(&at, &over));
+        assert!(accept_init_code(&over, &over), "no change");
+        assert!(!accept_init_code(&format!("{at}yz"), &over));
+        // A huge paste is refused without counting it all.
+        assert!(!accept_init_code(&"z".repeat(50_000_000), ""));
     }
 
     #[test]

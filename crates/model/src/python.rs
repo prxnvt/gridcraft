@@ -22,6 +22,107 @@ pub const FILE_PREFIX: &str = "_xlfn._xlws.";
 /// Characters in one string literal of a `PY(…)` formula (Excel's limit for a literal).
 const CHUNK_CHARS: usize = 255;
 
+/// The most characters of initialization code that run, and that a command or the editor takes. The
+/// format sets no limit; this keeps what a file can make the app hold, lay out and send small.
+pub const MAX_INIT_CHARS: usize = 65_536;
+
+/// Most characters of initialization code kept from a file: one more than [`MAX_INIT_CHARS`], so
+/// code that was cut still fails [`PyEnvironment::fits`], also once it is saved and read again, and
+/// never runs as if it were whole.
+pub const MAX_INIT_CHARS_KEPT: usize = MAX_INIT_CHARS + 1;
+
+/// A workbook's Python environment ([MS-XLSX] 2.6.250): the initialization code that runs before its
+/// Python cells, in their shared variables, and what a file says about it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PyEnvironment {
+    pub code: String,
+    /// A person wrote or changed the code (the format's `userModified`). Without it the code is what
+    /// the application that wrote the file put there, and a package it needs isn't a reason to stop
+    /// the cells: see the `python` crate's `Init`.
+    pub user_modified: bool,
+    /// The environment's GUID as the file has it. A workbook that never had one gets one when saved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// What the file held around it that GridCraft doesn't read. Not in JSON, as with
+    /// [`crate::Preserved`].
+    #[serde(skip)]
+    pub kept: Option<std::sync::Arc<PyEnvironmentXml>>,
+}
+
+/// The raw XML of the Python part that GridCraft doesn't read, written back as it came. Opaque to
+/// everything except the file-format crate.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PyEnvironmentXml {
+    /// Attributes of `python`, such as namespace declarations, besides the default namespace.
+    pub root_attrs: String,
+    /// Elements of `python` besides `environmentDefinition` and `pythonScripts`.
+    pub root_elements: String,
+    /// Attributes of `environmentDefinition` besides `id`.
+    pub environment_attrs: String,
+    /// Elements of `environmentDefinition` besides `initialization`.
+    pub environment_elements: String,
+    /// `environmentDefinition` had no `initialization`, which a save doesn't add while there is no
+    /// code.
+    pub no_initialization: bool,
+    /// Attributes of `initialization` besides `userModified`.
+    pub initialization_attrs: String,
+    /// Elements of `initialization` besides `code`.
+    pub initialization_elements: String,
+}
+
+impl PyEnvironment {
+    /// Code a person gave GridCraft.
+    pub fn from_person(code: &str) -> PyEnvironment {
+        PyEnvironment { code: normalize_code(code), user_modified: true, ..PyEnvironment::default() }
+    }
+
+    /// Whether there is anything to run.
+    pub fn has_code(&self) -> bool {
+        !self.code.trim().is_empty()
+    }
+
+    /// Whether the code is short enough to run ([`MAX_INIT_CHARS`]). The work is bounded by the
+    /// limit, not by the code.
+    pub fn fits(&self) -> bool {
+        init_fits(&self.code)
+    }
+}
+
+/// Whether `code` is short enough to be initialization code ([`MAX_INIT_CHARS`]).
+pub fn init_fits(code: &str) -> bool {
+    code.chars().nth(MAX_INIT_CHARS).is_none()
+}
+
+/// `code` cut to what a file may make the app keep ([`MAX_INIT_CHARS_KEPT`]). Returns whether it was
+/// cut.
+pub fn cap_init_code(code: &mut String) -> bool {
+    match code.char_indices().nth(MAX_INIT_CHARS_KEPT) {
+        Some((at, _)) => {
+            code.truncate(at);
+            true
+        }
+        None => false,
+    }
+}
+
+/// A GUID for an environment that has none yet (the format requires one), worked out from the code,
+/// so the same workbook saves the same bytes: a file only needs its environment told apart.
+pub fn environment_id(code: &str) -> String {
+    let hash = |seed: u64| code.bytes().fold(seed, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3));
+    let (a, b) = (hash(0xCBF2_9CE4_8422_2325), hash(0x8422_2325_CBF2_9CE4));
+    format!("{{{:08X}-{:04X}-4{:03X}-8{:03X}-{:012X}}}", a >> 32, (a >> 16) & 0xFFFF, a & 0xFFF, b >> 52, b & 0xFFFF_FFFF_FFFF)
+}
+
+/// Whether `id` is a GUID as the format writes one (ST_Guid): `{8-4-4-4-12}` in hexadecimal.
+pub fn is_guid(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    bytes.len() == 38
+        && bytes.first() == Some(&b'{')
+        && bytes.last() == Some(&b'}')
+        && bytes.iter().enumerate().skip(1).take(36).all(|(i, b)| if matches!(i, 9 | 14 | 19 | 24) { *b == b'-' } else { b.is_ascii_hexdigit() })
+}
+
 /// A Python cell.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

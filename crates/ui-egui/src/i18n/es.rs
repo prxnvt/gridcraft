@@ -662,8 +662,23 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "En macOS el límite de memoria se comprueba dos veces por segundo; no es un tope estricto."
         }
         "Editor" => "Editor",
-        "Initialization code isn't available yet" => "El código de inicialización aún no está disponible",
         "Initialization" => "Inicialización",
+        "The code that runs before this workbook's Python cells" => "El código que se ejecuta antes de las celdas de Python de este libro",
+        "Open Initialization" => "Abrir inicialización",
+        "The initialization code has unsaved changes." => "El código de inicialización tiene cambios sin guardar.",
+        "The initialization code of {workbook} has unsaved changes." => "El código de inicialización de {workbook} tiene cambios sin guardar.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "El código no puede ser más largo: el código de inicialización admite {max} caracteres."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "El código de inicialización cambió mientras estaba abierto en el editor. Copie su código, o cierre el editor y vuelva a abrirlo."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "El código de inicialización cambió mientras estaba abierto en el editor, por lo que su código no se aplicó. Cópielo, o cierre el editor y vuelva a abrirlo."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "El código de inicialización usa un paquete que este Python no tiene. GridCraft omitió las líneas que lo necesitan y ejecutó el resto."
+        }
         "Select a Python cell first." => "Seleccione primero una celda de Python.",
         "Output As" => "Mostrar salida como",
         "Run\nCell" => "Ejecutar\ncelda",

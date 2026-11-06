@@ -95,6 +95,7 @@ mod python_cell_edit;
 mod python_editor;
 mod python_hidden;
 mod python_indicators;
+mod python_initialization;
 mod python_mode;
 mod python_pointing;
 mod python_ribbon;

@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, Value};
-use gridcraft_model::{Cell, PyCode, python::MAX_FORMULA_CHARS};
+use gridcraft_model::python::{MAX_FORMULA_CHARS, MAX_INIT_CHARS, init_fits, normalize_code};
+use gridcraft_model::{Cell, PyCode};
 use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, always, bad, cell_param_on, cmd, edit, has_doc, str_param, target_sheet};
@@ -80,6 +81,15 @@ pub fn specs() -> Vec<CommandSpec> {
             reset
         ),
         cmd!(
+            "python.initialization",
+            "Initialization",
+            ["Formulas", "Python"],
+            None,
+            "{code?} the code that runs before the workbook's Python cells, in the variables they share, at most 65,536 characters. With `code` it sets it, as one undo step (an empty text clears it), refused while the workbook's structure is protected; every Python cell then runs again from the top, as it does when an undo brings other code back, in a fresh worker. Without it nothing changes. Returns {code, userModified, fits, diagnostic?}: `userModified` is true for code a person gave, and false for what the application that wrote the file put there, whose failing imports don't stop the cells (they are reported as init.skipped); `fits` is false for code from a file cut at the limit, which doesn't run until it is shortened; `diagnostic` is the init.failed every Python cell shows. It opens no dialog",
+            has_doc,
+            initialization
+        ),
+        cmd!(
             noundo "python.calculation",
             "Python Calculation",
             ["Python", "Run"],
@@ -102,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Environment",
             [],
             None,
-            "→ {state: off|notSetUp|ready|running|blocked, diagnostic?, sandbox, uv?, interpreter? {path, runAs, version, kind, siteDirs, readPaths}, packages: [{name, version}]}. Read-only",
+            "→ {state: off|notSetUp|ready|running|blocked, diagnostic?, initialization?, sandbox, uv?, interpreter? {path, runAs, version, kind, siteDirs, readPaths}, packages: [{name, version}]}, with `initialization` the init.failed of the active workbook, whose cells can't run while Python itself is ready. Read-only",
             always,
             environment
         ),
@@ -337,6 +347,32 @@ fn stop(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(json!({"stopped": s.python_stop()}))
 }
 
+fn initialization(s: &mut Session, p: &Json) -> Result<Json> {
+    match p.get("code") {
+        None | Some(Json::Null) => {}
+        Some(Json::String(code)) => {
+            if s.doc()?.wb.protected_structure {
+                return Err(EngineError::Other("The workbook is protected, so its initialization code can't be changed.".into()));
+            }
+            let code = normalize_code(code);
+            if !init_fits(&code) {
+                return Err(bad("python.initialization", format!("the code is longer than the limit of {MAX_INIT_CHARS} characters")));
+            }
+            s.python_set_initialization(&code)?;
+            s.python_after_edit();
+        }
+        Some(_) => return Err(bad("python.initialization", "`code` must be text")),
+    }
+    let env = s.doc()?.wb.python_env.clone();
+    let code = env.as_ref().map_or("", |e| e.code.as_str());
+    Ok(json!({
+        "code": code,
+        "userModified": env.as_ref().is_some_and(|e| e.user_modified),
+        "fits": init_fits(code),
+        "diagnostic": s.python_init_failure().map(crate::python::diagnostic_json),
+    }))
+}
+
 fn calculation(s: &mut Session, p: &Json) -> Result<Json> {
     let mode = match p.get("mode") {
         None | Some(Json::Null) => None,
@@ -350,13 +386,22 @@ fn calculation(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"mode": s.python_calculation()}))
 }
 
+/// The report, with what is about the active workbook's environment.
+fn environment_report(s: &Session) -> Json {
+    let mut report = environment_json(&s.python_environment());
+    if let Some(o) = report.as_object_mut() {
+        o.insert("initialization".into(), json!(s.python_init_failure().map(crate::python::diagnostic_json)));
+    }
+    report
+}
+
 fn refresh_environment(s: &mut Session, _: &Json) -> Result<Json> {
     s.python_refresh_environment();
-    Ok(environment_json(&s.python_environment()))
+    Ok(environment_report(s))
 }
 
 fn environment(s: &mut Session, _: &Json) -> Result<Json> {
-    Ok(environment_json(&s.python_environment()))
+    Ok(environment_report(s))
 }
 
 fn diagnostics(s: &mut Session, _: &Json) -> Result<Json> {

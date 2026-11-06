@@ -354,6 +354,8 @@ pub(super) struct DocRun {
     /// Cells that stopped the worker, with what they were then and the error they show. They don't
     /// run again, and can't stop it again, until that changes or someone asks.
     pub refused: HashMap<(u64, CellRef), (u64, CellError)>,
+    /// What the workbook's initialization code did.
+    pub init: super::initialization::InitRun,
     /// Which cells assign which names, for the `python.nameOrder` diagnostic.
     pub assigns: Option<HashMap<String, Vec<u32>>>,
     pub log: VecDeque<PythonRun>,
@@ -385,7 +387,13 @@ impl DocRun {
         }
         self.seen = Some(new.clone());
         let diff = Diff::between(&old, &new);
-        if !diff.any() && !diff.structure {
+        let new_init = !super::initialization::same_run(&old, &new);
+        let mut cx = cx;
+        if new_init {
+            self.start_over_for_initialization();
+            cx.manual = super::manual(self, d);
+        }
+        if !diff.any() && !diff.structure && !new_init {
             return false;
         }
         // A spill a cell gets in the way of, or that one no longer blocks, takes its formats with it.
@@ -405,7 +413,7 @@ impl DocRun {
             let refreshed = self.refresh(&new, &diff, &mut reader);
             (seq_first, moved || refreshed)
         };
-        if !touched {
+        if !touched && !new_init {
             return formatted;
         }
         self.derive(d, cx, source, seq_first) | formatted
@@ -655,6 +663,7 @@ impl DocRun {
     pub fn turn_off(&mut self, d: &mut DocState) -> bool {
         self.client = None;
         self.inflight = None;
+        self.init = Default::default();
         self.due = 0;
         self.cursor = 0;
         self.passes = 0;

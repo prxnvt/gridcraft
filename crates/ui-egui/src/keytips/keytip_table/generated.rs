@@ -266,6 +266,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MXP", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Partial Calculation; Calculation options: Partial
     ("MY", Entry::Finish(Action::Control("python.insert"))),   // Excel: Insert Python; Python group: starts Python mode on the active cell
     ("MZR", Entry::Finish(Action::Command("python.reset"))),   // Excel: Reset; Python group
+    ("MZI", Entry::Finish(Action::Control("python.initializationEditor"))), // Excel: Initialization; Python group: opens the Initialization editor
     ("MZD", Entry::Finish(Action::Control("python.problems"))), // Excel: Diagnostics; Python group: opens the Problems pane
     ("YA", Entry::Finish(Action::Command("python.runAll"))),   // Python tab, Run: Run All
     ("YB", Entry::Finish(Action::Control("python.problems"))), // Python tab, Diagnostics: Problems
@@ -280,6 +281,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("YP", Entry::Finish(Action::Control("python.packages"))), // Python tab, Environment: Packages
     ("YR", Entry::Finish(Action::Command("python.reset"))),    // Python tab, Run: Reset
     ("YS", Entry::Finish(Action::Command("python.stop"))),     // Python tab, Run: Stop
+    ("YT", Entry::Finish(Action::Control("python.initializationEditor"))), // Python tab, Code: Initialization
     ("YV", Entry::Finish(Action::Control("python.interpreter"))), // Python tab, Environment: Interpreter; its items are widgets, with no letters
     ("YW", Entry::Finish(Action::Control("python.permissions"))), // Python tab, Permissions: What Python Can Do
     ("YX", Entry::Finish(Action::Command("python.clearRunLog"))), // Python tab, Diagnostics: Clear
