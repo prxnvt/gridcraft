@@ -845,9 +845,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Buňky Pythonu nemohou používat síť. Vložte data do listu a čtěte je pomocí xl()."
         }
         "Python cells can't start other programs or processes." => "Buňky Pythonu nemohou spouštět jiné programy ani procesy.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Buňky Pythonu nekreslí grafy. Vraťte data do listu a vytvořte z nich graf."
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Obrázek je příliš velký na vykreslení. Zmenšete figsize nebo dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Obrázek se v buňce zobrazí sám. Buňky Pythonu nemohou zapisovat soubory, takže by tento řádek selhal."
         }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Tento balíček kreslí ve webovém prohlížeči, který buňky Pythonu nemohou otevřít. Použijte matplotlib nebo seaborn."
+        }
+        "Python Output" => "Výstup Pythonu",
+        "Display Plot over Cells" => "Zobrazit graf nad buňkami",
+        "Create Reference" => "Vytvořit odkaz",
+        "Copy Image" => "Kopírovat obrázek",
+        "Save Image…" => "Uložit obrázek…",
+        "The image is saved." => "Obrázek je uložen.",
+        "The image is on the clipboard." => "Obrázek je ve schránce.",
+        "Image" => "Obrázek",
+        "size" => "velikost",
+        "Resize" => "Změnit velikost",
+        "This picture shows the last result that cell gave." => "Obrázek ukazuje poslední výsledek, který tato buňka vrátila.",
+        "Select a Python cell that gave a picture first." => "Nejprve vyberte buňku Pythonu, která vrátila obrázek.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() potřebuje svůj odkaz zapsaný jako text v kódu, například xl(\"A1:B5\")."
         }

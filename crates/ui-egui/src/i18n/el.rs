@@ -1279,9 +1279,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Τα κελιά Python δεν μπορούν να χρησιμοποιήσουν το δίκτυο. Τοποθετήστε τα δεδομένα σε ένα φύλλο και διαβάστε τα με το xl()."
         }
         "Python cells can't start other programs or processes." => "Τα κελιά Python δεν μπορούν να εκκινήσουν άλλα προγράμματα ή διεργασίες.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Τα κελιά Python δεν σχεδιάζουν γραφήματα. Επιστρέψτε τα δεδομένα σε ένα φύλλο και δημιουργήστε από αυτά ένα γράφημα."
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Η εικόνα είναι πολύ μεγάλη για σχεδίαση. Μειώστε το figsize ή το dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Η εικόνα εμφανίζεται από μόνη της στο κελί. Τα κελιά Python δεν μπορούν να γράψουν αρχεία, επομένως αυτή η γραμμή θα αποτύχει."
         }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Αυτό το πακέτο σχεδιάζει σε πρόγραμμα περιήγησης ιστού, το οποίο τα κελιά Python δεν μπορούν να ανοίξουν. Χρησιμοποιήστε matplotlib ή seaborn."
+        }
+        "Python Output" => "Έξοδος Python",
+        "Display Plot over Cells" => "Εμφάνιση γραφήματος πάνω από κελιά",
+        "Create Reference" => "Δημιουργία αναφοράς",
+        "Copy Image" => "Αντιγραφή εικόνας",
+        "Save Image…" => "Αποθήκευση εικόνας…",
+        "The image is saved." => "Η εικόνα αποθηκεύτηκε.",
+        "The image is on the clipboard." => "Η εικόνα βρίσκεται στο πρόχειρο.",
+        "Image" => "Εικόνα",
+        "size" => "μέγεθος",
+        "Resize" => "Αλλαγή μεγέθους",
+        "This picture shows the last result that cell gave." => "Αυτή η εικόνα δείχνει το τελευταίο αποτέλεσμα αυτού του κελιού.",
+        "Select a Python cell that gave a picture first." => "Επιλέξτε πρώτα ένα κελί Python που επέστρεψε εικόνα.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "Το xl() χρειάζεται την αναφορά του γραμμένη ως κείμενο στον κώδικα, όπως xl(\"A1:B5\")."
         }

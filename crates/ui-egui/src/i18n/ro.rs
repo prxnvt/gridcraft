@@ -1321,9 +1321,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Celulele Python nu pot folosi rețeaua. Puneți datele într-o foaie și citiți-le cu xl()."
         }
         "Python cells can't start other programs or processes." => "Celulele Python nu pot porni alte programe sau procese.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Celulele Python nu desenează grafice. Returnați datele într-o foaie și creați un grafic din ele."
+        "This picture is too large to draw. Make figsize or dpi smaller." => {
+            "Această imagine este prea mare pentru a fi desenată. Micșorați figsize sau dpi."
         }
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Imaginea apare singură în celulă. Celulele Python nu pot scrie fișiere, deci această linie ar eșua."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Acest pachet desenează într-un browser web, pe care celulele Python nu îl pot deschide. Folosiți matplotlib sau seaborn."
+        }
+        "Python Output" => "Ieșire Python",
+        "Display Plot over Cells" => "Afișează graficul peste celule",
+        "Create Reference" => "Creează referință",
+        "Copy Image" => "Copiază imaginea",
+        "Save Image…" => "Salvează imaginea…",
+        "The image is saved." => "Imaginea a fost salvată.",
+        "The image is on the clipboard." => "Imaginea este în clipboard.",
+        "Image" => "Imagine",
+        "size" => "dimensiune",
+        "Resize" => "Redimensionare",
+        "This picture shows the last result that cell gave." => "Această imagine arată ultimul rezultat returnat de acea celulă.",
+        "Select a Python cell that gave a picture first." => "Selectați mai întâi o celulă Python care a returnat o imagine.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() are nevoie ca referința sa să fie scrisă ca text în cod, de exemplu xl(\"A1:B5\")."
         }

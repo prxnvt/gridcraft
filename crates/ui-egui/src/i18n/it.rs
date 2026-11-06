@@ -1283,9 +1283,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Le celle Python non possono usare la rete. Metti i dati in un foglio e leggili con xl()."
         }
         "Python cells can't start other programs or processes." => "Le celle Python non possono avviare altri programmi o processi.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Le celle Python non disegnano grafici. Restituisci i dati a un foglio e crea un grafico da essi."
+        "This picture is too large to draw. Make figsize or dpi smaller." => {
+            "Questa immagine è troppo grande per essere disegnata. Riduci figsize o dpi."
         }
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "L'immagine appare da sola nella cella. Le celle Python non possono scrivere file, quindi questa riga fallirebbe."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Questo pacchetto disegna in un browser web, che le celle Python non possono aprire. Usa matplotlib o seaborn."
+        }
+        "Python Output" => "Output Python",
+        "Display Plot over Cells" => "Mostra grafico sulle celle",
+        "Create Reference" => "Crea riferimento",
+        "Copy Image" => "Copia immagine",
+        "Save Image…" => "Salva immagine…",
+        "The image is saved." => "L'immagine è stata salvata.",
+        "The image is on the clipboard." => "L'immagine è negli appunti.",
+        "Image" => "Immagine",
+        "size" => "dimensione",
+        "Resize" => "Ridimensiona",
+        "This picture shows the last result that cell gave." => "Questa immagine mostra l'ultimo risultato restituito da quella cella.",
+        "Select a Python cell that gave a picture first." => "Seleziona prima una cella Python che ha restituito un'immagine.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() richiede che il suo riferimento sia scritto come testo nel codice, ad esempio xl(\"A1:B5\")."
         }

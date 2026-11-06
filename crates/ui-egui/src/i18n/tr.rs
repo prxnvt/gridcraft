@@ -703,9 +703,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Python hücreleri ağı kullanamaz. Verileri bir sayfaya koyun ve xl() ile okuyun."
         }
         "Python cells can't start other programs or processes." => "Python hücreleri başka programları veya işlemleri başlatamaz.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Python hücreleri grafik çizmez. Verileri bir sayfaya döndürün ve grafiği oradan oluşturun."
+        "This picture is too large to draw. Make figsize or dpi smaller." => {
+            "Bu resim çizilemeyecek kadar büyük. figsize veya dpi değerini küçültün."
         }
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Resim hücrede kendiliğinden görünür. Python hücreleri dosya yazamaz, bu yüzden bu satır başarısız olur."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Bu paket bir web tarayıcısında çizim yapar, Python hücreleri ise tarayıcı açamaz. matplotlib veya seaborn kullanın."
+        }
+        "Python Output" => "Python Çıktısı",
+        "Display Plot over Cells" => "Grafiği Hücrelerin Üzerinde Göster",
+        "Create Reference" => "Başvuru Oluştur",
+        "Copy Image" => "Resmi Kopyala",
+        "Save Image…" => "Resmi Kaydet…",
+        "The image is saved." => "Resim kaydedildi.",
+        "The image is on the clipboard." => "Resim panoda.",
+        "Image" => "Resim",
+        "size" => "boyut",
+        "Resize" => "Yeniden Boyutlandır",
+        "This picture shows the last result that cell gave." => "Bu resim, o hücrenin verdiği son sonucu gösterir.",
+        "Select a Python cell that gave a picture first." => "Önce resim veren bir Python hücresi seçin.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() başvurusunun koda xl(\"A1:B5\") gibi metin olarak yazılması gerekir."
         }

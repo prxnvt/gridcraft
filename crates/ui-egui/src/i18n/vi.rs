@@ -703,9 +703,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Ô Python không thể dùng mạng. Hãy đặt dữ liệu vào một trang tính và đọc bằng xl()."
         }
         "Python cells can't start other programs or processes." => "Ô Python không thể khởi động chương trình hoặc tiến trình khác.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Ô Python không vẽ biểu đồ. Hãy trả dữ liệu về một trang tính và tạo biểu đồ từ đó."
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Hình ảnh này quá lớn để vẽ. Hãy giảm figsize hoặc dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Hình ảnh tự xuất hiện trong ô. Ô Python không thể ghi tệp, nên dòng này sẽ lỗi."
         }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Gói này vẽ trong trình duyệt web mà ô Python không thể mở. Hãy dùng matplotlib hoặc seaborn."
+        }
+        "Python Output" => "Kết quả Python",
+        "Display Plot over Cells" => "Hiển thị biểu đồ phía trên ô",
+        "Create Reference" => "Tạo tham chiếu",
+        "Copy Image" => "Sao chép hình ảnh",
+        "Save Image…" => "Lưu hình ảnh…",
+        "The image is saved." => "Đã lưu hình ảnh.",
+        "The image is on the clipboard." => "Hình ảnh đang ở trong bảng tạm.",
+        "Image" => "Hình ảnh",
+        "size" => "kích thước",
+        "Resize" => "Đổi kích thước",
+        "This picture shows the last result that cell gave." => "Hình ảnh này hiển thị kết quả gần nhất mà ô đó trả về.",
+        "Select a Python cell that gave a picture first." => "Trước tiên hãy chọn một ô Python đã trả về hình ảnh.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() cần tham chiếu được viết dưới dạng văn bản trong mã, chẳng hạn xl(\"A1:B5\")."
         }
