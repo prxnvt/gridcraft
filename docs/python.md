@@ -1,6 +1,6 @@
 # Python in cells
 
-> **Last updated:** 2026-11-05 · **Change:** minor (what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
+> **Last updated:** 2026-11-05 · **Change:** minor (dates and times, in and out of Python; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
 
 A Python cell runs code you write, in your own Python, on your computer. GridCraft never downloads
 Python and never installs packages. It finds the Python you have, and it runs your code in a sandbox
@@ -78,6 +78,53 @@ Cells run in row order, sheet by sheet in tab order, as in Excel, and share one 
 **Reset** clears them and runs every cell again. Each time Python starts, GridCraft first tries to
 read a file outside Python, write a file, open a network connection and start a program, and it
 doesn't run Python unless every one is refused. [sandbox.md](sandbox.md) has the details.
+
+## Dates and times
+
+A number in a cell is a date because of its format, and Python sees it that way. `xl("A1")` gives a
+`datetime.date`, `datetime.time` or `datetime.datetime`, by itself or in a range. With pandas, a
+column of dates and empty cells is a datetime column, with `NaT` for the empty cells. Read a date, add
+a day and return it, and the cell shows the next day:
+
+```python
+import datetime
+xl("A1") + datetime.timedelta(days=1)
+```
+
+**What `xl()` gives,** in the workbook's date system (1900 or 1904), to the millisecond:
+
+- a date format gives a `date`, or a `datetime` when the cell holds a time of day too, so nothing is
+  lost;
+- a date and time format gives a `datetime`;
+- a time format gives a `time`, or a `datetime` when the number is 1 or more;
+- a format for elapsed time, such as `[h]:mm`, gives the number of days as a number.
+
+A number with no place on the calendar stays a number: one that is negative, one past 31 December
+9999, and in the 1900 system the days that never were. Those are serial 60, 29 February 1900, which
+that system has for compatibility and Python's calendar doesn't, and anything below 1 under a format
+that shows a date. So 28 February 1900 plus a day, in Python, is 1 March 1900, serial 61.
+
+**What comes back.** `date`, `datetime`, `time`, numpy's `datetime64` and pandas's `Timestamp` become
+serial numbers in the workbook's date system, in one cell or across a spill, a DataFrame's date column
+included. `timedelta`, numpy's `timedelta64` and pandas's `Timedelta` become a number of days. `NaT`
+is an empty cell. A value with a time zone uses its local wall-clock time, as Excel has no time zones.
+
+A cell with no format of its own takes one that matches:
+
+- `m/d/yyyy` for a date, and for a `Timestamp` or `datetime64` at midnight, since those types have no
+  date without a time;
+- `m/d/yyyy h:mm` for a `datetime`, and for every date in a column where some have times;
+- `h:mm:ss` for a time;
+- `[h]:mm:ss` for a length of time. A negative one stays a plain number of days, as no format shows
+  one.
+
+The format goes with the date: when a later run gives no date there, or a spill is blocked, the cell
+goes back to General. A format you chose stays, and so does General when you set it on a date a run
+gave. Writing a format makes no undo step, like writing the result. In a saved file a format is simply
+the cell's format, so after opening it again a run no longer takes it back.
+
+A date a serial can't hold, before 1900 (1904 in a 1904 workbook) or after 9999, gives `#NUM!`, as
+does a length of time longer than the whole calendar.
 
 ## Limits
 

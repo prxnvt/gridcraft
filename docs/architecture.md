@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (the indicators: `python_card::tag_state`, `python_ui::checks`, `engine::python::packages`; earlier: the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (dates in Python cells: `engine::python::dates`, `protocol::Stamp`, `PyCode::dates`; earlier: the indicators: `python_card::tag_state`, `python_ui::checks`, `engine::python::packages`; earlier: the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -294,6 +294,20 @@ one `Client`, made when first needed and dropped with the workbook, which stops 
   tables; a range running to the sheet's edge stops at the used range. Over
   `protocol::MAX_ARRAY_CELLS` cells in all, or with a reference that names nothing, the cell doesn't
   run (`#PYTHON!` with `xl.tooLarge`, `#REF!` with `xl.badReference`).
+- **Dates** (`python/dates.rs`, `gridcraft_python::protocol::Stamp`). The worker never sees a serial
+  number, since only the parent knows the workbook's date system: dates cross the protocol as capped
+  text, `{"date":"2024-01-15"}`, and durations as days, and `Stamp::from_serial` and `Stamp::serial`
+  convert through `core::date`. Text that names no date reads as `#VALUE!`; a date no serial holds is
+  `#NUM!`. `inputs` asks `NumberFormat::date_shape` what each number's format shows, once per style,
+  and the fingerprint counts the answer, so a new format runs what reads the cell; a row or column
+  format under a spill counts too (`SheetChange::lines`), as a spilled value has no cell to change.
+  A result's stamps become serials, and `PyCode::dates` holds what each place asks for and what runs
+  wrote (never saved, and a shared slice, as a cell is copied whenever a flag on it changes).
+  `dates::sync_formats` compares those with the cells' formats after each result, and `plan` calls it
+  when a spill comes or goes, in the same way as a result: no undo step, and before the look at what
+  changed, as what reads those cells goes by the formats. General can't say "no format", so `written`
+  is what tells a format a run wrote, which a later result takes back, from one the person chose or
+  took off.
 - **Workers** (`python/runner.rs`). A cell only runs in a worker that has run every cell before it, so
   a fresh worker runs those first. A cell that stopped its worker (a limit, a crash, `python.stop`)
   doesn't run again until its code or inputs change or someone asks. After more than three lost
@@ -390,6 +404,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Dates in Python cells: `engine::python::dates`, `protocol::Stamp`, `PyCode::dates` |
 | 2026-11-05 | minor | The engine runs Python cells: `engine::python`, `PythonCapability`, `python_poll` and the commands that run and report; `PyCode::busy`; `calc::evaluate_reference`. The app doesn't turn it on yet |
 | 2026-11-02 | minor | `python.clear` (Convert to Normal Cell) and `cmd::python::clear_refusal` |
 | 2026-11-02 | minor | Python cells in the interface: `python_card.rs` (PY tags, the card, the return-type items) and `python.output` |
