@@ -109,7 +109,12 @@ pub(crate) fn copy_image(app: &mut SheetApp, sheet: usize, at: CellRef) {
         (_, None) => Err("This window can't put a picture on the clipboard.".to_string()),
     };
     match done {
-        Ok(()) => app.toast = Some((IMAGE_COPIED.into(), crate::now_ms())),
+        Ok(()) => {
+            // These pixels are for other applications. They end any copy of a floating picture, and
+            // a paste of them is a paste of a plain picture, even when the two look the same.
+            app.forget_picture_copy();
+            app.toast = Some((IMAGE_COPIED.into(), crate::now_ms()));
+        }
         Err(e) => app.message = Some(("GridCraft".into(), crate::clean_error(&e))),
     }
 }

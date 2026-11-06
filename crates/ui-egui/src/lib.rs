@@ -50,6 +50,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod published_picture;
 pub mod python_card;
 pub mod python_ui;
 pub mod python_window;
@@ -308,6 +309,10 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// While the object clipboard holds a floating picture: the hash of the picture on the system
+    /// clipboard that stands for it ([`published_picture`]). While the system clipboard holds that
+    /// picture, the object clipboard decides what Paste does.
+    published_picture: Option<u64>,
     /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,

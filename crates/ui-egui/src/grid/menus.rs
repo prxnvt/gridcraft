@@ -405,6 +405,9 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 }
                 items.extend([("Format Control…", "ui:formatControl"), ("-", "")]);
             }
+            if kind == "image" {
+                items.extend([("Cut", "edit.cut"), ("Copy", "edit.copy"), ("Paste", "edit.paste"), ("-", "")]);
+            }
             items.push(("Delete", "object.delete"));
             if kind == "chart" {
                 items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
@@ -423,6 +426,11 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:editText" => app.open_dialog("formatControl", json!({"id": id, "textOnly": true})),
                         "ui:assignAction" => app.open_dialog("assignAction", json!({"id": id})),
                         "ui:formatControl" => app.open_dialog("formatControl", json!({"id": id})),
+                        "edit.copy" | "edit.cut" => {
+                            app.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Image, id));
+                            app.copy_to_clipboard(ui.ctx(), action);
+                        }
+                        "edit.paste" => app.paste_from_clipboard(),
                         _ => {
                             app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
                             app.selected_object = None;
