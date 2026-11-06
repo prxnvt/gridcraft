@@ -140,7 +140,7 @@ fn kept(output: Output, sys: DateSystem) -> Write {
             let (output, dates) = converted(dated, sys);
             Write::Result(output, dates)
         }
-        Output::Object { type_name, preview } => {
+        Output::Object { type_name, preview, .. } => {
             Write::Result(PyOutput { value: Value::text(type_name.as_str()), type_name, preview, convertible: false }, ResultDates::default())
         }
     }

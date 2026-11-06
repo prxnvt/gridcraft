@@ -36,6 +36,12 @@ def _gridcraft_worker():
     MAX_TYPE_NAME_BYTES = 256
     MAX_DATE_BYTES = 64
     MAX_PREVIEW_CHARS = 255
+    MAX_SIZE_DIMS = 8
+    MAX_SIZE = 9007199254740992
+    MAX_TABLE_ROWS = 200
+    MAX_TABLE_COLS = 30
+    MAX_TABLE_TEXT_BYTES = 4096
+    MAX_TABLE_BYTES = 1048576
     MAX_STDOUT_BYTES = 1048576
     MAX_ARRAY_CELLS = 1000000
 
@@ -478,15 +484,157 @@ def _gridcraft_worker():
             data.extend({"error": "#N/A"} for _ in range(cols - len(r)))
         return {"array": {"rows": len(rows), "cols": cols, "data": data}}
 
-    def as_object(v):
-        return {"object": {"typeName": type_name(v), "preview": cut_chars(safe_repr(v), MAX_PREVIEW_CHARS)}}
+    def instance_of(v, module, name):
+        # Only a package that is loaded can have made one, and a subclass counts.
+        cls = getattr(sys.modules.get(module), name, None)
+        return isinstance(cls, type) and isinstance(v, cls)
+
+    def size_of(v):
+        """What a Python object's name says about its size, or None when it has none to say."""
+        if instance_of(v, "pandas", "DataFrame") or instance_of(v, "numpy", "ndarray"):
+            dims = v.shape
+        elif instance_of(v, "pandas", "Series") or isinstance(v, (list, tuple, dict, set, frozenset)):
+            dims = (len(v),)
+        else:
+            return None
+        dims = [int(n) for n in dims]
+        if not 1 <= len(dims) <= MAX_SIZE_DIMS or not all(0 <= n <= MAX_SIZE for n in dims):
+            return None
+        return dims
+
+    def wire_bytes(v):
+        return len(encode(v).encode("utf-8", "replace")) + 1
+
+    def preview_table(names, rows, total_rows, total_cols, cols, labels):
+        """A table's preview, within the caps of protocol.rs. `rows` gives its rows, each already at
+        most `cols` long: a short one is padded with #N/A, as a spill is. A long text is cut, and rows
+        stop at the budget in bytes, and the totals say what is missing."""
+        if total_rows > MAX_SIZE or total_cols > MAX_SIZE:
+            return None
+        cut = []
+
+        def text(s):
+            shown = cut_bytes(s, MAX_TABLE_TEXT_BYTES)
+            if len(shown) != len(s):
+                cut.append(True)
+            return shown
+
+        def name(n):
+            n = item(n)
+            if n is None:
+                return ""
+            try:
+                return text(str(n))
+            except BaseException:
+                return text(safe_repr(n))
+
+        def cell(x):
+            x = item(x)
+            try:
+                if isinstance(x, str):
+                    return text(str(x))
+                s = scalar(x)
+            except BaseException:
+                s = NOT_SCALAR
+            if s is not NOT_SCALAR:
+                return s
+            whole = safe_repr(x)
+            shown = cut_chars(whole, MAX_PREVIEW_CHARS)
+            if len(shown) != len(whole):
+                cut.append(True)
+            return shown
+
+        names = [name(n) for n in names] if names is not None else []
+        spent = sum(wire_bytes(n) for n in names)
+        data = []
+        count = 0
+        for row in rows:
+            cells = [cell(x) for x in row]
+            cells.extend({"error": "#N/A"} for _ in range(cols - len(cells)))
+            spent += sum(wire_bytes(c) for c in cells)
+            if spent > MAX_TABLE_BYTES:
+                break
+            data.extend(cells)
+            count += 1
+        table = {"rows": count, "cols": cols, "data": data, "totalRows": total_rows, "totalCols": total_cols}
+        if any(names):
+            table["columns"] = names
+        if labels:
+            table["rowLabels"] = True
+        if cut:
+            table["textCut"] = True
+        return table
+
+    def frame_table(v):
+        # As a spill has it: the column names, and the row labels unless they are just 0, 1, 2...
+        labels = not default_index(v.index)
+        part = v.iloc[: MAX_TABLE_ROWS, : MAX_TABLE_COLS - (1 if labels else 0)]
+        names = ([v.index.name] if labels else []) + list(part.columns)
+
+        def rows():
+            for label, row in zip(part.index, part.itertuples(index=False, name=None)):
+                yield ([label] if labels else []) + [blank(x) for x in row]
+
+        return preview_table(names, rows(), int(v.shape[0]), int(v.shape[1]), len(names), labels)
+
+    def series_table(v):
+        labels = not default_index(v.index)
+        part = v.iloc[: MAX_TABLE_ROWS]
+        names = ([v.index.name] if labels else []) + [v.name]
+
+        def rows():
+            for label, x in zip(part.index, part.tolist()):
+                yield ([label] if labels else []) + [blank(x)]
+
+        return preview_table(names, rows(), len(v), 1, len(names), labels)
+
+    def array_table(v):
+        part = v[: MAX_TABLE_ROWS, : MAX_TABLE_COLS]
+        # tolist() gives bare integers for nanoseconds: the elements keep their units.
+        rows = [list(r) for r in part] if part.dtype.kind in ("M", "m") else part.tolist()
+        return preview_table(None, rows, int(v.shape[0]), int(v.shape[1]), int(part.shape[1]), False)
+
+    def rows_table(v):
+        cols = max(len(r) for r in v)
+        rows = (list(r[: MAX_TABLE_COLS]) for r in v[: MAX_TABLE_ROWS])
+        return preview_table(None, rows, len(v), cols, min(cols, MAX_TABLE_COLS), False)
+
+    def table_of(v):
+        """A bounded look at a table-like object, or None for anything else."""
+        if instance_of(v, "pandas", "DataFrame"):
+            return frame_table(v)
+        if instance_of(v, "pandas", "Series"):
+            return series_table(v)
+        if instance_of(v, "numpy", "ndarray"):
+            return array_table(v) if v.ndim == 2 else None
+        if isinstance(v, (list, tuple)) and len(v) and all(isinstance(r, (list, tuple)) for r in v):
+            return rows_table(v)
+        return None
+
+    def unless_it_fails(find, v):
+        # The object's own methods run here, and the cell has its result whatever they do.
+        try:
+            return find(v)
+        except BaseException:
+            return None
+
+    def as_object(v, sized):
+        o = {"typeName": type_name(v), "preview": cut_chars(safe_repr(v), MAX_PREVIEW_CHARS)}
+        if sized:
+            size = unless_it_fails(size_of, v)
+            table = unless_it_fails(table_of, v)
+            if size:
+                o["size"] = size
+            if table:
+                o["table"] = table
+        return {"object": o}
 
     def output(v, want_object):
         s = scalar(v)
         if s is not NOT_SCALAR:
             return s
         if want_object:
-            return as_object(v)
+            return as_object(v, True)
         rows = rows_of(v)
         if rows is not None:
             return grid(rows) if rows else {"error": "#CALC!"}
@@ -499,7 +647,7 @@ def _gridcraft_worker():
             if len(v) > MAX_ARRAY_CELLS:
                 raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
             return grid([[x] for x in v])
-        return as_object(v)
+        return as_object(v, False)
 
     # Printed output, kept up to the cap.
     class Capture(io.TextIOBase):

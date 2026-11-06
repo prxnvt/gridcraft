@@ -933,7 +933,7 @@ fn fake_answer(code: &str, inputs: &BTreeMap<String, Input>) -> Result<Output, P
         return Ok(Output::Value(Value::Empty));
     }
     if code.chars().filter(|c| *c == '\n').count() == 2 {
-        return Ok(Output::Object { type_name: "dict".into(), preview: "{}".into() });
+        return Ok(Output::object("dict", "{}"));
     }
     let spelled: usize = gridcraft_engine::model::python::xl_calls(code).iter().filter_map(|c| c.span.as_ref()).map(|s| s.len()).sum();
     Ok(Output::Value(Value::Number((code.len().saturating_sub(spelled) + inputs.len()) as f64)))

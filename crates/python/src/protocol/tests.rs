@@ -39,12 +39,7 @@ fn requests_and_replies_round_trip() {
         Reply::Ready { self_test: SelfTest::NotChecked },
         Reply::Ready { self_test: SelfTest::Failed("socket opened".into()) },
         Reply::Done { id: 3, result: Ok(Output::Value(array(1, 2, vec![Value::Number(1.0), Value::text("b")]))), stdout: "hi\n".into(), peak: None },
-        Reply::Done {
-            id: 4,
-            result: Ok(Output::Object { type_name: "dict".into(), preview: "{'a': 1}".into() }),
-            stdout: String::new(),
-            peak: Some(123),
-        },
+        Reply::Done { id: 4, result: Ok(Output::object("dict", "{'a': 1}")), stdout: String::new(), peak: Some(123) },
         Reply::Done {
             id: 5,
             result: Err(PyError { message: "NameError: name 'y' is not defined".into(), line: Some(2), ..PyError::default() }),
@@ -232,6 +227,12 @@ fn the_shim_has_the_same_caps() {
         ("MAX_TYPE_NAME_BYTES", MAX_TYPE_NAME_BYTES),
         ("MAX_DATE_BYTES", MAX_DATE_BYTES),
         ("MAX_PREVIEW_CHARS", MAX_PREVIEW_CHARS),
+        ("MAX_SIZE_DIMS", MAX_SIZE_DIMS),
+        ("MAX_SIZE", MAX_SIZE as usize),
+        ("MAX_TABLE_ROWS", MAX_TABLE_ROWS),
+        ("MAX_TABLE_COLS", MAX_TABLE_COLS),
+        ("MAX_TABLE_TEXT_BYTES", MAX_TABLE_TEXT_BYTES),
+        ("MAX_TABLE_BYTES", MAX_TABLE_BYTES),
         ("MAX_STDOUT_BYTES", MAX_STDOUT_BYTES),
         ("MAX_ARRAY_CELLS", MAX_ARRAY_CELLS),
     ] {
@@ -569,4 +570,159 @@ fn initialization_code_says_whose_it_is() {
     // What this build doesn't know is no initialization.
     let odd = Request::parse(br#"{"type":"run","id":1,"code":"","init":"later"}"#).unwrap();
     assert!(matches!(odd, Request::Run { init: None, .. }));
+}
+
+fn object_with(fields: &str) -> String {
+    done_line(&format!(r#"{{"object":{{"typeName":"DataFrame","preview":"p"{fields}}}}}"#))
+}
+
+fn table_of(line: &str) -> Result<Table, String> {
+    match value_of(line)? {
+        Output::Object { table: Some(table), .. } => Ok(table),
+        other => Err(format!("no table: {other:?}")),
+    }
+}
+
+/// A table's wire form with these fields, around `rows`, `cols` and `data`.
+fn table_line(shape: &str, more: &str) -> String {
+    object_with(&format!(r#","table":{{{shape}{more}}}"#))
+}
+
+#[test]
+fn an_objects_size_is_capped() {
+    let size = |json: &str| match value_of(&object_with(&format!(r#","size":{json}"#)))? {
+        Output::Object { size, .. } => Ok::<_, String>(size),
+        other => Err(format!("{other:?}")),
+    };
+    assert_eq!(size("[6,4]").unwrap(), vec![6, 4]);
+    assert_eq!(size("[0]").unwrap(), vec![0]);
+    assert_eq!(size(&format!("[{MAX_SIZE}]")).unwrap(), vec![MAX_SIZE]);
+    assert_eq!(size(&format!("[{}]", ["1"; MAX_SIZE_DIMS].join(","))).unwrap().len(), MAX_SIZE_DIMS);
+    // Past a cap, or not a list of whole numbers: the line is refused.
+    for bad in [
+        "[]".to_string(),
+        format!("[{}]", MAX_SIZE + 1),
+        format!("[{}]", ["1"; MAX_SIZE_DIMS + 1].join(",")),
+        "[-1]".into(),
+        "[1.5]".into(),
+        "[\"6\"]".into(),
+        "[[1]]".into(),
+        "6".into(),
+        "\"6x4\"".into(),
+        "{}".into(),
+        "[18446744073709551616]".into(),
+    ] {
+        assert!(size(&bad).is_err(), "{bad}");
+    }
+    // Without one, as before.
+    assert_eq!(value_of(&object_with("")).unwrap(), Output::object("DataFrame", "p"));
+    assert_eq!(value_of(&object_with(r#","size":null,"table":null"#)).unwrap(), Output::object("DataFrame", "p"));
+}
+
+#[test]
+fn objects_with_a_size_and_a_table_round_trip() {
+    let table = Table {
+        columns: vec!["a".into(), "é|\"".into()],
+        rows: 2,
+        cols: 2,
+        data: vec![Value::Number(1.0), Value::text("x\ny"), Value::Empty, Value::Error(CellError::NA)],
+        row_labels: true,
+        total_rows: 1_000,
+        total_cols: 50,
+        text_cut: true,
+    };
+    let empty = Table { rows: 0, cols: 2, columns: vec!["a".into(), "b".into()], total_cols: 2, ..Table::default() };
+    for table in [table, empty, Table::default()] {
+        let reply = Reply::Done {
+            id: 1,
+            result: Ok(Output::Object { type_name: "DataFrame".into(), preview: "p".into(), size: vec![1000, 50], table: Some(table) }),
+            stdout: String::new(),
+            peak: None,
+        };
+        assert_eq!(Reply::parse(reply.to_line().trim_ascii_end()).unwrap(), reply);
+    }
+}
+
+#[test]
+fn a_tables_shape_is_checked() {
+    let good = table_of(&table_line(r#""rows":1,"cols":2,"data":[1,"a"],"totalRows":1,"totalCols":2"#, "")).unwrap();
+    assert_eq!((good.rows, good.cols, good.data.len(), good.columns.len(), good.row_labels, good.text_cut), (1, 2, 2, 0, false, false));
+    // No rows, and no columns at all: a table can be empty.
+    assert_eq!(table_of(&table_line(r#""rows":0,"cols":2,"data":[],"totalRows":0,"totalCols":2,"columns":["a","b"]"#, "")).unwrap().rows, 0);
+    assert_eq!(table_of(&table_line(r#""rows":3,"cols":0,"data":[],"totalRows":3,"totalCols":0"#, "")).unwrap().cols, 0);
+    // A date in a table is its text, as the preview is only read.
+    let dated = table_of(&table_line(
+        r#""rows":1,"cols":2,"data":[{"date":"2024-01-15"},{"dateTime":"2024-01-15T10:30:00"}],"totalRows":1,"totalCols":2"#,
+        "",
+    ));
+    assert_eq!(dated.unwrap().data, vec![Value::text("2024-01-15"), Value::text("2024-01-15 10:30:00")]);
+    // Row labels don't count as columns of the object, however few it has.
+    assert!(table_of(&table_line(r#""rows":1,"cols":2,"data":[1,2],"rowLabels":true,"totalRows":1,"totalCols":1"#, "")).is_ok());
+
+    for bad in [
+        r#""rows":2,"cols":2,"data":[1,2,3],"totalRows":2,"totalCols":2"#,
+        r#""rows":1,"cols":2,"data":[1,2,3],"totalRows":1,"totalCols":2"#,
+        r#""rows":4294967296,"cols":4294967296,"data":[],"totalRows":4294967296,"totalCols":4294967296"#,
+        r#""rows":-1,"cols":2,"data":[],"totalRows":1,"totalCols":2"#,
+        r#""rows":1,"cols":1,"totalRows":1,"totalCols":1"#,
+        r#""cols":1,"data":[1],"totalRows":1,"totalCols":1"#,
+        r#""rows":1,"data":[1],"totalRows":1,"totalCols":1"#,
+        r#""rows":1,"cols":1,"data":[1],"totalCols":1"#,
+        r#""rows":1,"cols":1,"data":[1],"totalRows":1"#,
+        r#""rows":1,"cols":1,"data":[1],"totalRows":1,"totalCols":1,"rows":1"#,
+        r#""rows":1,"cols":1,"data":[1],"totalRows":1,"totalCols":1,"extra":1"#,
+        // Claiming less than it holds, or more than a size may say.
+        r#""rows":2,"cols":1,"data":[1,2],"totalRows":1,"totalCols":1"#,
+        r#""rows":1,"cols":2,"data":[1,2],"totalRows":1,"totalCols":1"#,
+        r#""rows":1,"cols":1,"data":[1],"totalRows":9007199254740993,"totalCols":1"#,
+        r#""rows":1,"cols":1,"data":[1],"totalRows":1,"totalCols":9007199254740993"#,
+        // Names that don't match the columns, and labels with no column for them.
+        r#""rows":1,"cols":2,"data":[1,2],"totalRows":1,"totalCols":2,"columns":["a"]"#,
+        r#""rows":1,"cols":1,"data":[1],"totalRows":1,"totalCols":1,"columns":["a","b"]"#,
+        r#""rows":0,"cols":0,"data":[],"totalRows":0,"totalCols":0,"rowLabels":true"#,
+        // Nesting.
+        r#""rows":1,"cols":1,"data":[{"array":{"rows":1,"cols":1,"data":[1]}}],"totalRows":1,"totalCols":1"#,
+        r#""rows":1,"cols":1,"data":[{"object":{"typeName":"x","preview":"x"}}],"totalRows":1,"totalCols":1"#,
+        r#""rows":1,"cols":1,"data":[[1]],"totalRows":1,"totalCols":1"#,
+        r#""rows":1,"cols":1,"data":{"0":1},"totalRows":1,"totalCols":1"#,
+    ] {
+        assert!(table_of(&table_line(bad, "")).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_tables_caps_hold() {
+    let numbers = |n: usize| vec!["0"; n].join(",");
+    let shape =
+        |rows: usize, cols: usize, data: &str| format!(r#""rows":{rows},"cols":{cols},"data":[{data}],"totalRows":{rows},"totalCols":{cols}"#);
+    let at_cap = table_of(&table_line(&shape(MAX_TABLE_ROWS, MAX_TABLE_COLS, &numbers(MAX_TABLE_ROWS * MAX_TABLE_COLS)), "")).unwrap();
+    assert_eq!(at_cap.data.len(), MAX_TABLE_ROWS * MAX_TABLE_COLS);
+    assert!(table_of(&table_line(&shape(MAX_TABLE_ROWS + 1, 1, &numbers(MAX_TABLE_ROWS + 1)), "")).is_err());
+    assert!(table_of(&table_line(&shape(1, MAX_TABLE_COLS + 1, &numbers(MAX_TABLE_COLS + 1)), "")).is_err());
+    // Data that runs past the cap is stopped while it is read, whatever the shape says.
+    assert!(table_of(&table_line(&shape(1, 1, &numbers(MAX_TABLE_ROWS * MAX_TABLE_COLS + 1)), "")).is_err());
+
+    // One text, a cell's or a column's name.
+    let text = |n: usize| format!("\"{}\"", "x".repeat(n));
+    assert!(table_of(&table_line(&shape(1, 1, &text(MAX_TABLE_TEXT_BYTES)), "")).is_ok());
+    assert!(table_of(&table_line(&shape(1, 1, &text(MAX_TABLE_TEXT_BYTES + 1)), "")).is_err());
+    let named = |n: usize| format!(r#","columns":[{}]"#, text(n));
+    assert!(table_of(&table_line(&shape(1, 1, "1"), &named(MAX_TABLE_TEXT_BYTES))).is_ok());
+    assert!(table_of(&table_line(&shape(1, 1, "1"), &named(MAX_TABLE_TEXT_BYTES + 1))).is_err());
+    let names = |n: usize| format!(r#","columns":[{}]"#, vec!["\"a\""; n].join(","));
+    assert!(table_of(&table_line(&shape(1, 2, "1,2"), &names(MAX_TABLE_COLS + 1))).is_err());
+    assert!(table_of(&table_line(&shape(1, 2, "1,2"), r#","columns":[1,2]"#)).is_err());
+
+    // All its text together, the names included: whole rows of cells at the cap per cell.
+    let cells = |n: usize| vec![text(MAX_TABLE_TEXT_BYTES); n].join(",");
+    let rows_of = |bytes: usize| bytes / MAX_TABLE_TEXT_BYTES / MAX_TABLE_COLS;
+    let fit = rows_of(MAX_TABLE_BYTES);
+    assert!(table_of(&table_line(&shape(fit, MAX_TABLE_COLS, &cells(fit * MAX_TABLE_COLS)), "")).is_ok());
+    assert!(table_of(&table_line(&shape(fit + 1, MAX_TABLE_COLS, &cells((fit + 1) * MAX_TABLE_COLS)), "")).is_err());
+    let filled = format!(r#","columns":[{}]"#, vec![text(MAX_TABLE_TEXT_BYTES); MAX_TABLE_COLS].join(","));
+    assert!(table_of(&table_line(&shape(fit - 1, MAX_TABLE_COLS, &cells((fit - 1) * MAX_TABLE_COLS)), &filled)).is_ok());
+    assert!(table_of(&table_line(&shape(fit, MAX_TABLE_COLS, &cells(fit * MAX_TABLE_COLS)), &filled)).is_err());
+
+    // A table only goes on an object, and an object only as a result.
+    assert!(value_of(&done_line(r#"{"table":{"rows":0,"cols":0,"data":[],"totalRows":0,"totalCols":0}}"#)).is_err());
 }

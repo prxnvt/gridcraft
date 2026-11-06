@@ -62,7 +62,7 @@ fn worker() -> FakeTransport {
                     gridcraft_engine::core::Array::new(3, 1, vec![1.0.into(), 2.0.into(), 3.0.into()]).map(Value::from).unwrap_or(Value::Empty);
                 w.done(id, Ok(Output::Value(rows)))
             } else if code == "obj" {
-                w.done(id, Ok(Output::Object { type_name: "DataFrame".into(), preview: "   a  b\n0  1  2".into() }))
+                w.done(id, Ok(Output::object("DataFrame", "   a  b\n0  1  2")))
             } else {
                 w.done(id, value)
             };
