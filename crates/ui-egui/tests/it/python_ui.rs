@@ -1474,3 +1474,85 @@ fn the_tab_panes_and_page_draw_in_every_language() {
         h.run_steps(1);
     }
 }
+
+// ---------------------------------------------------------------- the formula bar
+
+fn bar(h: &Harness) -> gridcraft_ui_egui::formula_bar::BarLayout {
+    gridcraft_ui_egui::formula_bar::BarLayout::get(&h.ctx)
+}
+
+fn click_at(h: &mut Harness, at: Pos2) {
+    h.input_mut().events.extend([
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(3);
+}
+
+fn select_cell(h: &mut Harness, cell: &str) {
+    h.state_mut().run("selection.set", json!({"cell": cell})).unwrap();
+    h.run_steps(30);
+}
+
+fn runs_of(h: &Harness) -> usize {
+    h.state().session.python_run_log().count()
+}
+
+/// On a Python cell the PY badge takes the place of fx, and Run Cell sits a line below it. Everywhere
+/// else fx is there, as in Excel, and Run Cell isn't.
+#[test]
+fn on_a_python_cell_py_replaces_fx_with_run_cell_below_it() {
+    let (mut h, _handle) = Setup::new().build();
+    h.state_mut().run("python.set", json!({"cell": "B2", "code": "ret 7"})).unwrap();
+    settle(&mut h);
+    select_cell(&mut h, "H9");
+    let plain = bar(&h);
+    let fx = plain.fx.expect("fx on a plain cell");
+    assert!(plain.run_cell.is_none());
+    assert_eq!(plain.lines, 1);
+    select_cell(&mut h, "B2");
+    let on_python = bar(&h);
+    assert!(on_python.fx.is_none(), "PY replaces fx");
+    let run = on_python.run_cell.expect("Run Cell on a Python cell");
+    assert!((run.left() - fx.left()).abs() < 4.0, "in fx's place: {run:?} and {fx:?}");
+    assert!(run.top() > fx.top() + 10.0, "a line below the badge: {run:?}");
+    assert_eq!(on_python.lines, 1, "one line of code, and the bar still has Run Cell's line");
+    assert!(run.bottom() <= on_python.height + on_python.name_box.top() + 3.0, "it fits: {run:?} in {}", on_python.height);
+    select_cell(&mut h, "H9");
+    assert!(bar(&h).fx.is_some(), "fx comes back");
+}
+
+#[test]
+fn run_cell_in_the_bar_runs_the_cell() {
+    let (mut h, _handle) = Setup::new().build();
+    h.state_mut().run("python.set", json!({"cell": "B2", "code": "ret 7"})).unwrap();
+    settle(&mut h);
+    select_cell(&mut h, "B2");
+    let before = runs_of(&h);
+    let at = bar(&h).run_cell.expect("Run Cell").center();
+    click_at(&mut h, at);
+    settle(&mut h);
+    assert_eq!(runs_of(&h), before + 1);
+}
+
+/// Pressed on a draft, Run Cell enters the code and runs it, also under manual calculation.
+#[test]
+fn run_cell_on_a_draft_enters_the_code_and_runs_it() {
+    let (mut h, _handle) = Setup::new().build();
+    h.state_mut().run("python.calculation", json!({"mode": "manual"})).unwrap();
+    h.state_mut().run("python.set", json!({"cell": "B2", "code": "ret 1"})).unwrap();
+    settle(&mut h);
+    select_cell(&mut h, "B2");
+    h.state_mut().toggle_python_mode();
+    h.run_steps(30);
+    assert!(h.state().editor.as_ref().is_some_and(|e| e.python), "a draft is open");
+    h.state_mut().editor.as_mut().unwrap().text = "ret 9".into();
+    h.run_steps(2);
+    let at = bar(&h).run_cell.expect("Run Cell").center();
+    click_at(&mut h, at);
+    settle(&mut h);
+    assert!(h.state().editor.is_none());
+    let value = h.state().session.active().unwrap().wb.active().unwrap().value(gridcraft_engine::core::CellRef::parse("B2").unwrap());
+    assert_eq!(value, gridcraft_engine::core::Value::Number(9.0));
+}

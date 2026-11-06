@@ -1,4 +1,5 @@
-//! The formula bar (Name Box, ✕ ✓ fx, the PY badge, formula field) and the shared cell editor
+//! The formula bar (Name Box, ✕ ✓ and fx, or on a Python cell the PY badge in fx's place with Run
+//! Cell under it, formula field) and the shared cell editor
 //! widget. In Python mode the field is the code editor.
 
 use egui::{FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
@@ -20,6 +21,11 @@ const HANDLE: f32 = 4.0;
 /// What an expanded bar leaves below it: the status bar (26) and sheet tabs (32), and the
 /// worksheet's column headings and two rows, so the grid never disappears in a short window.
 const KEEP_BELOW: f32 = 26.0 + 32.0 + crate::grid::COL_HEADER_H + 2.0 * gridcraft_engine::model::DEFAULT_ROW_HEIGHT;
+/// The fewest lines the bar has on a Python cell: the PY badge's, and Run Cell's under it.
+const PYTHON_LINES: usize = 2;
+/// Run Cell's size, under the PY badge.
+const RUN_SIZE: egui::Vec2 = egui::vec2(26.0, 18.0);
+
 /// The bar's height at one line.
 const ONE_LINE: f32 = 30.0;
 /// What the bar adds around the field's rows: the panel's margins (3 + 3), the field's (3 + 3)
@@ -39,8 +45,12 @@ const EASE_SECONDS: f32 = 0.12;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BarLayout {
     pub name_box: Rect,
-    /// ✕ ✓ fx.
+    /// ✕ ✓ and fx, or the PY badge with Run Cell.
     pub buttons: Rect,
+    /// Insert Function, when it is shown: not on a Python cell, where the PY badge takes its place.
+    pub fx: Option<Rect>,
+    /// Run Cell, when it is shown: on a Python cell.
+    pub run_cell: Option<Rect>,
     pub field: Rect,
     pub height: f32,
     /// Laid-out lines of the content (wrapped to the field), and how many show without scrolling.
@@ -57,6 +67,8 @@ impl Default for BarLayout {
         BarLayout {
             name_box: Rect::NOTHING,
             buttons: Rect::NOTHING,
+            fx: None,
+            run_cell: None,
             field: Rect::NOTHING,
             height: 0.0,
             lines: 1,
@@ -100,6 +112,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // changes.
     let most = max_lines(ui.ctx().content_rect().height(), ui.available_rect_before_wrap().height(), row_h);
     let lines = if app.ui.formula_bar_expanded { app.ui.formula_bar_lines.clamp(1, most) } else { last.lines.clamp(1, MAX_LINES) };
+    // On a Python cell Run Cell has a line of its own, under the PY badge.
+    let python_here = in_python(app);
+    let lines = if python_here { lines.max(PYTHON_LINES) } else { lines };
     let target = one_line(row_h) + (lines - 1) as f32 * row_h;
     let h = ui.ctx().animate_value_with_time(egui::Id::unique("formula_bar.height"), target, EASE_SECONDS);
     let mut layout = BarLayout { height: h, ..Default::default() };
@@ -121,13 +136,20 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 24.0)).clicked() && editing {
                     app.commit_edit(0, 0, false, false);
                 }
-                let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 24.0));
-                if fx.clicked() {
-                    app.open_dialog("insertFunction", json!({}));
-                }
-                layout.buttons = cancel.rect.union(fx.rect);
-                if let Some(badge) = python_badge(app, ui, &t) {
-                    layout.buttons = layout.buttons.union(badge);
+                // On a Python cell the PY badge takes fx's place, with Run Cell a line below it.
+                layout.buttons = cancel.rect;
+                if python_here {
+                    let badge = python_badge(app, ui, &t);
+                    let run = python_run_button(app, ui, badge);
+                    layout.run_cell = Some(run);
+                    layout.buttons = layout.buttons.union(badge).union(run);
+                } else {
+                    let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 24.0));
+                    if fx.clicked() {
+                        app.open_dialog("insertFunction", json!({}));
+                    }
+                    layout.fx = Some(fx.rect);
+                    layout.buttons = layout.buttons.union(fx.rect);
                 }
                 if let Some(button) = python_editor_button(app, ui, &t) {
                     layout.buttons = layout.buttons.union(button);
@@ -340,16 +362,18 @@ fn python_key(ev: &egui::Event) -> Option<PythonKey> {
     }
 }
 
-/// The PY badge beside fx: shown in Python mode and on a selected Python cell. Clicking it
-/// switches Python mode, as Ctrl+Alt+Shift+P does. Returns its rect when shown.
-fn python_badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
-    let show = match &app.editor {
+/// Whether the bar is working on Python: in Python mode, or on a selected Python cell that isn't
+/// being edited as something else.
+fn in_python(app: &SheetApp) -> bool {
+    match &app.editor {
         Some(ed) => ed.python,
         None => active_python(app).is_some(),
-    };
-    if !show {
-        return None;
     }
+}
+
+/// The PY badge, in fx's place on a Python cell. Clicking it switches Python mode, as
+/// Ctrl+Alt+Shift+P does. Returns its rect.
+fn python_badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     let text = ui.painter().layout_no_wrap("PY".into(), theme::ui_bold(11.0), t.on_badge);
     let (rect, resp) = ui.allocate_exact_size(vec2(text.size().x + 12.0, 24.0), Sense::click());
     let pill = Rect::from_center_size(rect.center(), vec2(rect.width(), 18.0));
@@ -361,18 +385,50 @@ fn python_badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rec
     if resp.clicked() {
         app.toggle_python_mode();
     }
-    Some(rect)
+    rect
+}
+
+/// Run Cell, a line below the PY badge: runs the cell now, whatever the calculation mode. On a draft
+/// it enters the code first, as the Enter button does. Greyed while the cell runs, and where Python
+/// can't run, with the reason on hover. Returns its rect.
+fn python_run_button(app: &mut SheetApp, ui: &mut egui::Ui, badge: Rect) -> Rect {
+    let rect = Rect::from_min_size(egui::pos2(badge.center().x - RUN_SIZE.x / 2.0, badge.bottom()), RUN_SIZE);
+    let why = crate::python_ui::run_blocked(app);
+    let target = active_python(app).map(|(sheet, at, _)| (sheet, at));
+    let sheet_name = app.session.active().and_then(|d| d.wb.active()).map(|sh| sh.name.clone());
+    let running = app
+        .session
+        .python_running()
+        .is_some_and(|r| !r.initialization && target.is_some_and(|(_, at)| at == r.cell) && sheet_name.as_ref() == Some(&r.sheet));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Min)));
+    if why.is_some() || running {
+        child.disable();
+    }
+    let t = Tokens::get(ui.ctx());
+    let resp = crate::widgets::icon_button(&mut child, Icon::Play, t.text, "Run Cell", RUN_SIZE);
+    let resp = match &why {
+        Some(why) => resp.on_disabled_hover_text(why),
+        None => resp,
+    };
+    if resp.clicked() {
+        if app.editor.is_some() {
+            app.commit_edit(0, 0, false, false);
+        }
+        // A refused commit keeps the draft open, with its message.
+        if app.editor.is_none()
+            && let Some((sheet, at, _)) = active_python(app)
+        {
+            app.run_or_alert("python.run", json!({"cell": at.a1(), "sheet": sheet}));
+        }
+    }
+    rect
 }
 
 /// The Python editor button beside the PY badge, shown with it: opens the editor window on the
 /// cell, with the code as typed so far in Python mode. Returns its rect when shown.
 fn python_editor_button(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
-    let show = match &app.editor {
-        Some(ed) => ed.python,
-        None => active_python(app).is_some(),
-    };
     // Not on code hidden on a protected sheet: the window would show it.
-    if !show || !crate::python_window::bar_offers(app) {
+    if !in_python(app) || !crate::python_window::bar_offers(app) {
         return None;
     }
     let label = app.ui.language.tr(crate::python_window::EDIT_IN_EDITOR).to_string();

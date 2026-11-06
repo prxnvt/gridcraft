@@ -1,6 +1,6 @@
 # Python in cells
 
-> **Last updated:** 2026-11-05 · **Change:** minor (saving while cells run; earlier: dates and times, in and out of Python; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
+> **Last updated:** 2026-11-05 · **Change:** minor (the formula bar's PY badge and Run Cell; earlier: saving while cells run; earlier: dates and times, in and out of Python; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
 
 A Python cell runs code you write, in your own Python, on your computer. GridCraft never downloads
 Python and never installs packages. It finds the Python you have, and it runs your code in a sandbox
@@ -243,6 +243,13 @@ calculation doesn't make a save wait.
 
 The time and memory limits are in **File › Options › Python**. At a limit Python is restarted and its
 variables are cleared; the next run starts fresh.
+
+## The formula bar
+
+On a Python cell, the PY badge takes the place of fx, and a triangle a line below it runs the cell
+(Run Cell). The bar is at least two lines tall there. Pressed while you type code in Python mode, the
+triangle enters the code and runs it. It is greyed while the cell runs and where Python can't run,
+with the reason when you hover over it. Every other cell has fx.
 
 ## The Python tab
 
