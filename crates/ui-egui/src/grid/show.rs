@@ -355,6 +355,7 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     fill_options_tag(app, ui, geo, sh);
     object_menu(app, ui);
     error_check_tag(app, ui, geo, sh);
+    crate::python_plots::picture_chrome(app, ui, geo, sh);
     crate::python_card::show(app, ui, geo, sh, previous_popups.4 == app.grid.py_card);
 }
 

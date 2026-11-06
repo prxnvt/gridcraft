@@ -211,6 +211,8 @@ pub struct CardText {
     pub run_to_see: bool,
     /// A text result with line breaks: whether it spills one line per row.
     pub spill_lines: Option<bool>,
+    /// The picture the result is, when it is one: the card shows this instead of the preview.
+    pub image: Option<gridcraft_engine::model::PyImage>,
 }
 
 /// Whether what a Python object's cell shows names a kind of object that can have a table, with or
@@ -226,7 +228,7 @@ fn names_a_table(shown: &str) -> bool {
 pub fn card_text(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<CardText> {
     let py = sh.cell(c)?.py.as_deref()?;
     let value = sh.value(c);
-    let output = if py.object { PYTHON_OBJECT } else { EXCEL_VALUE };
+    let output = if py.shows_object() { PYTHON_OBJECT } else { EXCEL_VALUE };
     let shown = || capped(&gridcraft_engine::display::cell_text(wb, sh, c), MAX_PREVIEW_CHARS, MAX_PREVIEW_LINES);
     let (title, body) = match (&py.output, &value) {
         (Some(o), _) if !o.type_name.is_empty() => {
@@ -253,6 +255,7 @@ pub fn card_text(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<CardText> {
         run_to_see: py.object && table.is_none() && names_one && from_a_file,
         spill_lines,
         table,
+        image: py.image().cloned(),
     })
 }
 
@@ -308,7 +311,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
     let can_save = app.services.pick_save.is_some() || app.services.download.is_some();
     let screen_size = ui.ctx().content_rect().size();
     let wanted = if text.table.as_ref().is_some_and(|t| !t.is_empty()) { TABLE_CARD_WIDTH } else { CARD_WIDTH };
-    let width = wanted.min(screen_size.x - 32.0).max(200.0);
+    let picture_width = text.image.as_ref().map(|_| crate::python_plots::card_width(app, screen_size));
+    let width = picture_width.unwrap_or_else(|| wanted.min(screen_size.x - 32.0).max(200.0));
+    let can_copy_image = app.services.copy_image.is_some();
+    let dragged = app.python.card_image_width.is_some();
     let mut action = None;
     let mut convert = false;
     let (at, pivot) = if geo.rtl { (screen.right_bottom(), Align2::RIGHT_TOP) } else { (screen.left_bottom(), Align2::LEFT_TOP) };
@@ -321,19 +327,24 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
         .fixed_pos(at + vec2(0.0, 2.0))
         .constrain_to(ui.ctx().content_rect());
     let resp = area.show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).inner_margin(8.0).show(ui, |ui| {
+        let framed = egui::Frame::popup(ui.style()).inner_margin(8.0).show(ui, |ui| {
             ui.set_width(width);
             ui.horizontal(|ui| {
                 let (tag, _) = ui.allocate_exact_size(vec2(22.0, 15.0), egui::Sense::hover());
                 paint_tag(ui.painter(), tag, &t, state.unwrap_or(TagState::Ready));
-                ui.label(egui::RichText::new(&text.title).font(theme::ui_bold(13.0)).color(t.text));
+                if text.image.is_none() {
+                    ui.label(egui::RichText::new(&text.title).font(theme::ui_bold(13.0)).color(t.text));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, lang.tr("Close"), vec2(18.0, 18.0)).clicked() {
                         close = true;
                     }
                 });
             });
-            ui.label(egui::RichText::new(lang.tr(text.output)).font(theme::ui_font(11.5)).color(t.text_dim));
+            // A picture's card has the return type as a choice, further down.
+            if text.image.is_none() {
+                ui.label(egui::RichText::new(lang.tr(text.output)).font(theme::ui_font(11.5)).color(t.text_dim));
+            }
             if let Some(d) = &said {
                 ui.add_space(4.0);
                 close |= says(app, ui, d, (card.sheet, card.cell), &t);
@@ -356,7 +367,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
                     action = Some(Action::Run);
                 }
             }
-            if let Some(table) = &text.table {
+            if let Some(image) = &text.image {
+                ui.add_space(4.0);
+                crate::python_plots::card_picture(ui, image, screen_size, dragged, lang, &t);
+            } else if let Some(table) = &text.table {
                 ui.add_space(4.0);
                 show_table(ui, table, geo.rtl, screen_size.y, &t, lang);
             } else if !text.body.is_empty() {
@@ -376,9 +390,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
             }
             ui.add_space(4.0);
             action = result_buttons(ui, &text, locked.is_none(), can_save, lang).or(action);
+            if text.image.is_some() {
+                action = picture_buttons(ui, &text, locked.is_none(), (can_copy_image, can_save), lang).or(action);
+            }
             ui.add_space(6.0);
             convert = convert_button(ui, lang, refusal.as_deref(), true, vec2(0.0, 22.0));
         });
+        if let Some(w) = picture_width {
+            crate::python_plots::card_grip(app, ui, framed.response.rect, w);
+        }
     });
     if toggle_output {
         app.python.card_output = if output_open { None } else { Some(card) };
@@ -404,6 +424,10 @@ enum Action {
     SpillHere,
     SpillLines(bool),
     Run,
+    CopyImage,
+    SaveImage,
+    DisplayOverCells,
+    Output(bool),
 }
 
 /// The table, what it has left out, or that it holds nothing.
@@ -457,9 +481,37 @@ fn result_buttons(ui: &mut egui::Ui, text: &CardText, can_edit: bool, can_save: 
     action
 }
 
+/// What the card of a picture offers: its return type, and taking the picture somewhere.
+fn picture_buttons(ui: &mut egui::Ui, text: &CardText, can_edit: bool, (can_copy, can_save): (bool, bool), lang: crate::i18n::Language) -> Option<Action> {
+    let mut action = None;
+    ui.horizontal_wrapped(|ui| {
+        for (label, object) in [(PYTHON_OBJECT, true), (EXCEL_VALUE, false)] {
+            if ui.add_enabled(can_edit, egui::RadioButton::new(text.output == label, lang.tr(label))).clicked() {
+                action = Some(Action::Output(object));
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        if ui.add_enabled(can_copy, egui::Button::new(lang.tr(crate::python_plots::COPY_IMAGE))).clicked() {
+            action = Some(Action::CopyImage);
+        }
+        if ui.add_enabled(can_save, egui::Button::new(lang.tr(crate::python_plots::SAVE_IMAGE))).clicked() {
+            action = Some(Action::SaveImage);
+        }
+        if ui.button(lang.tr(crate::python_plots::DISPLAY_OVER_CELLS)).clicked() {
+            action = Some(Action::DisplayOverCells);
+        }
+    });
+    action
+}
+
 fn act(app: &mut SheetApp, ctx: &egui::Context, card: Card, action: Action) {
     let (sheet, cell) = (card.sheet, card.cell.a1());
     match action {
+        Action::CopyImage => crate::python_plots::copy_image(app, card.sheet, card.cell),
+        Action::SaveImage => crate::python_plots::save_image(app, card.sheet, card.cell),
+        Action::DisplayOverCells => app.run_or_alert("python.displayOverCells", json!({"sheet": sheet, "cell": cell})),
+        Action::Output(object) => app.run_or_alert("python.output", json!({"sheet": sheet, "cell": cell, "mode": if object { "object" } else { "value" }})),
         Action::Copy(format) => copy_table(app, ctx, card, format),
         Action::Save => save_table(app, json!({"sheet": sheet, "cell": cell})),
         Action::SpillHere => app.run_or_alert("python.output", json!({"sheet": sheet, "cell": cell, "mode": "value"})),
@@ -592,9 +644,13 @@ pub fn menu_items(app: &mut SheetApp, ui: &mut egui::Ui) -> bool {
     }
     let mut picked = None;
     for (label, object) in [(PYTHON_OBJECT, true), (EXCEL_VALUE, false)] {
-        if ui.radio(py.object == object, lang.tr(label)).clicked() {
+        if ui.radio(py.shows_object() == object, lang.tr(label)).clicked() {
             picked = Some(object);
         }
+    }
+    if py.image().is_some() && ui.button(lang.tr(crate::python_plots::DISPLAY_OVER_CELLS)).clicked() {
+        crate::python_plots::display_over_cells(app);
+        return true;
     }
     let refusal = gridcraft_engine::cmd::python::clear_refusal(&app.session, sheet, cell);
     let convert = convert_button(ui, lang, refusal.as_deref(), false, vec2(190.0, 20.0));
@@ -604,7 +660,7 @@ pub fn menu_items(app: &mut SheetApp, ui: &mut egui::Ui) -> bool {
         return true;
     }
     let Some(object) = picked else { return false };
-    if object != py.object {
+    if object != py.shows_object() || !py.output_chosen {
         app.run_or_alert("python.output", json!({"sheet": sheet, "cell": cell.a1(), "mode": if object { "object" } else { "value" }}));
     }
     true

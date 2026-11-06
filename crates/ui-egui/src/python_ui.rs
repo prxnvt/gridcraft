@@ -136,6 +136,8 @@ pub struct PythonUi {
     pub(crate) installed: Option<(u64, Option<std::sync::Arc<Vec<String>>>)>,
     /// The card whose printed output is showing.
     pub(crate) card_output: Option<crate::python_card::Card>,
+    /// How wide someone dragged the card of a picture.
+    pub(crate) card_image_width: Option<f32>,
     /// Workers from this factory instead of a real interpreter (tests).
     #[doc(hidden)]
     pub transport: Option<TransportFactory>,

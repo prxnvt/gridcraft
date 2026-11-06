@@ -37,6 +37,9 @@ pub struct Services {
     /// Read the picture on the system clipboard for the ribbon and menu Paste commands when it
     /// holds no text (Cmd/Ctrl+V gets it from egui's `Event::PasteImage`).
     pub paste_image: Option<Box<dyn FnMut() -> Option<image::RgbaImage>>>,
+    /// Put a picture on the system clipboard, for other applications. `None` where the host has no
+    /// clipboard for pictures.
+    pub copy_image: Option<Box<dyn FnMut(&image::RgbaImage) -> Result<(), String>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Download>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.

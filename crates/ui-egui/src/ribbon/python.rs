@@ -59,12 +59,26 @@ fn code(app: &mut SheetApp, ui: &mut Ui) {
         initialization_button(app, ui, crate::python_window::INITIALIZATION, crate::python_window::INITIALIZATION_TIP);
         output_as(app, ui);
     });
+    ui.vertical(|ui| display_over_cells(app, ui));
+}
+
+/// Display Plot over Cells: greyed, with the reason, on anything but a cell that gave a picture.
+fn display_over_cells(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    let has_picture = crate::python_card::active_python_cell(app).is_some_and(|(_, _, _, py)| py.image().is_some());
+    let why = (!has_picture).then(|| lang.tr("Select a Python cell that gave a picture first."));
+    let label = crate::python_plots::DISPLAY_OVER_CELLS;
+    let r = gated(ui, why, |ui| small_button(ui, Icon::Picture, label, "Display Plot over Cells (Ctrl+Alt+Shift+C)", false));
+    control_keytip(app, ui, &r, "python.displayOverCells");
+    if has_picture && (r.clicked() | invoke(app, "python.displayOverCells")) {
+        crate::python_plots::display_over_cells(app);
+    }
 }
 
 /// Output As: a Python cell's return type, through `python.output`.
 fn output_as(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
-    let cell = crate::python_card::active_python_cell(app).map(|(_, sheet, at, py)| (sheet, at.a1(), py.object));
+    let cell = crate::python_card::active_python_cell(app).map(|(_, sheet, at, py)| (sheet, at.a1(), py.shows_object()));
     let why = cell.is_none().then(|| lang.tr("Select a Python cell first."));
     let anchor = gated(ui, why, |ui| small_button(ui, Icon::PythonOutput, "Output As", "Output As", true));
     control_keytip(app, ui, &anchor, "python.outputAs");

@@ -143,6 +143,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 // On a Python cell the PY badge takes fx's place, with Run Cell a line below it.
                 layout.buttons = cancel.rect;
                 if python_here {
+                    let menu = crate::python_plots::output_menu(app, ui);
+                    layout.buttons = layout.buttons.union(menu);
                     let badge = python_badge(app, ui, &t);
                     let run = python_run_button(app, ui, badge);
                     layout.run_cell = Some(run);

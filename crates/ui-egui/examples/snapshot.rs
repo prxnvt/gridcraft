@@ -3,7 +3,7 @@
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
 //!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer]
-//!  [--python off|on|shortLimit|fromFile|notSetUp|noPython|blocked|noSandbox] [--ui 'id={json}']... out.png`
+//!  [--python off|on|shortLimit|fromFile|notSetUp|noPython|blocked|noSandbox] [--ui 'id={json}']... [--ui-settled 'id={json}']... out.png`
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
 //! `range` on the grid, as a person picking a range for that box does.
@@ -48,7 +48,7 @@ fn demo_frame(rows: u64, cols: u64) -> Output {
         }
     }
     let table = Table { columns, rows: shown_rows, cols: shown_cols, data, total_rows: rows, total_cols: cols, ..Table::default() };
-    Output::Object { type_name: "DataFrame".into(), preview: "   Region  Units".into(), size: vec![rows, cols], table: Some(table) }
+    Output::Object { type_name: "DataFrame".into(), preview: "   Region  Units".into(), size: vec![rows, cols], table: Some(table), picture: None }
 }
 
 /// A made-up table with cells far wider than their columns.
@@ -73,7 +73,31 @@ fn demo_wide() -> Output {
         text_cut: true,
         ..Table::default()
     };
-    Output::Object { type_name: "DataFrame".into(), preview: String::new(), size: vec![3, 2], table: Some(table) }
+    Output::Object { type_name: "DataFrame".into(), preview: String::new(), size: vec![3, 2], table: Some(table), picture: None }
+}
+
+/// A made-up plot: axes, and a line through them.
+fn demo_plot(wide: bool) -> Output {
+    let (w, h) = if wide { (1200u32, 500u32) } else { (800, 800) };
+    let mut image = image::RgbaImage::from_pixel(w, h, image::Rgba([255, 255, 255, 255]));
+    let (left, bottom) = (90, h - 70);
+    for x in left..w - 30 {
+        image.put_pixel(x, bottom, image::Rgba([0, 0, 0, 255]));
+        let t = f64::from(x - left) / f64::from(w - 30 - left);
+        let y = f64::from(bottom) - (0.5 + 0.4 * (t * 9.0).sin()) * f64::from(bottom - 40);
+        for dy in 0..4 {
+            image.put_pixel(x, y as u32 + dy, image::Rgba([31, 119, 180, 255]));
+        }
+    }
+    for y in 40..bottom {
+        image.put_pixel(left, y, image::Rgba([0, 0, 0, 255]));
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Png).ok();
+    match gridcraft_python::Picture::from_bytes(bytes.into_inner(), 2) {
+        Ok(picture) => Output::picture(picture),
+        Err(e) => Output::object("Error", e),
+    }
 }
 
 /// The fake worker's cells.
@@ -100,6 +124,8 @@ fn fake_worker() -> FakeTransport {
                 use gridcraft_engine::core::{Array, Value};
                 let cells = vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)];
                 w.done(id, Ok(Output::Value(Value::Array(std::sync::Arc::new(Array { rows: 3, cols: 1, data: cells })))))
+            } else if code.contains("plot") {
+                w.done(id, Ok(demo_plot(code.contains("wide"))))
             } else if code == "hang" {
                 w.stall();
                 false
@@ -108,7 +134,7 @@ fn fake_worker() -> FakeTransport {
             } else if code == "wide" {
                 w.done(id, Ok(demo_wide()))
             } else if code == "dict" {
-                w.done(id, Ok(Output::Object { type_name: "dict".into(), preview: "{'a': 1, 'b': 2, 'c': 3}".into(), size: vec![3], table: None }))
+                w.done(id, Ok(Output::Object { type_name: "dict".into(), preview: "{'a': 1, 'b': 2, 'c': 3}".into(), size: vec![3], table: None, picture: None }))
             } else if code == "lines" {
                 w.done(id, Ok(Output::Value(gridcraft_engine::core::Value::text("First line\nSecond line\nThird line"))))
             } else if code == "fail" || code.contains("raise") {
@@ -224,6 +250,7 @@ fn main() {
     let mut scale = 2.0f32;
     let mut cmds: Vec<String> = vec![];
     let mut ui_cmds: Vec<String> = vec![];
+    let mut settled_cmds: Vec<String> = vec![];
     let mut tab = None;
     let mut dark = false;
     let mut pane: Option<String> = None;
@@ -266,6 +293,13 @@ fn main() {
                 tab = args.get(i).cloned();
             }
             "--dark" => dark = true,
+            // A command that needs Python's results: it runs once the fake worker has answered.
+            "--ui-settled" => {
+                i += 1;
+                if let Some(c) = args.get(i) {
+                    settled_cmds.push(c.clone());
+                }
+            }
             "--ui" => {
                 i += 1;
                 if let Some(c) = args.get(i) {
@@ -382,6 +416,16 @@ fn main() {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
             harness.step();
+        }
+        harness.run_steps(4);
+        for c in &settled_cmds {
+            let (id, p) = c
+                .split_once('=')
+                .map(|(a, b)| (a.to_string(), serde_json::from_str(b).unwrap_or(json!({}))))
+                .unwrap_or((c.clone(), json!({})));
+            if let Err(e) = harness.state_mut().run(&id, p) {
+                eprintln!("{id}: {e}");
+            }
         }
         harness.run_steps(4);
     }

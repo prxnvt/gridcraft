@@ -161,7 +161,7 @@ fn read_clipboard<T>(
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
-    let (html_clipboard, text_clipboard, image_clipboard) = (clipboard.clone(), clipboard.clone(), clipboard.clone());
+    let (html_clipboard, text_clipboard, image_clipboard, copy_clipboard) = (clipboard.clone(), clipboard.clone(), clipboard.clone(), clipboard.clone());
     Services {
         copy_html: Some(Box::new(move |html, text| {
             let mut clipboard = clipboard.borrow_mut();
@@ -175,6 +175,18 @@ fn services() -> Services {
         paste_image: Some(Box::new(move || {
             let image = read_clipboard(&image_clipboard, |clipboard| clipboard.get_image())?;
             image::RgbaImage::from_raw(u32::try_from(image.width).ok()?, u32::try_from(image.height).ok()?, image.bytes.into_owned())
+        })),
+        copy_image: Some(Box::new(move |image| {
+            let mut clipboard = copy_clipboard.borrow_mut();
+            if clipboard.is_none() {
+                *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+            }
+            let data = arboard::ImageData {
+                width: image.width() as usize,
+                height: image.height() as usize,
+                bytes: std::borrow::Cow::Borrowed(image.as_raw()),
+            };
+            clipboard.as_mut().ok_or("clipboard unavailable")?.set_image(data).map_err(|e| e.to_string())
         })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()

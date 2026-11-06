@@ -79,7 +79,7 @@ fn answer(code: &str) -> Output {
             let table = Table { columns: vec!["=a".into()], data: vec![Value::text("=1+1")], ..frame(1, 1, 1, 1) };
             object("DataFrame", vec![1, 1], table)
         }
-        "flat" => Output::Object { type_name: "list".into(), preview: "[1, 2]".into(), size: vec![2], table: None },
+        "flat" => Output::Object { type_name: "list".into(), preview: "[1, 2]".into(), size: vec![2], table: None, picture: None },
         "dict" => Output::Object { type_name: "dict".into(), preview: "{'a': 1}".into(), size: vec![1], table: None, picture: None },
         "text" => Output::Value(Value::text("one\ntwo\nthree")),
         _ => Output::Value(Value::Number(1.0)),

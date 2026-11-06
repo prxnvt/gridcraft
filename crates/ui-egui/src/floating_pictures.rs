@@ -29,6 +29,9 @@ const MAX_CACHE_ITEMS: usize = 4096;
 struct Key {
     doc: u64,
     id: u32,
+    /// Where its bytes are: a linked picture gets new ones when its cell's result changes, which can
+    /// be the same length. A workbook's copies for undo share them, so this stays put otherwise.
+    at: usize,
     len: usize,
 }
 
@@ -159,7 +162,7 @@ pub(crate) fn forget_closed(ctx: &egui::Context, open: &[u64]) {
 pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::Rect) -> Option<TextureHandle> {
     let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).ceil();
     let want = if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 };
-    let key = Key { doc, id: image.id, len: image.data.len() };
+    let key = Key { doc, id: image.id, at: std::sync::Arc::as_ptr(&image.data) as usize, len: image.data.len() };
     cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want)
 }
 
@@ -175,7 +178,7 @@ mod tests {
     }
 
     fn key(doc: u64, id: u32, data: &[u8]) -> Key {
-        Key { doc, id, len: data.len() }
+        Key { doc, id, at: 0, len: data.len() }
     }
 
     /// Runs one frame, so the frame number moves on as it does when the app paints.
