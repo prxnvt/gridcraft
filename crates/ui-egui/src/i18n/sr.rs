@@ -166,6 +166,29 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Python režim",
         "Python Object" => "Python objekat",
         "Excel Value" => "Excel vrednost",
+        "Copy as CSV" => "Kopiraj kao CSV",
+        "Copy as Markdown" => "Kopiraj kao Markdown",
+        "Save as .csv…" => "Sačuvaj kao .csv…",
+        "Spill Here" => "Prelij ovde",
+        "Spill One Line per Row" => "Prelij jedan red teksta po redu",
+        "The table isn't kept in the file. Run the cell to see it." => "Tabela se ne čuva u datoteci. Pokrenite ćeliju da biste je videli.",
+        "This table is empty." => "Ova tabela je prazna.",
+        "This table has no rows." => "Ova tabela nema redova.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Kopirano je samo ono što je prikazano: ostatak tabele nije u kopiji."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Sačuvano je samo ono što je prikazano: ostatak tabele nije u datoteci."
+        }
+        "The table is saved." => "Tabela je sačuvana.",
+        "Only the first {rows} of {total} rows are shown." => "Prikazano je samo prvih {rows} od {total} redova.",
+        "Only the first {cols} of {total} columns are shown." => "Prikazano je samo prvih {cols} od {total} kolona.",
+        "Some long text is cut." => "Deo dugačkog teksta je isečen.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Kopiranje i čuvanje uzimaju samo ono što je prikazano. Prelij ovde daje celu tabelu."
+        }
+        "Save Python Table as CSV" => "Sačuvaj Python tabelu kao CSV",
+        "Python Table" => "Python tabela",
         "Convert to Normal Cell" => "Konvertuj u običnu ćeliju",
         "Show Card" => "Prikaži karticu",
         "Insert\nPython" => "Umetni\nPython",

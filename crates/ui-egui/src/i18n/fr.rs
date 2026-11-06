@@ -176,6 +176,31 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Mode Python",
         "Python Object" => "Objet Python",
         "Excel Value" => "Valeur Excel",
+        "Copy as CSV" => "Copier en CSV",
+        "Copy as Markdown" => "Copier en Markdown",
+        "Save as .csv…" => "Enregistrer en .csv…",
+        "Spill Here" => "Déverser ici",
+        "Spill One Line per Row" => "Déverser une ligne de texte par ligne",
+        "The table isn't kept in the file. Run the cell to see it." => {
+            "Le tableau n'est pas conservé dans le fichier. Exécutez la cellule pour le voir."
+        }
+        "This table is empty." => "Ce tableau est vide.",
+        "This table has no rows." => "Ce tableau n'a aucune ligne.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Seul ce qui est affiché a été copié : le reste du tableau n'est pas dans la copie."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Seul ce qui est affiché a été enregistré : le reste du tableau n'est pas dans le fichier."
+        }
+        "The table is saved." => "Le tableau est enregistré.",
+        "Only the first {rows} of {total} rows are shown." => "Seules les {rows} premières lignes sur {total} sont affichées.",
+        "Only the first {cols} of {total} columns are shown." => "Seules les {cols} premières colonnes sur {total} sont affichées.",
+        "Some long text is cut." => "Une partie du texte long est coupée.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "La copie et l'enregistrement ne prennent que ce qui est affiché. Déverser ici donne le tableau entier."
+        }
+        "Save Python Table as CSV" => "Enregistrer le tableau Python en CSV",
+        "Python Table" => "Tableau Python",
         "Convert to Normal Cell" => "Convertir en cellule normale",
         "Show Card" => "Afficher la carte",
         "Insert\nPython" => "Insérer\nPython",

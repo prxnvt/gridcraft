@@ -150,6 +150,29 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Λειτουργία Python",
         "Python Object" => "Αντικείμενο Python",
         "Excel Value" => "Τιμή Excel",
+        "Copy as CSV" => "Αντιγραφή ως CSV",
+        "Copy as Markdown" => "Αντιγραφή ως Markdown",
+        "Save as .csv…" => "Αποθήκευση ως .csv…",
+        "Spill Here" => "Έκχυση εδώ",
+        "Spill One Line per Row" => "Έκχυση μίας γραμμής κειμένου ανά γραμμή",
+        "The table isn't kept in the file. Run the cell to see it." => "Ο πίνακας δεν διατηρείται στο αρχείο. Εκτελέστε το κελί για να τον δείτε.",
+        "This table is empty." => "Αυτός ο πίνακας είναι κενός.",
+        "This table has no rows." => "Αυτός ο πίνακας δεν έχει γραμμές.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Αντιγράφηκε μόνο ό,τι εμφανίζεται: το υπόλοιπο του πίνακα δεν είναι στο αντίγραφο."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Αποθηκεύτηκε μόνο ό,τι εμφανίζεται: το υπόλοιπο του πίνακα δεν είναι στο αρχείο."
+        }
+        "The table is saved." => "Ο πίνακας αποθηκεύτηκε.",
+        "Only the first {rows} of {total} rows are shown." => "Εμφανίζονται μόνο οι πρώτες {rows} από {total} γραμμές.",
+        "Only the first {cols} of {total} columns are shown." => "Εμφανίζονται μόνο οι πρώτες {cols} από {total} στήλες.",
+        "Some long text is cut." => "Μέρος του μεγάλου κειμένου είναι κομμένο.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Η αντιγραφή και η αποθήκευση παίρνουν μόνο ό,τι εμφανίζεται. Η Έκχυση εδώ δίνει ολόκληρο τον πίνακα."
+        }
+        "Save Python Table as CSV" => "Αποθήκευση πίνακα Python ως CSV",
+        "Python Table" => "Πίνακας Python",
         "Convert to Normal Cell" => "Μετατροπή σε κανονικό κελί",
         "Show Card" => "Εμφάνιση κάρτας",
         "Insert\nPython" => "Εισαγωγή\nPython",

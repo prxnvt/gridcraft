@@ -165,6 +165,31 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Python-Modus",
         "Python Object" => "Python-Objekt",
         "Excel Value" => "Excel-Wert",
+        "Copy as CSV" => "Als CSV kopieren",
+        "Copy as Markdown" => "Als Markdown kopieren",
+        "Save as .csv…" => "Als .csv speichern…",
+        "Spill Here" => "Hier überlaufen lassen",
+        "Spill One Line per Row" => "Eine Textzeile pro Zeile überlaufen lassen",
+        "The table isn't kept in the file. Run the cell to see it." => {
+            "Die Tabelle wird nicht in der Datei gespeichert. Führen Sie die Zelle aus, um sie zu sehen."
+        }
+        "This table is empty." => "Diese Tabelle ist leer.",
+        "This table has no rows." => "Diese Tabelle hat keine Zeilen.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Nur das Angezeigte wurde kopiert: Der Rest der Tabelle ist nicht in der Kopie."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Nur das Angezeigte wurde gespeichert: Der Rest der Tabelle ist nicht in der Datei."
+        }
+        "The table is saved." => "Die Tabelle wurde gespeichert.",
+        "Only the first {rows} of {total} rows are shown." => "Nur die ersten {rows} von {total} Zeilen werden angezeigt.",
+        "Only the first {cols} of {total} columns are shown." => "Nur die ersten {cols} von {total} Spalten werden angezeigt.",
+        "Some long text is cut." => "Langer Text ist teilweise abgeschnitten.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Kopieren und Speichern erfassen nur das Angezeigte. „Hier überlaufen lassen“ gibt die ganze Tabelle aus."
+        }
+        "Save Python Table as CSV" => "Python-Tabelle als CSV speichern",
+        "Python Table" => "Python-Tabelle",
         "Convert to Normal Cell" => "In normale Zelle konvertieren",
         "Show Card" => "Karte anzeigen",
         "Insert\nPython" => "Python\neinfügen",

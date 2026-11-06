@@ -171,6 +171,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Режим Python",
         "Python Object" => "Объект Python",
         "Excel Value" => "Значение Excel",
+        "Copy as CSV" => "Копировать как CSV",
+        "Copy as Markdown" => "Копировать как Markdown",
+        "Save as .csv…" => "Сохранить как .csv…",
+        "Spill Here" => "Вывести сюда",
+        "Spill One Line per Row" => "Выводить по одной строке текста в строку",
+        "The table isn't kept in the file. Run the cell to see it." => "Таблица не хранится в файле. Запустите ячейку, чтобы её увидеть.",
+        "This table is empty." => "Эта таблица пуста.",
+        "This table has no rows." => "В этой таблице нет строк.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Скопировано только то, что показано: остальной таблицы в копии нет."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => "Сохранено только то, что показано: остальной таблицы в файле нет.",
+        "The table is saved." => "Таблица сохранена.",
+        "Only the first {rows} of {total} rows are shown." => "Показаны только первые {rows} из {total} строк.",
+        "Only the first {cols} of {total} columns are shown." => "Показаны только первые {cols} из {total} столбцов.",
+        "Some long text is cut." => "Часть длинного текста обрезана.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Копирование и сохранение берут только то, что показано. «Вывести сюда» даёт всю таблицу."
+        }
+        "Save Python Table as CSV" => "Сохранить таблицу Python как CSV",
+        "Python Table" => "Таблица Python",
         "Convert to Normal Cell" => "Преобразовать в обычную ячейку",
         "Show Card" => "Показать карточку",
         "Insert\nPython" => "Вставить\nPython",
