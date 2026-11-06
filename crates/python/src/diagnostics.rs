@@ -154,7 +154,6 @@ pub const CATALOG: &[Kind] = &[
     k("denied.file", Error, Cell, "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl().", A::None),
     k("denied.network", Error, Cell, "Python cells can't use the network. Put the data on a sheet and read it with xl().", A::None),
     k("denied.process", Error, Cell, "Python cells can't start other programs or processes.", A::None),
-    k("plot.unsupported", Error, Cell, "Python cells don't draw plots. Return the data to a sheet and build a chart from it.", A::None),
     k("xl.notLiteral", Error, Cell, "xl() needs its reference written as text in the code, such as xl(\"A1:B5\").", A::None),
     k("xl.tooLarge", Error, Cell, "This range is too large to send to Python.", A::None),
     k("xl.badReference", Error, Cell, "xl() names something that isn't a cell, range, table or defined name here.", A::None),
@@ -187,7 +186,8 @@ pub const CATALOG: &[Kind] = &[
         "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl().",
         A::None,
     ),
-    k("lint.plotting", Warning, Line, "Python cells don't draw plots. Return the data to a sheet and build a chart from it.", A::None),
+    k("lint.savefig", Info, Line, "The picture appears in the cell by itself. Python cells can't write files, so this line would fail.", A::None),
+    k("lint.browserPlots", Warning, Line, "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn.", A::None),
     k("lint.window", Warning, Line, "Python cells can't open windows or ask for input.", A::None),
     k("lint.environ", Info, Line, "Python cells don't see your environment variables.", A::None),
 ];
@@ -221,7 +221,7 @@ const PYTHON_EXCEPTION: &Kind = &k("python.exception", Error, Cell, "The code ra
 
 /// Which kinds a worker may report for an error it raised: only the cell-level ones about code.
 /// Anything else it names (it is untrusted) reads as a plain error.
-const WORKER_KINDS: [&str; 10] = [
+const WORKER_KINDS: [&str; 9] = [
     "python.syntax",
     "python.exception",
     "python.name",
@@ -230,7 +230,6 @@ const WORKER_KINDS: [&str; 10] = [
     "denied.file",
     "denied.network",
     "denied.process",
-    "plot.unsupported",
     "xl.notLiteral",
 ];
 

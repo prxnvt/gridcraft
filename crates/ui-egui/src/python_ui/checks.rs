@@ -219,8 +219,7 @@ fn restates(run: &str, check: &str) -> bool {
     matches!(
         (run, check),
         ("module.missing", "lint.importMissing")
-            | ("plot.unsupported", "lint.plotting")
-            | ("denied.file", "lint.fileAccess")
+            | ("denied.file", "lint.fileAccess" | "lint.savefig")
             | ("denied.network" | "denied.process", "lint.importBlocked")
             | ("xl.notLiteral", "lint.xlNotLiteral")
     )

@@ -870,23 +870,23 @@ impl Installed {
     }
 }
 
-/// Packages that draw plots, which Python cells don't do.
-const PLOTTING_MODULES: [&str; 2] = ["matplotlib", "seaborn"];
+/// Packages that draw in a web browser, which a Python cell can't open.
+const BROWSER_PLOT_MODULES: [&str; 3] = ["plotly", "bokeh", "altair"];
 
-fn is_plotting_module(path: &str) -> bool {
-    PLOTTING_MODULES.contains(&top_level(path))
+fn draws_in_a_browser(path: &str) -> bool {
+    BROWSER_PLOT_MODULES.contains(&top_level(path))
 }
 
-/// Whether a person should be told to install the top-level `module`. Not a plotting package: with
-/// one installed, a cell still draws nothing. Not `excel`, Excel's own module: no package gives it,
-/// and what is on the package index under that name is something else.
+/// Whether a person should be told to install the top-level `module`. Not a package that draws in a
+/// browser: with one installed, a cell still can't show what it draws. Not `excel`, Excel's own
+/// module: no package gives it, and what is on the package index under that name is something else.
 fn is_missing(module: &str, installed: &Installed) -> bool {
-    !is_plotting_module(module) && top_level(module) != "excel" && !in_standard_library(module) && !installed.provides(module)
+    !draws_in_a_browser(module) && top_level(module) != "excel" && !in_standard_library(module) && !installed.provides(module)
 }
 
 /// The modules `code` imports that are neither in Python's standard library nor among the
-/// distributions in `installed`, leaving out plotting packages. Only import statements count: the
-/// names a cell has without importing anything (`pd`, `np`, `sm`) ask for nothing here.
+/// distributions in `installed`, leaving out packages that draw in a browser. Only import statements
+/// count: the names a cell has without importing anything (`pd`, `np`, `plt`) ask for nothing here.
 pub fn missing_modules(code: &str, installed: &[String]) -> Vec<String> {
     let installed = Installed::new(installed);
     imported_modules(code).into_iter().filter(|m| is_missing(m, &installed)).collect()
@@ -1084,22 +1084,6 @@ impl<'a> Source<'a> {
     fn is_defined(&self, i: usize) -> bool {
         i.checked_sub(1).is_some_and(|before| self.is_word(before, "def") || self.is_word(before, "class"))
     }
-
-    /// Whether `i` is a name plots are drawn through, in use: `plt.` and `sns.`, the names Excel's
-    /// initialization gives, and `pyplot.`, which can itself be `matplotlib.pyplot.`.
-    fn is_plot_name(&self, i: usize) -> bool {
-        let named = match self.text(i) {
-            "plt" | "sns" => !self.after_dot(i),
-            "pyplot" => true,
-            _ => false,
-        };
-        named && self.is_punct(i + 1, b'.')
-    }
-
-    /// Whether `i` is what is taken from such a name, as `show` is in `plt.show`.
-    fn is_plot_attribute(&self, i: usize) -> bool {
-        self.after_dot(i) && i.checked_sub(2).is_some_and(|name| self.is_plot_name(name))
-    }
 }
 
 /// One thing in the code that the sandbox will refuse.
@@ -1201,8 +1185,8 @@ impl Linter<'_> {
     }
 
     fn check_import(&mut self, module: &Imported) {
-        if is_plotting_module(&module.path) {
-            self.report("lint.plotting", (module.start, module.end), detail(&module.path));
+        if draws_in_a_browser(&module.path) {
+            self.report("lint.browserPlots", (module.start, module.end), detail(&module.path));
         } else if !self.check_blocked(module) {
             // A module that can't work here isn't worth installing, so this comes second.
             self.check_missing(module);
@@ -1249,11 +1233,6 @@ impl Linter<'_> {
         let receiver = self.source.receiver(i);
         if (receiver, name) == (Some("os"), "environ") {
             self.report_name("lint.environ", i);
-        } else if self.source.is_plot_name(i) {
-            self.report_plot_name(i);
-        } else if name == "plot" && self.source.after_dot(i) && self.source.is_punct(i + 1, b'.') {
-            // `df.plot.bar()`.
-            self.report_name("lint.plotting", i);
         } else if self.source.is_punct(i + 1, b'(') && !self.source.is_defined(i) {
             self.check_call(i, name, receiver);
         }
@@ -1262,16 +1241,12 @@ impl Linter<'_> {
     fn check_call(&mut self, i: usize, name: &str, receiver: Option<&str>) {
         let attribute = self.source.after_dot(i);
         match (name, receiver) {
-            // `plt.plot(` was reported at `plt`.
-            _ if self.source.is_plot_attribute(i) => {}
             ("xl", _) if !attribute => self.check_xl(i),
             ("input", _) if !attribute && !self.rebinds_input => self.report_name("lint.window", i),
             ("open", _) if !attribute && self.rebinds_open => {}
             ("getenv", Some("os")) => self.report_name("lint.environ", i),
-            // Whatever its argument: there is no figure to save.
-            ("savefig", _) => self.report_name("lint.plotting", i),
-            // On anything: `df.plot()`, `df["a"].hist()`.
-            ("plot" | "hist", _) if attribute => self.report_name("lint.plotting", i),
+            // With a file's name: the picture needs no saving. `savefig(buffer)` works.
+            ("savefig", _) => self.check_savefig(i),
             _ if takes_a_path(name, attribute, receiver) => self.check_path(i, name),
             _ => {}
         }
@@ -1287,14 +1262,11 @@ impl Linter<'_> {
         self.report(id, self.source.span(first, i), detail(&what));
     }
 
-    /// Reports `plt.` at `i`, with what is taken from it, if the name is there yet.
-    fn report_plot_name(&mut self, i: usize) {
-        let name = self.source.text(i);
-        let (last, what) = match self.source.name(i + 2) {
-            Some(attribute) => (i + 2, format!("{name}.{attribute}")),
-            None => (i + 1, name.to_string()),
-        };
-        self.report("lint.plotting", self.source.span(i, last), detail(&what));
+    /// Points at the file's name, when it is written out.
+    fn check_savefig(&mut self, i: usize) {
+        if let Some((text, at)) = self.source.literal_argument(i + 1) {
+            self.report("lint.savefig", at, detail(text));
+        }
     }
 
     /// Points at the first argument, or at the call when it has none.
@@ -2077,42 +2049,37 @@ mod tests {
     }
 
     #[test]
-    fn imports_of_plotting_packages_are_plotting() {
+    fn plotting_packages_are_packages_like_any_other() {
+        let code = "import matplotlib\nimport seaborn as sns\nfrom matplotlib.pyplot import plot\nimport zzz";
+        assert_eq!(missing_modules(code, &[]), ["matplotlib", "seaborn", "zzz"]);
+        assert!(lint("import matplotlib.pyplot as plt\nimport seaborn as sns", None).is_empty());
+        let installed = ["matplotlib".to_string(), "seaborn".to_string()];
+        assert!(lint(code.trim_end_matches("\nimport zzz"), Some(&installed)).is_empty());
+        let found: Vec<&str> = lint(code, Some(&[])).iter().map(|f| f.kind.id).collect();
+        assert_eq!(found, ["lint.importMissing", "lint.importMissing", "lint.importMissing", "lint.importMissing"]);
+        assert!(missing_modules("plt.plot(x)\nsns.barplot(x)", &[]).is_empty(), "the names a cell has are no imports");
+    }
+
+    #[test]
+    fn packages_that_draw_in_a_browser_are_reported_and_never_said_to_be_missing() {
         for (code, span) in [
-            ("import matplotlib", "matplotlib"),
-            ("import matplotlib.pyplot", "matplotlib.pyplot"),
-            ("import matplotlib.pyplot as plt", "matplotlib.pyplot"),
-            ("from matplotlib import pyplot", "matplotlib"),
-            ("from matplotlib import pyplot as plt, cm", "matplotlib"),
-            ("from matplotlib.pyplot import plot, show", "matplotlib.pyplot"),
-            ("import seaborn", "seaborn"),
-            ("import seaborn as sns", "seaborn"),
-            ("from seaborn import barplot", "seaborn"),
-            ("import os, seaborn, sys", "seaborn"),
-            ("if a:\n    import matplotlib", "matplotlib"),
+            ("import plotly", "plotly"),
+            ("import plotly.express as px", "plotly.express"),
+            ("from plotly import graph_objects", "plotly"),
+            ("import bokeh", "bokeh"),
+            ("import altair as alt", "altair"),
+            ("import os, altair, sys", "altair"),
         ] {
             for known in [None, Some(&[][..])] {
                 let found = lint(code, known);
                 assert_eq!(found.len(), 1, "{code}");
-                assert_eq!(
-                    (found[0].kind.id, &code[found[0].start..found[0].end], found[0].detail.as_str()),
-                    ("lint.plotting", span, span),
-                    "{code}"
-                );
+                assert_eq!((found[0].kind.id, &code[found[0].start..found[0].end]), ("lint.browserPlots", span), "{code}");
             }
         }
-        for code in ["import matplotlib_venn", "import seabornx", "from .matplotlib import x", "x = 'import seaborn'", "# import matplotlib"] {
+        assert_eq!(missing_modules("import plotly\nimport zzz", &[]), ["zzz"]);
+        for code in ["import plotlyx", "x = 'import altair'", "# import bokeh"] {
             assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
         }
-    }
-
-    #[test]
-    fn plotting_packages_are_never_said_to_be_missing() {
-        let code = "import matplotlib\nimport seaborn as sns\nfrom matplotlib.pyplot import plot\nimport zzz";
-        assert_eq!(missing_modules(code, &[]), ["zzz"]);
-        assert_eq!(imported_modules(code), ["matplotlib", "seaborn", "zzz"], "they are still imported");
-        let found: Vec<&str> = lint(code, Some(&[])).iter().map(|f| f.kind.id).collect();
-        assert_eq!(found, ["lint.plotting", "lint.plotting", "lint.plotting", "lint.importMissing"]);
     }
 
     #[test]
@@ -2121,85 +2088,25 @@ mod tests {
         assert!(imported_modules(code).is_empty());
         assert!(missing_modules(code, &[]).is_empty());
         assert!(lint(code, Some(&[])).is_empty());
-        let plots = "plt.plot(x)\nsns.barplot(x)";
+        let plots = "plt.plot(x)\nsns.barplot(x)\nplt.show()\ndf.plot()\ndf.hist()\nax.plot(x)\nplt.rcParams";
         assert!(missing_modules(plots, &[]).is_empty());
-        assert_eq!(lint(plots, Some(&[])).iter().map(|f| f.kind.id).collect::<Vec<_>>(), ["lint.plotting", "lint.plotting"]);
+        assert!(lint(plots, Some(&[])).is_empty(), "drawing is nothing to warn about");
         // An import of what they stand for is an import like any other.
         assert_eq!(missing_modules("import pandas as pd\nimport numpy as np", &[]), ["pandas", "numpy"]);
     }
 
     #[test]
-    fn any_use_of_the_plotting_names_is_plotting() {
+    fn savefig_with_a_files_name_is_reported_and_without_one_is_not() {
         for (code, span, text) in [
-            ("plt.show()", "plt.show", "plt.show"),
-            ("plt.show(block=False)", "plt.show", "plt.show"),
-            ("plt . show ()", "plt . show", "plt.show"),
-            ("plt.plot(x)", "plt.plot", "plt.plot"),
-            ("plt.hist(x)", "plt.hist", "plt.hist"),
-            ("plt.savefig('a.png')", "plt.savefig", "plt.savefig"),
-            ("plt.savefig(path)", "plt.savefig", "plt.savefig"),
-            ("plt.rcParams", "plt.rcParams", "plt.rcParams"),
-            ("plt.", "plt.", "plt"),
-            ("x = [plt.gca()]", "plt.gca", "plt.gca"),
-            ("sns.barplot(x)", "sns.barplot", "sns.barplot"),
-            ("sns.set_theme", "sns.set_theme", "sns.set_theme"),
-            ("pyplot.show()", "pyplot.show", "pyplot.show"),
-            ("pyplot.plot(x)", "pyplot.plot", "pyplot.plot"),
-            ("matplotlib.pyplot.show()", "pyplot.show", "pyplot.show"),
+            ("savefig('a.png')", "'a.png'", "a.png"),
+            ("plt.savefig('a.png')", "'a.png'", "a.png"),
+            ("fig.savefig(\"b/c.pdf\", dpi=3)", "\"b/c.pdf\"", "b/c.pdf"),
+            ("a().savefig('b')", "'b'", "b"),
         ] {
             assert_eq!(spans(code), [(span, text.to_string())], "{code}");
-            assert_eq!(ids(code), ["lint.plotting"], "{code}");
+            assert_eq!(ids(code), ["lint.savefig"], "{code}");
         }
-        for code in ["plt", "x = plt", "f(sns)", "plt = 1", "plt()", "my_plt.show()", "plt2.x", "PLT.show()", "x.plt.y", "x.sns.y", "'plt.show()'"] {
-            assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
-        }
-    }
-
-    #[test]
-    fn plot_and_hist_called_on_a_name_are_plotting() {
-        for (code, span, text) in [
-            ("df.plot()", "df.plot", "df.plot"),
-            ("df.hist()", "df.hist", "df.hist"),
-            ("ax.plot(x, y)", "ax.plot", "ax.plot"),
-            ("df.a.plot()", "a.plot", "a.plot"),
-            ("df . plot (x)", "df . plot", "df.plot"),
-            ("x = df.hist(bins=3)", "df.hist", "df.hist"),
-            ("df.plot().show()", "df.plot", "df.plot"),
-        ] {
-            assert_eq!(spans(code), [(span, text.to_string())], "{code}");
-            assert_eq!(ids(code), ["lint.plotting"], "{code}");
-        }
-        for code in [
-            "plot(x)",
-            "hist(x)",
-            "df.plot",
-            "df.hist",
-            "def plot(self): pass",
-            "def hist(self): pass",
-            "my.plotter()",
-            "df.histogram()",
-            "np.histogram(x)",
-            "x.plot_y()",
-        ] {
-            assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
-        }
-    }
-
-    #[test]
-    fn savefig_is_plotting_and_not_file_access_whatever_its_argument() {
-        for (code, span, text) in [
-            ("savefig('a.png')", "savefig", "savefig"),
-            ("savefig(path)", "savefig", "savefig"),
-            ("fig.savefig('a.png')", "fig.savefig", "fig.savefig"),
-            ("fig.savefig(path, dpi=3)", "fig.savefig", "fig.savefig"),
-            ("fig.savefig()", "fig.savefig", "fig.savefig"),
-            ("a().savefig('b')", "savefig", "savefig"),
-            (".savefig('b')", "savefig", "savefig"),
-        ] {
-            assert_eq!(spans(code), [(span, text.to_string())], "{code}");
-            assert_eq!(ids(code), ["lint.plotting"], "{code}");
-        }
-        for code in ["def savefig(a): pass", "x = fig.savefig", "my_savefig('a')"] {
+        for code in ["def savefig(a): pass", "x = fig.savefig", "my_savefig('a')", "fig.savefig(buffer, format='png')", "fig.savefig()", "savefig(path)"] {
             assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
         }
     }
@@ -2223,20 +2130,20 @@ mod tests {
 
     #[test]
     fn every_kind_is_in_the_catalog_with_the_scope_of_a_line() {
-        let code = "xl(a)\nimport socket\nimport zzz\nopen('a')\nplt.show()\ninput()\nos.environ";
+        let code = "xl(a)\nimport socket\nimport zzz\nopen('a')\nplt.savefig('b')\nimport plotly\ninput()\nos.environ";
         let found = lint(code, Some(&[]));
         let ids: Vec<&str> = found.iter().map(|f| f.kind.id).collect();
         let expected =
-            ["lint.xlNotLiteral", "lint.importBlocked", "lint.importMissing", "lint.fileAccess", "lint.plotting", "lint.window", "lint.environ"];
+            ["lint.xlNotLiteral", "lint.importBlocked", "lint.importMissing", "lint.fileAccess", "lint.savefig", "lint.browserPlots", "lint.window", "lint.environ"];
         assert_eq!(ids, expected);
-        assert_eq!(found.iter().map(|f| f.line).collect::<Vec<_>>(), [1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(found.iter().map(|f| f.line).collect::<Vec<_>>(), [1, 2, 3, 4, 5, 6, 7, 8]);
         assert!(found.iter().all(|f| f.kind.scope == crate::diagnostics::Scope::Line));
     }
 
     #[test]
     fn nothing_in_a_comment_or_a_string_is_reported() {
-        const BODY: &str = "open(\"a.csv\"); import socket; xl(a); plt.show(); input(); os.environ; pd.read_csv(\"b\"); import seaborn; sns.x; df.plot(); fig.savefig(a)";
-        assert_eq!(lint(BODY, None).len(), 11, "the text would be reported if it were code");
+        const BODY: &str = "open(\"a.csv\"); import socket; xl(a); plt.savefig(\"c\"); input(); os.environ; pd.read_csv(\"b\"); import plotly";
+        assert_eq!(lint(BODY, None).len(), 8, "the text would be reported if it were code");
         let other_quotes = BODY.replace('"', "'");
         for code in [
             format!("# {BODY}"),
@@ -2340,7 +2247,7 @@ mod tests {
         let code = "xl(os.environ)\nxl(open('a'))\nxl(input())\nplt.show(input())";
         let found = lint(code, None);
         assert_sound(code, &found);
-        assert_eq!(found.len(), 8);
+        assert_eq!(found.len(), 7);
     }
 
     #[test]
@@ -2448,14 +2355,6 @@ mod tests {
         for code in ["import http.client", "from http import client", "from http.server import HTTPServer"] {
             assert_eq!(lint(code, None).first().map(|f| f.kind.id), Some("lint.importBlocked"), "{code}");
         }
-    }
-
-    #[test]
-    fn plots_are_found_on_any_expression() {
-        for code in ["df.plot()", "df['a'].plot()", "df.plot.bar()", "f().hist()"] {
-            assert_eq!(lint(code, None).first().map(|f| f.kind.id), Some("lint.plotting"), "{code}");
-        }
-        assert!(lint("plot()\nhist(x)", None).is_empty(), "a plain function of the person's own");
     }
 
     #[test]

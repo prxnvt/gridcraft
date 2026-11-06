@@ -196,24 +196,41 @@ def _gridcraft_worker():
         def __repr__(self):
             return repr(importlib.import_module(object.__getattribute__(self, "_module")))
 
-    DEFAULT_IMPORTS = {"np": "numpy", "pd": "pandas", "sm": "statsmodels.api"}
+    DEFAULT_IMPORTS = {"np": "numpy", "pd": "pandas", "sm": "statsmodels.api", "plt": "matplotlib.pyplot", "sns": "seaborn"}
 
-    # Python cells don't draw plots: the data goes to a sheet and charts are built from it. The
-    # names Excel's initialization gives its plotting modules say so when they are used.
-    class NoPlots(Exception):
-        pass
+    # matplotlib, as it is first imported. It draws without a window, and it insists on a folder for
+    # its settings and font list. The sandbox gives it nothing to write to, so that one call gets a
+    # folder that doesn't exist: matplotlib can't save its font list there, keeps the list in memory
+    # and carries on, and the worker still writes nothing.
+    def before_matplotlib():
+        import logging
+        import tempfile
+        import warnings
 
-    NoPlots.__name__ = "RuntimeError"
-    NoPlots.__qualname__ = "RuntimeError"
-    PLOT_MESSAGE = "Python cells don't draw plots. Return the data to a sheet and build a chart from it."
-    PLOT_MODULES = ("matplotlib", "seaborn")
-    PLOT_NAMES = ("plt", "sns")
+        os.environ["MPLBACKEND"] = "agg"
+        logging.getLogger("matplotlib").setLevel(logging.ERROR)
+        warnings.filterwarnings("ignore", message=".*is non-interactive, and thus cannot be shown")
+        mkdtemp = tempfile.mkdtemp
 
-    class Plotting:
-        __slots__ = ()
+        def only_for_others(suffix=None, prefix=None, dir=None):
+            if prefix == "matplotlib-":
+                return "/nonexistent-gridcraft-matplotlib"
+            return mkdtemp(suffix, prefix, dir)
 
-        def __getattr__(self, name):
-            raise NoPlots(PLOT_MESSAGE)
+        tempfile.mkdtemp = only_for_others
+
+    class PlotHook:
+        # A finder that finds nothing: the import system asks it first, which is the moment to act.
+        @staticmethod
+        def find_spec(name, path=None, target=None):
+            if name == "matplotlib":
+                try:
+                    before_matplotlib()
+                except Exception:
+                    pass
+            return None
+
+    sys.meta_path.insert(0, PlotHook)
 
     def table(rows, headers):
         # A range is a pandas DataFrame, as in Excel; `headers=True` makes its first row the column
@@ -740,29 +757,17 @@ def _gridcraft_worker():
             return "denied.network"
         return "denied.file"
 
-    def through_plotting(e):
-        """Whether an error came from a plotting package, or pandas's way into one."""
-        for link in chain(e):
-            tb = link.__traceback__
-            while tb is not None:
-                parts = tb.tb_frame.f_code.co_filename.replace("\\", "/").split("/")
-                if any(m in parts for m in PLOT_MODULES) or ("pandas" in parts and "plotting" in parts):
-                    return True
-                tb = tb.tb_next
-        return False
-
     def classify(e, code):
         """The catalog's kind for an error, and what it was about."""
         if isinstance(e, SyntaxError):
             return "python.syntax", None
         if isinstance(e, XlReference):
             return "xl.notLiteral", None
-        if isinstance(e, NoPlots) or through_plotting(e):
-            return "plot.unsupported", None
         if isinstance(e, ModuleNotFoundError):
-            if (e.name or "").split(".")[0] in PLOT_MODULES:
-                return "plot.unsupported", None
             return "module.missing", e.name
+        # seaborn asks for scipy in its own words.
+        if isinstance(e, RuntimeError) and "requires scipy" in str(e):
+            return "module.missing", "scipy"
         if isinstance(e, ImportError):
             text = str(e)
             if "sandbox" in text or "not permitted" in text or "Permission denied" in text:
@@ -793,8 +798,8 @@ def _gridcraft_worker():
         return body, (compile(last, "<cell>", "eval") if last is not None else None)
 
     # Initialization code. What a line binds, and which package a line that can't run is about: that
-    # is reported, and an empty answer is a line left out without a word (a plotting module, which
-    # cells don't use). None means the error is the code's own.
+    # is reported, and an empty answer is a line left out without a word. None means the error is the
+    # code's own.
     def bound_by(stmt):
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
             return [a.asname or a.name.split(".")[0] for a in stmt.names]
@@ -816,21 +821,18 @@ def _gridcraft_worker():
         root = call.func
         while isinstance(root, ast.Attribute):
             root = root.value
-        if isinstance(root, ast.Name) and isinstance(g.get(root.id), (types.ModuleType, Lazy, Plotting)):
+        if isinstance(root, ast.Name) and isinstance(g.get(root.id), (types.ModuleType, Lazy)):
             return root.id
         return None
 
     def left_to_lazy(stmt):
-        # What the worker already gives lazily, and plots, which cells don't draw: Excel's default
-        # initialization imports these, and doing so would only cost the time it takes.
-        if isinstance(stmt, ast.ImportFrom):
-            return any(m in PLOT_MODULES for m in modules_of(stmt))
+        # What the worker already gives lazily: Excel's default initialization imports these, and
+        # doing so would only cost the time it takes.
         if not isinstance(stmt, ast.Import):
             return False
         for alias in stmt.names:
             top = alias.name.split(".")[0]
-            lazy = DEFAULT_IMPORTS.get(alias.asname or top, "").split(".")[0]
-            if top not in PLOT_MODULES and lazy != top:
+            if DEFAULT_IMPORTS.get(alias.asname or top, "").split(".")[0] != top:
                 return False
         return True
 
@@ -840,8 +842,6 @@ def _gridcraft_worker():
         modules = modules_of(stmt)
         if not from_file:
             return "excel" if modules == ["excel"] and isinstance(e, ImportError) else None
-        if isinstance(e, NoPlots) or through_plotting(e):
-            return ""
         if modules:
             name = getattr(e, "name", None)
             return (name if isinstance(name, str) and name else modules[0]).split(".")[0]
@@ -882,8 +882,6 @@ def _gridcraft_worker():
         main.__dict__["xl"] = xl
         for name, module in DEFAULT_IMPORTS.items():
             main.__dict__[name] = Lazy(module)
-        for name in PLOT_NAMES:
-            main.__dict__[name] = Plotting()
         sys.modules["__main__"] = main
         namespace["globals"] = main.__dict__
 

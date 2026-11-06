@@ -63,6 +63,17 @@ fn pandas_session() -> Option<Session> {
     Some(s)
 }
 
+/// A session on `GRIDCRAFT_TEST_PYTHON`, when that Python has matplotlib and seaborn.
+fn plots_session() -> Option<Session> {
+    let s = pandas_session()?;
+    let has = |name: &str| s.python_environment().packages.iter().any(|(n, _)| n.eq_ignore_ascii_case(name));
+    if !has("matplotlib") || !has("seaborn") {
+        eprintln!("GRIDCRAFT_TEST_PYTHON has no matplotlib or seaborn; skipping the tests that draw");
+        return None;
+    }
+    Some(s)
+}
+
 fn settle(s: &mut Session) {
     let mut left = PATIENCE;
     while s.python_busy() {
@@ -727,21 +738,18 @@ fn code_from_a_file_goes_on_without_what_it_cant_import() {
     assert_eq!(kind(&s, "A1"), None);
     assert_eq!(s.python_init_failure(), None);
     // What it couldn't have is reported once for each package, at the first line that wanted it, and
-    // what the worker gives anyway isn't: plots don't draw here, and numpy waits until it is used.
+    // what the worker gives anyway isn't: plots and numpy wait until they are used.
     let rows = s.execute("python.diagnostics", json!({})).unwrap();
+    // `plt.style.use` is the first use of `plt`, so whether it worked depends on this Python.
     let skipped: Vec<(String, u64)> = rows
         .as_array()
         .unwrap()
         .iter()
-        .filter(|r| r["kind"] == "init.skipped")
+        .filter(|r| r["kind"] == "init.skipped" && r["detail"] != "matplotlib")
         .map(|r| (r["detail"].as_str().unwrap().to_string(), r["line"].as_u64().unwrap()))
         .collect();
     assert_eq!(skipped, [("a_package_nobody_has".to_string(), 4), ("excel".to_string(), 5), ("another_package_nobody_has".to_string(), 6)], "{rows}");
     assert_eq!(init_runs(&s), [Some("init.skipped")]);
-    // The plot names still say what they say.
-    py(&mut s, "A3", "plt.plot([1])");
-    settle(&mut s);
-    assert_eq!(kind(&s, "A3"), Some("plot.unsupported"));
     // A line that isn't an import or an option is still the code's failure.
     for (bad, line, says) in [("import nothing_here_either\n1 / 0", 2, "ZeroDivisionError"), ("undefined_name + 1", 1, "NameError")] {
         let mut doc = doc.clone();
@@ -815,4 +823,26 @@ fn a_save_at_the_bound_says_the_cell_was_not_finished_and_keeps_its_code() {
     assert_eq!(v(&o, "A2"), num(7.0), "the last result");
     assert_eq!(o.execute("cell.get", json!({"cell": "A1"})).unwrap()["python"]["code"], json!(code));
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn matplotlib_and_seaborn_load_in_the_sandbox_and_it_stays_read_only() {
+    let Some(mut s) = plots_session() else { return };
+    py(&mut s, "A1", "import matplotlib.pyplot as pyplot\npyplot.get_backend().lower()");
+    py(&mut s, "A2", "plt.__name__");
+    py(&mut s, "A3", "sns.__name__");
+    // A file's name is refused, as for any other write, and matplotlib's way in gave nothing away.
+    py(&mut s, "A4", "plt.plot([1])\nplt.savefig('/tmp/gridcraft-plot-test.png')");
+    py(&mut s, "A5", "import tempfile\ntempfile.mkdtemp()");
+    py(&mut s, "A6", "import tempfile\ntempfile.mkdtemp(prefix='other-')");
+    py(&mut s, "A7", "open('/tmp/gridcraft-plot-test.txt', 'w')");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("agg"));
+    assert_eq!(v(&s, "A2"), Value::text("matplotlib.pyplot"));
+    assert_eq!(v(&s, "A3"), Value::text("seaborn"));
+    for cell in ["A4", "A5", "A6", "A7"] {
+        assert_eq!(kind(&s, cell), Some("denied.file"), "{cell}");
+    }
+    assert!(!std::path::Path::new("/tmp/gridcraft-plot-test.png").exists());
+    assert!(!std::path::Path::new("/tmp/gridcraft-plot-test.txt").exists());
 }

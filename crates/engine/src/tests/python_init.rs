@@ -686,10 +686,10 @@ fn the_packages_a_persons_code_lacks_are_reported_about_the_workbook() {
         ..PythonCapability::default()
     });
     py(&mut s, "A1", "ret 1");
-    init(&mut s, "ret 2\nimport nope\nimport matplotlib\nimport excel");
+    init(&mut s, "ret 2\nimport nope\nimport plotly\nimport excel");
     settle(&mut s);
     let rows = init_rows(&mut s);
-    assert_eq!(rows.len(), 1, "not plots, and not Excel's own module: {rows:?}");
+    assert_eq!(rows.len(), 1, "not what draws in a browser, and not Excel's own module: {rows:?}");
     assert_eq!((rows[0]["kind"].as_str(), rows[0]["detail"].as_str(), rows[0]["cell"].clone()), (Some("packages.missing"), Some("nope"), Json::Null));
     assert_eq!(s.python_stats().code_reads, 2, "the cell's code and the initialization's");
     // What the application that wrote the file put there says what it lacks when it runs: the names
