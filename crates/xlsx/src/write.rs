@@ -174,6 +174,16 @@ impl Out {
         let (name, _) = places.iter().filter_map(|i| self.parts.get(*i)).find(|(_, bytes)| bytes.as_slice() == data)?;
         name.strip_prefix("xl/media/").map(str::to_string)
     }
+    /// The bytes of a part written so far.
+    pub fn part_data(&self, name: &str) -> Option<&[u8]> {
+        self.parts.iter().find(|(n, _)| n == name).map(|(_, data)| data.as_slice())
+    }
+    /// New bytes for a part written so far, which keeps its name and content type.
+    pub fn replace_part(&mut self, name: &str, data: Vec<u8>) {
+        if let Some((_, old)) = self.parts.iter_mut().find(|(n, _)| n == name) {
+            *old = data;
+        }
+    }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
         self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
     }
@@ -462,6 +472,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     root.add("officeDocument", "xl/workbook.xml");
     root.add("core-properties", "docProps/core.xml");
     root.add("extended-properties", "docProps/app.xml");
+    crate::custom_props::write_notices(&mut out);
     crate::passthrough::write_package_rels(&mut root, &mut out);
     out.part("_rels/.rels", None, root.xml().into_bytes());
 

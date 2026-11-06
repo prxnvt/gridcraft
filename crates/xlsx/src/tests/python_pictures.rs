@@ -10,12 +10,12 @@ use gridcraft_model::{Anchor, Cell, CellPicture, Image, PyCode, PyImage, PyOutpu
 use super::make_zip;
 use crate::{read_xlsx, write_xlsx};
 
-fn at(cell: &str) -> CellRef {
+pub(super) fn at(cell: &str) -> CellRef {
     CellRef::parse(cell).unwrap()
 }
 
 /// A PNG of `width` x `height` pixels. Only its header is read here, so its data can be short.
-fn png(width: u32, height: u32) -> Vec<u8> {
+pub(super) fn png(width: u32, height: u32) -> Vec<u8> {
     let mut v = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
     v.extend_from_slice(&width.to_be_bytes());
     v.extend_from_slice(&height.to_be_bytes());
@@ -23,14 +23,14 @@ fn png(width: u32, height: u32) -> Vec<u8> {
     v
 }
 
-fn text(bytes: &[u8], name: &str) -> String {
+pub(super) fn text(bytes: &[u8], name: &str) -> String {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
     let mut s = String::new();
     z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
     s
 }
 
-fn python_cell(sheet: &mut Sheet, cell: &str, py: PyCode, value: Value) {
+pub(super) fn python_cell(sheet: &mut Sheet, cell: &str, py: PyCode, value: Value) {
     sheet.cells.set(at(cell), Cell { value, formula: None, style: Default::default(), py: Some(Arc::new(py)) });
 }
 
@@ -39,7 +39,7 @@ fn linked_picture(id: u32, source: &str, alt: &str, data: &[u8]) -> Image {
     Image { id, anchor, data: data.to_vec().into(), mime: "image/png".into(), alt: alt.into(), python_source: Some(source.into()) }
 }
 
-fn book(sheets: Vec<Sheet>) -> Workbook {
+pub(super) fn book(sheets: Vec<Sheet>) -> Workbook {
     Workbook { sheets: sheets.into_iter().map(Arc::new).collect(), ..Default::default() }
 }
 
@@ -102,7 +102,7 @@ fn package_with_picture(descr: &str, cells: &str) -> Vec<u8> {
 }
 
 /// A package as it is, with these parts replaced or added.
-fn repack(bytes: &[u8], changes: &[(&str, &[u8])]) -> Vec<u8> {
+pub(super) fn repack(bytes: &[u8], changes: &[(&str, &[u8])]) -> Vec<u8> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
     let mut parts: Vec<(String, Vec<u8>)> = vec![];
     for i in 0..z.len() {
@@ -120,20 +120,20 @@ fn repack(bytes: &[u8], changes: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 /// A package with one part's text changed.
-fn with_text_changed(bytes: &[u8], part: &str, from: &str, to: &str) -> Vec<u8> {
+pub(super) fn with_text_changed(bytes: &[u8], part: &str, from: &str, to: &str) -> Vec<u8> {
     let was = text(bytes, part);
     assert!(was.contains(from), "{was}");
     repack(bytes, &[(part, was.replace(from, to).as_bytes())])
 }
 
-fn image_of(data: &[u8], density: u32) -> PyImage {
+pub(super) fn image_of(data: &[u8], density: u32) -> PyImage {
     let (width, height, mime) = crate::richdata::picture_size(data).unwrap();
     let picture = CellPicture { data: data.to_vec(), mime: mime.to_string(), alt: "Image <plot> 40 x 30".to_string() };
     PyImage { picture: Arc::new(picture), width: width / density, height: height / density, density }
 }
 
 /// A Python cell whose last run gave this picture, with a chosen return type.
-fn image_cell(sheet: &mut Sheet, cell: &str, object: bool, image: PyImage) {
+pub(super) fn image_cell(sheet: &mut Sheet, cell: &str, object: bool, image: PyImage) {
     let output = PyOutput {
         value: Value::text("Image"),
         type_name: "Image".into(),
@@ -154,7 +154,7 @@ fn media_parts(bytes: &[u8]) -> Vec<String> {
     z.file_names().filter(|n| n.starts_with("xl/media/")).map(str::to_string).collect()
 }
 
-fn part_names(bytes: &[u8]) -> Vec<String> {
+pub(super) fn part_names(bytes: &[u8]) -> Vec<String> {
     let z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
     z.file_names().map(str::to_string).collect()
 }

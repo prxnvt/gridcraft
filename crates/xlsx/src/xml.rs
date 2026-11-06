@@ -180,7 +180,7 @@ fn local(name: &[u8]) -> String {
     String::from_utf8_lossy(n).into_owned()
 }
 
-fn start_el(e: &BytesStart<'_>) -> El {
+pub(crate) fn start_el(e: &BytesStart<'_>) -> El {
     let mut el = El { name: local(e.name().as_ref()), ..Default::default() };
     for a in e.attributes().with_checks(false).flatten() {
         let key = a.key.as_ref();
