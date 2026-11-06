@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (dates in Python cells: `engine::python::dates`, `protocol::Stamp`, `PyCode::dates`; earlier: the indicators: `python_card::tag_state`, `python_ui::checks`, `engine::python::packages`; earlier: the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (a Python object's size and table: `protocol::Table`, `model::PyTable`, `PyOutput::table`, `PyCode::spill_lines`, `python_card::table`; earlier: dates in Python cells: `engine::python::dates`, `protocol::Stamp`, `PyCode::dates`; earlier: the indicators: `python_card::tag_state`, `python_ui::checks`, `engine::python::packages`; earlier: the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -216,7 +216,9 @@ message, when its sheet is gone, or when it holds Python code (in Python mode, o
 cell) that sheet protection now hides, as the Python editor window closes then.
 `python_card.rs` holds the PY tag (painted in the grid's
 logical coordinates, so the grid's mirroring places it on right-to-left sheets), the card
-(`ui.pythonCard`) and the cell menu's return-type items. `python_window.rs` is the Python editor
+(`ui.pythonCard`) and the cell menu's return-type items. `python_card/table.rs` is the card's grid over
+a `PyTable`: its column widths are worked out once per table, and only the cells in the scroll area's
+viewport are laid out. `python_window.rs` is the Python editor
 window: its own copy of one cell's code (by workbook uid, sheet and address) in `code_field`. It
 follows its sheet by `Sheet::uid` (`model::SheetUid`), an identity that lives only while the app
 runs: a new, inserted, copied or opened sheet gets a fresh one, and a rename, a move and the
@@ -270,6 +272,25 @@ each opens by a UI-only command (`ui.pythonEnvironment` and the like). Their lis
 in view. What the interface asks every frame is cheap: `python_state` copies nothing, `python_running`
 reads the request in flight, and `python_has_cells` is kept from what each change touched, so a
 workbook without Python cells is scanned once.
+
+A Python object's size and table come from the worker only with the Python Object return type, each
+inside the protocol's caps (`MAX_SIZE_DIMS`, `MAX_TABLE_ROWS`, `MAX_TABLE_COLS`, `MAX_TABLE_TEXT_BYTES`,
+`MAX_TABLE_BYTES`), and `Reply::parse` refuses a line that breaks one or whose shape doesn't match its
+data. The worker walks at most what it sends: `iloc` for pandas, a slice for numpy and lists, stopping
+at the budget in bytes, so a table of a million rows costs what one of 200 does. `runner::kept` writes the
+cell's value from the type's name and the size (`object_label`), and keeps the table as
+`PyOutput::table`, an `Arc<PyTable>` so that the undo history shares it, and `#[serde(skip)]` with
+`from_run`, which says whether a result with no table never had one or a file lost it. `PyTable` also
+holds the CSV and Markdown forms; `python.table` and `python.saveCsv` go no further than it, since a
+whole object has no bound, and they report `cut` so that the interface can say so. `macros::policy::EXPORTS` lists
+`python.saveCsv`, so a macro step with a `path` needs the permission, and it writes through
+`io::write_file`, which refuses inside a script.
+
+`PyCode::spill_lines` is the one Python setting of a cell that isn't its code or return type.
+`PyCode::result_value` splits the kept text when it is on, so no run is needed and the text is there
+to go back to; calculation lays out the result as any array. It is serialized in GridCraft JSON only. The
+Python part of an xlsx file has no place for it, and a hidden name was rejected, since it would make
+this workbook's Python data depend on a defined name another application shows and may drop.
 
 Nothing blocks the caller. A command only marks what is due, at the end of the outermost `execute`;
 `Session::python_poll`, called each frame, takes at most one finished result, writes it through the
@@ -432,6 +453,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | A Python object's size and table: `protocol::Table`, `model::PyTable`, `PyOutput::table`, `PyCode::spill_lines`, `python_card::table` |
 | 2026-11-05 | minor | Dates in Python cells: `engine::python::dates`, `protocol::Stamp`, `PyCode::dates` |
 | 2026-11-05 | minor | Initialization code: `model::PyEnvironment`, `engine::python::initialization`, `protocol::Init` and the worker's `initialize`, the Python part's `environmentDefinition`, and the editor window's second subject |
 | 2026-11-05 | minor | The engine runs Python cells: `engine::python`, `PythonCapability`, `python_poll` and the commands that run and report; `PyCode::busy`; `calc::evaluate_reference`. The app doesn't turn it on yet |
