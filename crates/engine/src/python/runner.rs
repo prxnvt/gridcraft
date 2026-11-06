@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use gridcraft_core::date::DateSystem;
 use gridcraft_core::{CellError, CellRef, Value};
 use gridcraft_model::{PyCode, PyOutput};
 use gridcraft_python::diagnostics::{Diagnostic, for_outcome};
@@ -128,9 +129,10 @@ fn preview(v: &Value) -> String {
 
 /// A result as a cell keeps it. A Python object shows its type's name, and its preview stays for
 /// the card.
-fn kept(output: Output) -> PyOutput {
+fn kept(output: Output, sys: DateSystem) -> PyOutput {
     match output {
         Output::Value(value) => PyOutput { type_name: type_name(&value).into(), preview: preview(&value), value, convertible: true },
+        Output::Dated(dated) => super::dates::converted(dated, sys),
         Output::Object { type_name, preview } => PyOutput { value: Value::text(type_name.as_str()), type_name, preview, convertible: false },
     }
 }
@@ -465,7 +467,7 @@ impl DocRun {
         }
         let name_order = undefined_name(&outcome).and_then(|name| self.defined_later(&d.wb, name, flight.index, diag.as_ref()));
         let (write, stdout) = match outcome {
-            Outcome::Ok { output, stdout } => (Write::Result(kept(output)), stdout),
+            Outcome::Ok { output, stdout } => (Write::Result(kept(output, d.wb.date_system)), stdout),
             Outcome::PythonError { stdout, .. } => (Write::Error(error.unwrap_or(CellError::Python)), stdout),
             _ => (Write::Error(error.unwrap_or(CellError::Python)), String::new()),
         };

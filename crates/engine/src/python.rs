@@ -7,6 +7,7 @@
 //! cell. Results make no undo step, and stay out of the journal.
 //!
 //! - `inputs` resolves a cell's `xl("…")` references and fingerprints what they read.
+//! - `dates` turns dates in results into serial numbers, in the workbook's date system.
 //! - `plan` keeps the list of Python cells up to date and decides what is due.
 //! - `runner` submits cells and writes results.
 //! - `environment` works out on a thread of its own whether Python can run here.
@@ -14,6 +15,7 @@
 //! A due cell, with its kept result, shows `#BUSY!` until the new one arrives; what the result
 //! spilled stays in place until then ([`gridcraft_model::PyCode::busy`]).
 
+mod dates;
 mod environment;
 mod inputs;
 mod packages;

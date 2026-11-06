@@ -19,9 +19,11 @@
 //!   memory the process has used so far, in bytes, which catches a spike the parent's watcher reads
 //!   too late or not at all.
 //!
-//! A value `V` is `null` (empty), a number, a string, `true` or `false`, `{"error":"#N/A"}`,
-//! `{"array":{"rows":R,"cols":C,"data":[…]}}` with `R × C` scalars in row order, or, only as a
-//! result, `{"object":{"typeName":"…","preview":"…"}}`.
+//! A value `V` is `null` (empty), a number, a string, `true` or `false`, `{"error":"#N/A"}`, a date
+//! or time as `{"date":"2024-01-15"}`, `{"dateTime":"2024-01-15T10:30:00.5"}` or
+//! `{"time":"10:30:00"}`, `{"duration":1.5}` in days, `{"array":{"rows":R,"cols":C,"data":[…]}}` with
+//! `R × C` scalars in row order, or, only as a result, `{"object":{"typeName":"…","preview":"…"}}`.
+//! Dates carry no serial numbers, as only GridCraft knows the workbook's date system ([`Stamp`]).
 //!
 //! Everything the worker writes is untrusted: [`Reply::parse`] refuses a line that breaks the
 //! shape or goes over any cap below, and the client kills the worker for it. `shim.py` holds the
@@ -34,6 +36,10 @@ use gridcraft_core::{Array, CellError, Value};
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeMap, SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
+
+mod stamp;
+
+pub use stamp::{Clock, Dated, Day, MAX_DATE_BYTES, Stamp};
 
 /// Bytes in one line from the worker, without its newline. A 1,000,000-cell result of numbers
 /// takes about 20 MB.
@@ -66,15 +72,17 @@ const MAX_ERROR_TEXT_BYTES: usize = 32;
 /// One `xl()` reference's value, as the parent resolved it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Input {
-    /// A scalar for one cell, an array for a range.
+    /// A scalar for one cell, an array for a range. [`Value::Empty`] where a stamp goes.
     pub value: Value,
     /// `xl(ref, headers=True)`: carried in the request; the worker does not read it.
     pub headers: Option<bool>,
+    /// The cells that hold dates and times, by their place in row order, in ascending order.
+    pub stamps: Vec<(u32, Stamp)>,
 }
 
 impl Input {
     pub fn new(value: Value) -> Input {
-        Input { value, headers: None }
+        Input { value, headers: None, stamps: Vec::new() }
     }
 }
 
@@ -112,7 +120,8 @@ impl Request {
         let raw: RawRequest = serde_json::from_slice(line).map_err(|e| e.to_string())?;
         match raw.kind {
             RequestKind::Run => {
-                let inputs = raw.inputs.unwrap_or_default().into_iter().map(|(k, v)| (k, Input { value: v.value.0, headers: v.headers })).collect();
+                let input = |v: RawInput| Input { value: v.value.0.value, headers: v.headers, stamps: v.value.0.stamps };
+                let inputs = raw.inputs.unwrap_or_default().into_iter().map(|(k, v)| (k, input(v))).collect();
                 Ok(Request::Run { id: raw.id, code: raw.code.unwrap_or_default(), inputs, object: raw.output.as_deref() == Some("object") })
             }
             RequestKind::Reset => Ok(Request::Reset { id: raw.id }),
@@ -125,6 +134,8 @@ impl Request {
 pub enum Output {
     /// A value cells can hold: a scalar, or an array to spill.
     Value(Value),
+    /// The same with dates, times or durations in it.
+    Dated(Dated),
     /// A Python object with no cell form.
     Object {
         /// Python's name for its type (`dict`, `function`…), at most [`MAX_TYPE_NAME_BYTES`].
@@ -332,18 +343,42 @@ fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<ResultValue>, D::Er
 /// A result: a cell value or an object.
 struct ResultValue(Output);
 /// A value cells can hold (no object).
-struct CellValue(Value);
+struct CellValue(Dated);
+
+/// A value as it is read.
+enum Parsed {
+    Value(Value),
+    Stamp(Stamp),
+    /// An array with stamps in it.
+    Dated(Dated),
+    Object {
+        type_name: String,
+        preview: String,
+    },
+}
+
+impl Parsed {
+    fn into_output(self) -> Output {
+        match self {
+            Parsed::Value(v) => Output::Value(v),
+            Parsed::Stamp(s) => Output::Dated(Dated { value: Value::Empty, stamps: vec![(0, s)] }),
+            Parsed::Dated(d) => Output::Dated(d),
+            Parsed::Object { type_name, preview } => Output::Object { type_name, preview },
+        }
+    }
+}
 
 impl<'de> Deserialize<'de> for ResultValue {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(ValueVisitor { place: Place::Result }).map(ResultValue)
+        d.deserialize_any(ValueVisitor { place: Place::Result }).map(|p| ResultValue(p.into_output()))
     }
 }
 
 impl<'de> Deserialize<'de> for CellValue {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        match d.deserialize_any(ValueVisitor { place: Place::Cell })? {
-            Output::Value(v) => Ok(CellValue(v)),
+        match d.deserialize_any(ValueVisitor { place: Place::Cell })?.into_output() {
+            Output::Value(value) => Ok(CellValue(Dated { value, stamps: Vec::new() })),
+            Output::Dated(dated) => Ok(CellValue(dated)),
             Output::Object { .. } => Err(de::Error::custom("an object where a cell value goes")),
         }
     }
@@ -370,56 +405,69 @@ enum ValueKey {
     Error,
     Array,
     Object,
+    Date,
+    DateTime,
+    Time,
+    Duration,
+}
+
+/// A date or time's text as a value: one that names no date is `#VALUE!`, not a broken line.
+fn stamp_or_error(stamp: Option<Stamp>) -> Parsed {
+    stamp.map_or(Parsed::Value(Value::Error(CellError::Value)), Parsed::Stamp)
 }
 
 impl<'de> Visitor<'de> for ValueVisitor {
-    type Value = Output;
+    type Value = Parsed;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("null, a number, a string, a boolean, or an error, array or object")
     }
-    fn visit_unit<E: de::Error>(self) -> Result<Output, E> {
-        Ok(Output::Value(Value::Empty))
+    fn visit_unit<E: de::Error>(self) -> Result<Parsed, E> {
+        Ok(Parsed::Value(Value::Empty))
     }
-    fn visit_none<E: de::Error>(self) -> Result<Output, E> {
-        Ok(Output::Value(Value::Empty))
+    fn visit_none<E: de::Error>(self) -> Result<Parsed, E> {
+        Ok(Parsed::Value(Value::Empty))
     }
-    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Output, E> {
-        Ok(Output::Value(Value::Bool(v)))
+    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Parsed, E> {
+        Ok(Parsed::Value(Value::Bool(v)))
     }
-    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Output, E> {
-        Ok(Output::Value(Value::Number(v as f64)))
+    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Parsed, E> {
+        Ok(Parsed::Value(Value::Number(v as f64)))
     }
-    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Output, E> {
-        Ok(Output::Value(Value::Number(v as f64)))
+    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Parsed, E> {
+        Ok(Parsed::Value(Value::Number(v as f64)))
     }
-    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Output, E> {
+    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Parsed, E> {
         if !v.is_finite() {
             return Err(E::custom("a number that isn't finite"));
         }
-        Ok(Output::Value(Value::Number(v)))
+        Ok(Parsed::Value(Value::Number(v)))
     }
-    fn visit_str<E: de::Error>(self, v: &str) -> Result<Output, E> {
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<Parsed, E> {
         if v.len() > MAX_TEXT_BYTES {
             return Err(E::custom(format!("a text of {} bytes, over the cap of {MAX_TEXT_BYTES}", v.len())));
         }
-        Ok(Output::Value(Value::text(v)))
+        Ok(Parsed::Value(Value::text(v)))
     }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Output, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Parsed, A::Error> {
         let key: ValueKey = map.next_key()?.ok_or_else(|| de::Error::custom("an empty object"))?;
         let out = match key {
             ValueKey::Error => {
                 let text: Capped<MAX_ERROR_TEXT_BYTES> = map.next_value()?;
                 let e = CellError::ALL.iter().find(|e| e.as_str() == text.0).copied();
-                Output::Value(Value::Error(e.ok_or_else(|| de::Error::custom("an unknown error value"))?))
+                Parsed::Value(Value::Error(e.ok_or_else(|| de::Error::custom("an unknown error value"))?))
             }
-            ValueKey::Array if self.place != Place::Element => Output::Value(map.next_value_seed(ArraySeed)?),
+            ValueKey::Date => stamp_or_error(stamp::Day::parse(&map.next_value::<Capped<MAX_DATE_BYTES>>()?.0).map(Stamp::Date)),
+            ValueKey::DateTime => stamp_or_error(stamp::parse_date_time(&map.next_value::<Capped<MAX_DATE_BYTES>>()?.0)),
+            ValueKey::Time => stamp_or_error(stamp::Clock::parse(&map.next_value::<Capped<MAX_DATE_BYTES>>()?.0).map(Stamp::Time)),
+            ValueKey::Duration => Parsed::Stamp(Stamp::Duration(map.next_value()?)),
+            ValueKey::Array if self.place != Place::Element => map.next_value_seed(ArraySeed)?,
             ValueKey::Object if self.place == Place::Result => {
                 let o: RawObject = map.next_value()?;
                 if o.preview.0.chars().count() > MAX_PREVIEW_CHARS {
                     return Err(de::Error::custom(format!("a preview over {MAX_PREVIEW_CHARS} characters")));
                 }
-                Output::Object { type_name: o.type_name.0, preview: o.preview.0 }
+                Parsed::Object { type_name: o.type_name.0, preview: o.preview.0 }
             }
             ValueKey::Array => return Err(de::Error::custom("an array inside an array")),
             ValueKey::Object => return Err(de::Error::custom("an object where a cell value goes")),
@@ -451,20 +499,20 @@ enum ArrayKey {
 }
 
 impl<'de> DeserializeSeed<'de> for ArraySeed {
-    type Value = Value;
-    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Value, D::Error> {
+    type Value = Parsed;
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Parsed, D::Error> {
         d.deserialize_map(self)
     }
 }
 
 impl<'de> Visitor<'de> for ArraySeed {
-    type Value = Value;
+    type Value = Parsed;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("an array with rows, cols and data")
     }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
-        let (mut rows, mut cols, mut data): (Option<u64>, Option<u64>, Option<Vec<Value>>) = (None, None, None);
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Parsed, A::Error> {
+        let (mut rows, mut cols, mut data): (Option<u64>, Option<u64>, Option<RawData>) = (None, None, None);
         while let Some(key) = map.next_key::<ArrayKey>()? {
             match key {
                 ArrayKey::Rows if rows.is_none() => rows = Some(map.next_value()?),
@@ -477,7 +525,7 @@ impl<'de> Visitor<'de> for ArraySeed {
                 _ => return Err(de::Error::custom("a repeated array field")),
             }
         }
-        let (Some(rows), Some(cols), Some(data)) = (rows, cols, data) else {
+        let (Some(rows), Some(cols), Some((data, stamps))) = (rows, cols, data) else {
             return Err(de::Error::custom("an array without rows, cols and data"));
         };
         let (Ok(r), Ok(c)) = (usize::try_from(rows), usize::try_from(cols)) else {
@@ -487,7 +535,8 @@ impl<'de> Visitor<'de> for ArraySeed {
             return Err(de::Error::custom(format!("an array of more than {MAX_ARRAY_CELLS} cells")));
         }
         // Array::new refuses an empty shape and one that doesn't match the data.
-        Array::new(r, c, data).map(Value::from).ok_or_else(|| de::Error::custom("an array whose shape doesn't match its data"))
+        let value = Array::new(r, c, data).map(Value::from).ok_or_else(|| de::Error::custom("an array whose shape doesn't match its data"))?;
+        Ok(if stamps.is_empty() { Parsed::Value(value) } else { Parsed::Dated(Dated { value, stamps }) })
     }
 }
 
@@ -495,42 +544,51 @@ struct DataSeed {
     expected: Option<usize>,
 }
 
+/// An array's data, and the stamps among it.
+type RawData = (Vec<Value>, Vec<(u32, Stamp)>);
+
 impl<'de> DeserializeSeed<'de> for DataSeed {
-    type Value = Vec<Value>;
-    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Vec<Value>, D::Error> {
+    type Value = RawData;
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<RawData, D::Error> {
         d.deserialize_seq(self)
     }
 }
 
 impl<'de> Visitor<'de> for DataSeed {
-    type Value = Vec<Value>;
+    type Value = RawData;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("a list of scalar values")
     }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<Value>, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<RawData, A::Error> {
         let limit = self.expected.unwrap_or(MAX_ARRAY_CELLS).min(MAX_ARRAY_CELLS);
         // The size hint comes from the input: trust it only up to a small first allocation.
         let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(limit).min(4096));
-        while let Some(v) = seq.next_element_seed(ElementSeed)? {
+        let mut stamps = Vec::new();
+        while let Some(element) = seq.next_element_seed(ElementSeed)? {
             if out.len() >= limit {
                 return Err(de::Error::custom(format!("array data longer than its shape, or over {MAX_ARRAY_CELLS} cells")));
             }
-            out.push(v);
+            match element {
+                Parsed::Value(v) => out.push(v),
+                Parsed::Stamp(s) => {
+                    // The limit keeps this within a u32.
+                    stamps.push((u32::try_from(out.len()).map_err(de::Error::custom)?, s));
+                    out.push(Value::Empty);
+                }
+                Parsed::Dated(_) | Parsed::Object { .. } => return Err(de::Error::custom("an array or object inside an array")),
+            }
         }
-        Ok(out)
+        Ok((out, stamps))
     }
 }
 
 struct ElementSeed;
 
 impl<'de> DeserializeSeed<'de> for ElementSeed {
-    type Value = Value;
-    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Value, D::Error> {
-        match d.deserialize_any(ValueVisitor { place: Place::Element })? {
-            Output::Value(v) => Ok(v),
-            Output::Object { .. } => Err(de::Error::custom("an object inside an array")),
-        }
+    type Value = Parsed;
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Parsed, D::Error> {
+        d.deserialize_any(ValueVisitor { place: Place::Element })
     }
 }
 
@@ -572,23 +630,62 @@ struct WireArray<'a>(&'a Array);
 
 impl Serialize for WireArray<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        WireStampedArray { array: self.0, stamps: &[] }.serialize(s)
+    }
+}
+
+/// An array with the stamps among its data.
+struct WireStampedArray<'a> {
+    array: &'a Array,
+    stamps: &'a [(u32, Stamp)],
+}
+
+impl Serialize for WireStampedArray<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut m = s.serialize_map(Some(3))?;
-        m.serialize_entry("rows", &self.0.rows)?;
-        m.serialize_entry("cols", &self.0.cols)?;
-        m.serialize_entry("data", &WireData(&self.0.data))?;
+        m.serialize_entry("rows", &self.array.rows)?;
+        m.serialize_entry("cols", &self.array.cols)?;
+        m.serialize_entry("data", &WireData { data: &self.array.data, stamps: self.stamps })?;
         m.end()
     }
 }
 
-struct WireData<'a>(&'a [Value]);
+struct WireData<'a> {
+    data: &'a [Value],
+    stamps: &'a [(u32, Stamp)],
+}
 
 impl Serialize for WireData<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut seq = s.serialize_seq(Some(self.0.len()))?;
-        for v in self.0 {
-            seq.serialize_element(&WireValue { value: v, element: true })?;
+        let mut seq = s.serialize_seq(Some(self.data.len()))?;
+        let mut stamps = self.stamps.iter().peekable();
+        for (i, v) in self.data.iter().enumerate() {
+            match stamps.next_if(|(at, _)| *at as usize == i) {
+                Some((_, stamp)) => seq.serialize_element(stamp)?,
+                None => seq.serialize_element(&WireValue { value: v, element: true })?,
+            }
         }
         seq.end()
+    }
+}
+
+/// A value with its stamps.
+struct WireDated<'a> {
+    value: &'a Value,
+    stamps: &'a [(u32, Stamp)],
+}
+
+impl Serialize for WireDated<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match (self.value, self.stamps.first()) {
+            (Value::Array(a), _) => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("array", &WireStampedArray { array: a, stamps: self.stamps })?;
+                m.end()
+            }
+            (_, Some((_, stamp))) => stamp.serialize(s),
+            (value, None) => WireValue { value, element: false }.serialize(s),
+        }
     }
 }
 
@@ -609,7 +706,7 @@ struct WireInput<'a>(&'a Input);
 impl Serialize for WireInput<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut m = s.serialize_map(None)?;
-        m.serialize_entry("value", &WireValue { value: &self.0.value, element: false })?;
+        m.serialize_entry("value", &WireDated { value: &self.0.value, stamps: &self.0.stamps })?;
         if let Some(h) = self.0.headers {
             m.serialize_entry("headers", &h)?;
         }
@@ -682,6 +779,7 @@ impl Serialize for WireOutput<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self.0 {
             Output::Value(v) => WireValue { value: v, element: false }.serialize(s),
+            Output::Dated(d) => WireDated { value: &d.value, stamps: &d.stamps }.serialize(s),
             Output::Object { type_name, preview } => {
                 let mut m = s.serialize_map(Some(1))?;
                 m.serialize_entry("object", &serde_json::json!({"typeName": type_name, "preview": preview}))?;
