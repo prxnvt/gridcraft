@@ -166,9 +166,14 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         cx.warn(format!("missing picture {target}"));
                         continue;
                     };
-                    let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
+                    let descr = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("");
+                    let (python_source, alt) = match crate::python_pictures::read_link(descr) {
+                        Some((reference, alt)) => (Some(reference.to_string()), alt),
+                        None => (None, descr),
+                    };
                     let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt, python_source: None });
+                    let mime = mime_for(&target).to_string();
+                    sheet.images.push(Image { id, anchor, data: data.into(), mime, alt: alt.to_string(), python_source });
                 }
                 "graphicFrame" => {
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
@@ -464,11 +469,12 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 let (open, close) = anchor_open(sheet, &img.anchor);
                 close_tag = close;
                 s.push_str(&open);
+                let linked = img.python_source.as_deref().and_then(|r| crate::python_pictures::linked_descr(r, &img.alt));
                 let _ = write!(
                     s,
                     "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Picture {}\" descr=\"{}\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
                     id - 1,
-                    esc_attr(&img.alt),
+                    esc_attr(linked.as_deref().unwrap_or(&img.alt)),
                     xfrm(&img.anchor, "a:xfrm")
                 );
             }

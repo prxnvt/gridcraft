@@ -356,6 +356,12 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
+    let unlinked = crate::python_pictures::settle_links(&mut wb);
+    if unlinked > 0 {
+        cx.warn(format!(
+            "{unlinked} picture(s) were linked to a cell that isn't a Python cell in this file; they kept their images and lost the link"
+        ));
+    }
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];

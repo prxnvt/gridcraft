@@ -27,6 +27,7 @@ mod package;
 mod passthrough;
 mod pivot;
 mod python_part;
+mod python_pictures;
 mod read;
 mod richdata;
 mod sheet_read;

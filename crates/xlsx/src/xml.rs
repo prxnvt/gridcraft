@@ -441,7 +441,7 @@ pub fn esc_attr(s: &str) -> String {
     o
 }
 
-fn is_xml_char(c: char) -> bool {
+pub(crate) fn is_xml_char(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
 }
 
