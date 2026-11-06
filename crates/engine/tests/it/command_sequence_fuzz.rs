@@ -64,6 +64,7 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("file.exportCsv", "writes files"),
     ("file.exportHtml", "writes files"),
     ("python.saveCsv", "writes files"),
+    ("python.saveImage", "writes files"),
     ("file.exportPdf", "renders a PDF: slow, and may write files"),
     ("file.print", "renders a PDF: slow"),
     ("window.activate", "switches documents"),
@@ -87,6 +88,7 @@ const PYTHON_RUNS: &[&str] = &[
     "python.clearRunLog",
     "python.refreshEnvironment",
     "python.table",
+    "python.image",
 ];
 
 // ---------------------------------------------------------------- deterministic randomness
@@ -879,6 +881,8 @@ fn generate(rng: &mut Rng, s: &Session, python: bool) -> Step {
             "python.set",
             "python.output",
             "python.clear",
+            "python.displayOverCells",
+            "python.createReference",
             "python.run",
             "python.runAll",
             "python.reset",
@@ -909,6 +913,9 @@ fn python_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
     match id {
         "python.run" => json!({"cell": near_cell(rng).a1()}),
         "python.runAll" | "python.reset" | "python.stop" => json!({}),
+        "python.displayOverCells" => json!({"cell": near_cell(rng).a1(), "at": near_cell(rng).a1()}),
+        // An id that may be a linked picture's, or may be no picture at all.
+        "python.createReference" => json!({"id": rng.below(8)}),
         // Code that works, code that fails, no code, and asking what it is.
         "python.initialization" => match rng.below(5) {
             0 => json!({}),
@@ -941,6 +948,19 @@ fn fake_answer(code: &str, inputs: &BTreeMap<String, Input>) -> Result<Output, P
     if code.chars().filter(|c| *c == '\n').count() == 1 {
         return Ok(Output::Value(Value::text("one\ntwo\nthree")));
     }
+    if code.chars().filter(|c| *c == '\n').count() == 4 {
+        // A real picture, since the files keep it: one blue pixel.
+        let mut bytes = Vec::new();
+        let drawn = image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 120, 200, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png);
+        return match (drawn, gridcraft_python::Picture::from_bytes(bytes, 1)) {
+            (Ok(()), Ok(mut picture)) => {
+                picture.floor = Some([1, 1]);
+                Ok(Output::picture(picture))
+            }
+            _ => Ok(Output::object("dict", "{}")),
+        };
+    }
     if code.chars().filter(|c| *c == '\n').count() == 3 {
         let table = Table { rows: 1, cols: 1, data: vec![Value::Number(1.0)], total_rows: 9, total_cols: 1, ..Table::default() };
         return Ok(Output::Object { type_name: "DataFrame".into(), preview: "df".into(), size: vec![9, 1], table: Some(table), picture: None });
@@ -966,10 +986,11 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
         "python.set" => {
             // Code with xl() references (which follow structural edits), quotes and line breaks;
             // sometimes long enough to meet the formula limit.
-            let mut code = match rng.below(7) {
+            let mut code = match rng.below(8) {
                 // What `fake_answer` makes a text with line breaks of, and a table of.
                 5 => "s = 'text'\ns".to_string(),
                 6 => "a = 1\nb = 2\nc = 3\nframe".to_string(),
+                7 => "a = 1\nb = 2\nc = 3\nd = 4\nplot".to_string(),
                 0 => format!("xl(\"{}\") + 1", near_range(rng).a1()),
                 1 => format!("a = xl('{}')\nb = \"q\\\"uote\"\na", near_cell(rng).a1()),
                 2 => "[[1, 2], [3, 4]]".to_string(),
