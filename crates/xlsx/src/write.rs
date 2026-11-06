@@ -355,9 +355,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
-    if !out.python_scripts.is_empty() {
+    if crate::python_part::needs_part(&out.python_scripts, wb.python_env.as_deref()) {
         use crate::python_part as py;
-        let part = py::write(&out.python_scripts);
+        let part = py::write(&out.python_scripts, wb.python_env.as_deref());
         out.part(py::PART, Some(py::CONTENT_TYPE), part.into_bytes());
         wb_rels.add_uri(py::REL, "python.xml");
     }

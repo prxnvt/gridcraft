@@ -274,6 +274,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     cx.python = crate::python_part::read(&mut cx, &wb_rels)?;
     let mut wb = Workbook::new();
     wb.sheets.clear();
+    wb.python_env = cx.python.environment.take().map(Arc::new);
 
     read_workbook_styles(&mut cx, &mut wb, &wb_rels)?;
     read_shared_strings(&mut cx, &wb_rels)?;
