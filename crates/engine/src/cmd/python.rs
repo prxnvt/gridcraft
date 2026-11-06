@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, Value};
 use gridcraft_model::python::{MAX_FORMULA_CHARS, MAX_INIT_CHARS, init_fits, normalize_code};
-use gridcraft_model::{Cell, PyCode};
+use gridcraft_model::{Cell, PyCode, PyTable};
 use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, always, bad, cell_param_on, cmd, edit, has_doc, str_param, target_sheet};
@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Output",
             ["Python", "Code"],
             Some("Ctrl+Alt+Shift+M"),
-            "{cell?, mode?: object|value} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` it switches to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs",
+            "{cell?, mode?: object|value, lines?: cell|rows} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` or `lines` it switches to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs. `lines` says what a text result with line breaks does: it stays in the cell (`cell`, the default) or spills one line per row (`rows`); the result is kept, so this runs nothing. GridCraft JSON keeps this choice; an xlsx file has no place for it, so there it lasts for the session",
             has_doc,
             output
         ),
@@ -43,6 +43,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{cell?} turns a Python cell (default: the active cell) into a normal cell that keeps what it shows: the code goes, the cell keeps its value, and each cell its result spills over keeps its value as a plain value. A Python-only error (#BLOCKED!, #BUSY!, #PYTHON!, #TIMEOUT!) is no result and can't be an ordinary cell's value, so a cell showing one becomes empty. Formats stay, and what reads the cells is recalculated. One undo step brings the Python cell back with its code, return type and result",
             has_doc,
             clear
+        ),
+        cmd!(
+            query "python.table",
+            "Python Table",
+            [],
+            None,
+            "{cell?, sheet?, format?: json|csv|markdown} → the table a Python Object cell (default: the active cell) keeps from its last run: at most 200 rows, 30 columns and 1 MiB of text. {cell, rows, cols, totalRows, totalCols, rowLabels, textCut, cut, columns, data} with `format` json (the default), or {…, text} with csv or markdown. `totalCols` doesn't count the row labels; `cut` is true when anything of the object isn't here, so a copy of this is only part of it. CSV guards a text a spreadsheet would run as a formula (quoted, with a ' before it), and Markdown escapes | and line breaks. An error for a cell with no table: a file doesn't hold one, so a cell opened from a file needs to run first. Read-only",
+            has_doc,
+            table
+        ),
+        cmd!(
+            noundo "python.saveCsv",
+            "Save Python Table as CSV",
+            [],
+            None,
+            "{cell?, sheet?, path} → {cell, path, bytes, rows, cols, totalRows, totalCols, cut}: writes the table `python.table` gives as CSV, `.csv` added to a path that lacks it. Only that table: when `cut` is true the file holds only part of the object. It needs a path and opens no dialog. In a macro it needs the macro's permission, like the other commands that write a file; scripts can't write files",
+            has_doc,
+            save_csv
         ),
         cmd!(
             noundo "python.run",
@@ -215,9 +233,11 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
     // Unchanged code with the same return type keeps its result (and its value); new code, or a
     // new return type, has none until it runs: a result of the other type would show a value and
     // preview that don't belong to the cell.
-    // The formats its results wrote stay its to take back, whatever the new code gives.
+    // The formats its results wrote stay its to take back, whatever the new code gives, and what a
+    // text does with its lines is the cell's choice.
     if let Some(o) = &old {
         py.dates.written = o.dates.written.clone();
+        py.spill_lines = o.spill_lines;
     }
     let keep = old.filter(|o| o.code == py.code && o.object == py.object);
     let value = match &keep {
@@ -250,16 +270,129 @@ fn output(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(old) = existing(s, sheet, at)? else {
         return Err(EngineError::Other(format!("{} isn't a Python cell, so it has no Python output to change", at.a1())));
     };
-    let object = output_mode("python.output", p, "mode")?.unwrap_or(!old.object);
+    let lines = lines_mode(p)?;
+    let requested = output_mode("python.output", p, "mode")?;
+    let object = requested.unwrap_or(if lines.is_some() { old.object } else { !old.object });
     let mode = |object: bool| if object { "object" } else { "value" };
+    let spill_lines = lines.unwrap_or(old.spill_lines);
     if object != old.object {
+        // One edit, so one undo step, when `lines` changes too.
         let py = PyCode { code: old.code.clone(), object, ..PyCode::default() };
-        store(s, "python.output", sheet, at, py, Some(old))?;
+        store(s, "python.output", sheet, at, py, Some(PyCode { spill_lines, ..old }))?;
+        s.python_after_edit();
+    } else if spill_lines != old.spill_lines {
+        set_spill_lines(s, sheet, at, spill_lines)?;
         s.python_after_edit();
     }
     let d = s.doc()?;
     let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
-    Ok(json!({"cell": at.a1(), "output": mode(object), "value": crate::cmd::inspect::value_json(&shown)}))
+    Ok(json!({
+        "cell": at.a1(),
+        "output": mode(object),
+        "lines": if spill_lines { "rows" } else { "cell" },
+        "value": crate::cmd::inspect::value_json(&shown),
+    }))
+}
+
+fn lines_mode(p: &Json) -> Result<Option<bool>> {
+    match p.get("lines") {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(m)) if m.eq_ignore_ascii_case("cell") => Ok(Some(false)),
+        Some(Json::String(m)) if m.eq_ignore_ascii_case("rows") => Ok(Some(true)),
+        Some(_) => Err(bad("python.output", "`lines` is `cell` or `rows`")),
+    }
+}
+
+/// What a text result does with its line breaks. The result stays, so nothing runs: the calculation
+/// lays it out again, and what reads the cells it spills over is recalculated. A locked cell on a
+/// protected sheet is refused here, as the option isn't what the edit itself compares.
+fn set_spill_lines(s: &mut Session, sheet: usize, at: CellRef, on: bool) -> Result<()> {
+    if let Some(m) = s.locked_cell_message(sheet, at) {
+        return Err(EngineError::Other(m));
+    }
+    edit(s, |cx| {
+        let Some(py) = cx.sheet_mut(sheet)?.cells.get_mut(at).and_then(|c| c.py.as_mut()) else { return Ok(()) };
+        Arc::make_mut(py).spill_lines = on;
+        cx.touch(sheet, at);
+        Ok(())
+    })
+}
+
+/// The table a Python Object cell keeps from its last run.
+fn kept_table(s: &Session, sheet: usize, at: CellRef) -> Result<Arc<PyTable>> {
+    let Some(py) = existing(s, sheet, at)? else {
+        return Err(EngineError::Other(format!("{} isn't a Python cell, so it has no table", at.a1())));
+    };
+    let table = py.output.and_then(|o| o.table).filter(|_| py.object);
+    table.ok_or_else(|| {
+        EngineError::Other(format!(
+            "{} has no table: only a Python Object cell holding a DataFrame, a Series, or a 2-D list or array has one, once it has run. A file doesn't keep it, so a cell opened from a file needs to run first.",
+            at.a1()
+        ))
+    })
+}
+
+/// What a table is, without its cells.
+pub(crate) fn table_summary(t: &PyTable) -> Json {
+    json!({
+        "rows": t.rows,
+        "cols": t.cols,
+        "totalRows": t.total_rows,
+        "totalCols": t.total_cols,
+        "rowLabels": t.row_labels,
+        "textCut": t.text_cut,
+        "cut": t.cut(),
+    })
+}
+
+fn table(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, at) = target_cell(s, p)?;
+    let t = kept_table(s, sheet, at)?;
+    let mut out = table_summary(&t);
+    let Some(o) = out.as_object_mut() else { return Ok(out) };
+    o.insert("cell".into(), json!(at.a1()));
+    match p.get("format") {
+        None | Some(Json::Null) => json_cells(&t, o),
+        Some(Json::String(f)) if f.eq_ignore_ascii_case("json") => json_cells(&t, o),
+        Some(Json::String(f)) if f.eq_ignore_ascii_case("csv") => {
+            o.insert("text".into(), json!(t.to_csv()));
+        }
+        Some(Json::String(f)) if f.eq_ignore_ascii_case("markdown") => {
+            o.insert("text".into(), json!(t.to_markdown()));
+        }
+        Some(_) => return Err(bad("python.table", "`format` is `json`, `csv` or `markdown`")),
+    }
+    Ok(out)
+}
+
+fn json_cells(t: &PyTable, o: &mut serde_json::Map<String, Json>) {
+    o.insert("columns".into(), json!(t.columns));
+    o.insert("data".into(), t.data.iter().map(crate::cmd::inspect::value_json).collect());
+}
+
+/// `python.saveCsv`: the table as a file. Refused inside a script, or a macro step without the
+/// permission, by [`crate::io::write_file`].
+fn save_csv(s: &mut Session, p: &Json) -> Result<Json> {
+    let path = match p.get("path") {
+        Some(Json::String(path)) if !path.trim().is_empty() => path.as_str(),
+        _ => return Err(bad("python.saveCsv", "missing `path`")),
+    };
+    let (sheet, at) = target_cell(s, p)?;
+    let t = kept_table(s, sheet, at)?;
+    if t.is_empty() {
+        return Err(EngineError::Other(format!("{}'s table has no columns, so there is nothing to save", at.a1())));
+    }
+    let has_csv = std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("csv"));
+    let target = if has_csv { path.to_string() } else { format!("{path}.csv") };
+    let text = t.to_csv();
+    crate::io::write_file(&target, text.as_bytes())?;
+    let mut out = table_summary(&t);
+    if let Some(o) = out.as_object_mut() {
+        o.insert("cell".into(), json!(at.a1()));
+        o.insert("path".into(), json!(target));
+        o.insert("bytes".into(), json!(text.len()));
+    }
+    Ok(out)
 }
 
 /// Why `python.clear` would refuse the cell `at` on `sheet`, or `None` when it would convert it:

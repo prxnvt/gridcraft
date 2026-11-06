@@ -861,6 +861,7 @@ pub(crate) fn check_again(app: &mut SheetApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::python_card;
 
     /// What the Python interface says, besides the catalog's messages.
     const STRINGS: &[&str] = &[
@@ -889,6 +890,23 @@ mod tests {
         "Open Python Settings",
         "Choose Interpreter",
         "Copy Install Command",
+        python_card::COPY_CSV,
+        python_card::COPY_MARKDOWN,
+        python_card::SAVE_CSV,
+        python_card::SPILL_HERE,
+        python_card::SPILL_LINES,
+        python_card::RUN_TO_SEE,
+        python_card::NO_COLUMNS,
+        python_card::NO_ROWS,
+        python_card::COPIED_CUT,
+        python_card::SAVED_CUT,
+        python_card::SAVED,
+        "Only the first {rows} of {total} rows are shown.",
+        "Only the first {cols} of {total} columns are shown.",
+        "Some long text is cut.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table.",
+        "Save Python Table as CSV",
+        "Python Table",
         "Run Again",
         "Reset",
         "Python Environment",
@@ -1045,7 +1063,20 @@ mod tests {
                 assert!(!language.tr(key).contains('|'), "{code} shows a context prefix for {key:?}");
                 let label = key.rsplit_once('|').map_or(*key, |(_, label)| label);
                 assert_eq!(label.contains('\n'), language.tr(key).contains('\n'), "{code}: the lines of {key:?}");
-                for placeholder in ["{cell}", "{seconds}", "{state}", "{count}", "{version}", "{line}", "{message}", "{workbook}", "{max}"] {
+                for placeholder in [
+                    "{cell}",
+                    "{seconds}",
+                    "{state}",
+                    "{count}",
+                    "{version}",
+                    "{line}",
+                    "{message}",
+                    "{workbook}",
+                    "{max}",
+                    "{rows}",
+                    "{cols}",
+                    "{total}",
+                ] {
                     assert_eq!(key.contains(placeholder), language.tr(key).contains(placeholder), "{code}: {placeholder} in {key:?}");
                 }
             }

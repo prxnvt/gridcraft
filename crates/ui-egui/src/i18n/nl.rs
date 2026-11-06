@@ -170,6 +170,29 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Python-modus",
         "Python Object" => "Python-object",
         "Excel Value" => "Excel-waarde",
+        "Copy as CSV" => "Kopiëren als CSV",
+        "Copy as Markdown" => "Kopiëren als Markdown",
+        "Save as .csv…" => "Opslaan als .csv…",
+        "Spill Here" => "Hier overlopen",
+        "Spill One Line per Row" => "Eén tekstregel per rij laten overlopen",
+        "The table isn't kept in the file. Run the cell to see it." => "De tabel wordt niet in het bestand bewaard. Voer de cel uit om deze te zien.",
+        "This table is empty." => "Deze tabel is leeg.",
+        "This table has no rows." => "Deze tabel heeft geen rijen.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Alleen wat wordt weergegeven is gekopieerd: de rest van de tabel staat niet in de kopie."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Alleen wat wordt weergegeven is opgeslagen: de rest van de tabel staat niet in het bestand."
+        }
+        "The table is saved." => "De tabel is opgeslagen.",
+        "Only the first {rows} of {total} rows are shown." => "Alleen de eerste {rows} van {total} rijen worden weergegeven.",
+        "Only the first {cols} of {total} columns are shown." => "Alleen de eerste {cols} van {total} kolommen worden weergegeven.",
+        "Some long text is cut." => "Sommige lange tekst is afgekapt.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Kopiëren en opslaan nemen alleen wat wordt weergegeven. Hier overlopen geeft de hele tabel."
+        }
+        "Save Python Table as CSV" => "Python-tabel opslaan als CSV",
+        "Python Table" => "Python-tabel",
         "Convert to Normal Cell" => "Converteren naar normale cel",
         "Show Card" => "Kaart weergeven",
         "Insert\nPython" => "Python\ninvoegen",

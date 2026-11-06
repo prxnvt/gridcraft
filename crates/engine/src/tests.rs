@@ -5438,6 +5438,7 @@ mod python_commands;
 mod python_dates;
 mod python_files;
 mod python_init;
+mod python_output;
 mod python_run;
 mod python_wait;
 mod seams;

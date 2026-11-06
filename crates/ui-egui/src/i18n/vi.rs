@@ -171,6 +171,29 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Chế độ Python",
         "Python Object" => "Đối tượng Python",
         "Excel Value" => "Giá trị Excel",
+        "Copy as CSV" => "Sao chép dưới dạng CSV",
+        "Copy as Markdown" => "Sao chép dưới dạng Markdown",
+        "Save as .csv…" => "Lưu dưới dạng .csv…",
+        "Spill Here" => "Tràn tại đây",
+        "Spill One Line per Row" => "Tràn mỗi dòng văn bản thành một hàng",
+        "The table isn't kept in the file. Run the cell to see it." => "Bảng không được giữ trong tệp. Hãy chạy ô để xem bảng.",
+        "This table is empty." => "Bảng này trống.",
+        "This table has no rows." => "Bảng này không có hàng nào.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Chỉ sao chép phần đang hiển thị: phần còn lại của bảng không có trong bản sao."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Chỉ lưu phần đang hiển thị: phần còn lại của bảng không có trong tệp."
+        }
+        "The table is saved." => "Đã lưu bảng.",
+        "Only the first {rows} of {total} rows are shown." => "Chỉ hiển thị {rows} trong {total} hàng đầu tiên.",
+        "Only the first {cols} of {total} columns are shown." => "Chỉ hiển thị {cols} trong {total} cột đầu tiên.",
+        "Some long text is cut." => "Một phần văn bản dài đã bị cắt.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Sao chép và lưu chỉ lấy phần đang hiển thị. Tràn tại đây cho toàn bộ bảng."
+        }
+        "Save Python Table as CSV" => "Lưu bảng Python dưới dạng CSV",
+        "Python Table" => "Bảng Python",
         "Convert to Normal Cell" => "Chuyển đổi thành ô thông thường",
         "Show Card" => "Hiển thị thẻ",
         "Insert\nPython" => "Chèn\nPython",

@@ -135,7 +135,7 @@ fn run_code(client: &mut Client, code: &str) -> bool {
             match output {
                 Output::Value(v) => outln!("result: {v:?}"),
                 Output::Dated(d) => outln!("result: {:?}, with {:?}", d.value, d.stamps),
-                Output::Object { type_name, preview } => outln!("result: {type_name}: {preview}"),
+                Output::Object { type_name, preview, .. } => outln!("result: {type_name}: {preview}"),
             }
             true
         }

@@ -2317,7 +2317,7 @@ fn loan_schedule_residue_keeps_excels_sign() {
 /// as its kept result, and returns the cell's key for `Calc::cells_changed`.
 fn plant_python(t: &mut T, at: &str, cached: Value, result: Value) -> (usize, CellRef) {
     use gridcraft_model::python::{PyCode, PyOutput};
-    let output = PyOutput { value: result, type_name: "list".into(), preview: String::new(), convertible: true };
+    let output = PyOutput { value: result, type_name: "list".into(), preview: String::new(), convertible: true, ..Default::default() };
     let py = PyCode { output: Some(output), ..PyCode::new("[5, 6]") };
     let cell = Cell { value: cached, formula: None, style: gridcraft_model::StyleId::default(), py: Some(std::sync::Arc::new(py)) };
     t.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);

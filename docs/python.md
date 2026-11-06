@@ -126,6 +126,43 @@ the cell's format, so after opening it again a run no longer takes it back.
 A date a serial can't hold, before 1900 (1904 in a 1904 workbook) or after 9999, gives `#NUM!`, as
 does a length of time longer than the whole calendar.
 
+## Python objects and tables
+
+A cell's return type is **Output As** on the Python tab, Ctrl+Alt+Shift+M or the cell menu. With
+**Python Object**, a result that isn't a single value stays in one cell, which names it with its size:
+`DataFrame 6x4` (rows by columns), `Series 12`, `list 12`, `dict 3`, `ndarray 2x3`. Other objects show
+their type's name. What reads the cell reads those words.
+
+**The table on the card.** A DataFrame, a Series, and a 2-D list or array show as a table on the card
+that the PY tag or Ctrl+Shift+F5 opens, with their column names and row labels, as they would spill. A
+flat list, a dict and other objects show their `repr` instead. The table is what the worker sent, not
+the object: at most 200 rows, 30 columns (row labels among them) and 1 MiB, with each text cut at 4 KiB.
+When anything is left out, the card says what: how many rows and columns of how many, and whether long
+text was cut.
+
+**What you can do with it:**
+
+- **Copy as CSV** and **Copy as Markdown** put the table on the clipboard. In CSV, a text that starts
+  with `=`, `+`, `-`, `@`, a tab or a carriage return is quoted with a `'` before it, so a spreadsheet
+  doesn't run it as a formula; a number is left as it is. In Markdown, `|` and `\` are escaped and a
+  line break is `<br>`.
+- **Save as .csv…** asks where, then writes the same CSV as UTF-8.
+- **Spill Here** switches the cell to Excel Value, and it spills as usual, up to the limit on results.
+
+**A table bigger than what the card shows.** Copying and saving take what the card has, and no more:
+GridCraft keeps a bounded preview of an object, as a whole one can be any size. The card says so
+beforehand and the message after the copy or the save says so again, and the file itself has only those
+rows. For the whole table, use Spill Here.
+
+**In a file.** The cell's name and size are its saved value. The table isn't saved, so after opening
+the file the card says to run the cell to see it. There is nothing to copy until then.
+
+**A text with line breaks** stays in one cell, under either return type. **Spill One Line per Row** on
+the card spills it, with no run: `\n`, `\r\n` and `\r` each end a line, and a break at the very end
+starts no extra line. It is one undo step, and it stays with the cell when its code changes. A GridCraft
+JSON file keeps it. An xlsx file has no place for it, so there it lasts until the workbook closes: the
+file keeps the cells it showed, and when the cell next runs, the text goes back into one cell.
+
 ## Initialization code
 
 A workbook can hold code that runs before its Python cells, in the variables they share, as in Excel:
@@ -245,8 +282,9 @@ cell runs, the cell and how long it has run. A click on it opens the Environment
 **The card** opens from the tag, or with Ctrl+Shift+F5. It says what happened in one sentence, then
 Python's own message with its line, and has a button for what to do: Open Settings, Choose
 Interpreter, Copy Install Command, Enable, Run Again, Open Initialization with Reset, or Go To Cell. A failed run that printed
-something has Show Printed Output. A result keeps its type and preview. Copy Install Command gives
-the uv command; pip is behind **Other package managers**.
+something has Show Printed Output. A result keeps its type and preview, or its table
+([Python objects and tables](#python-objects-and-tables)). Copy Install Command gives the uv command;
+pip is behind **Other package managers**.
 
 **In the editors**, the formula bar in Python mode and the Python editor window check your code as
 you type, with Python off too and on systems with no sandbox. They need nothing to run:
@@ -272,3 +310,5 @@ Agents can read all of this and run cells, once a person has turned Python on: `
 `ui.pythonInitialization`, `ui.inspect`. `file.save` with `wait` holds its reply until the save has
 happened, and the reply says which cells weren't finished; `engine.execute` with `wait` holds it until
 Python is idle. See [control-protocol.md](control-protocol.md#saving-and-waiting-for-python-cells).
+`python.table`, `python.saveCsv`, `ui.pythonInitialization`, `ui.inspect`. See
+[control-protocol.md](control-protocol.md).

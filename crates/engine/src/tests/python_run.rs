@@ -68,7 +68,7 @@ fn answer(w: &mut FakeWorker, id: u64, code: &str, inputs: &BTreeMap<String, Inp
             let data = (0..r * c).map(|i| Value::Number(10.0 * (i + 1) as f64)).collect();
             value(Value::from(Array::new(r, c, data).unwrap()))
         }
-        "obj" => Ok(Output::Object { type_name: "dict".into(), preview: "{'a': 1}".into() }),
+        "obj" => Ok(Output::object("dict", "{'a': 1}")),
         "fail" => Err(PyError { message: "ValueError: boom".into(), line: Some(1), kind: None, subject: None }),
         "num" => value(Value::Error(CellError::Num)),
         "empty" => value(Value::Error(CellError::Calc)),

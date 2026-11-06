@@ -154,6 +154,29 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Modo Python",
         "Python Object" => "Objeto de Python",
         "Excel Value" => "Valor de Excel",
+        "Copy as CSV" => "Copiar como CSV",
+        "Copy as Markdown" => "Copiar como Markdown",
+        "Save as .csv…" => "Guardar como .csv…",
+        "Spill Here" => "Desbordar aquí",
+        "Spill One Line per Row" => "Desbordar una línea por fila",
+        "The table isn't kept in the file. Run the cell to see it." => "La tabla no se guarda en el archivo. Ejecute la celda para verla.",
+        "This table is empty." => "Esta tabla está vacía.",
+        "This table has no rows." => "Esta tabla no tiene filas.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Solo se copió lo que se muestra: el resto de la tabla no está en la copia."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Solo se guardó lo que se muestra: el resto de la tabla no está en el archivo."
+        }
+        "The table is saved." => "La tabla se guardó.",
+        "Only the first {rows} of {total} rows are shown." => "Solo se muestran las primeras {rows} de {total} filas.",
+        "Only the first {cols} of {total} columns are shown." => "Solo se muestran las primeras {cols} de {total} columnas.",
+        "Some long text is cut." => "Parte del texto largo está cortado.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Copiar y guardar solo toman lo que se muestra. Desbordar aquí da la tabla completa."
+        }
+        "Save Python Table as CSV" => "Guardar tabla de Python como CSV",
+        "Python Table" => "Tabla de Python",
         "Convert to Normal Cell" => "Convertir en celda normal",
         "Show Card" => "Mostrar tarjeta",
         "Insert\nPython" => "Insertar\nPython",

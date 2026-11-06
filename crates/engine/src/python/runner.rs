@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use gridcraft_core::date::DateSystem;
 use gridcraft_core::{CellError, CellRef, Value};
-use gridcraft_model::{PyCode, PyOutput};
+use gridcraft_model::{PyCode, PyOutput, PyTable};
 use gridcraft_python::diagnostics::{Diagnostic, for_outcome};
-use gridcraft_python::protocol::OUTPUT_CUT;
+use gridcraft_python::protocol::{OUTPUT_CUT, Table};
 use gridcraft_python::{Client, Input, Outcome, Output, RunResult, Transport};
 use web_time::Instant;
 
@@ -128,20 +128,51 @@ fn preview(v: &Value) -> String {
     }
 }
 
-/// A result as a cell keeps it. A Python object shows its type's name, and its preview stays for
-/// the card.
-fn kept(output: Output, sys: DateSystem) -> Write {
+/// What a Python object shows in its cell: its type's name, as text that stays on one line, then its
+/// size, as `DataFrame 6x4` or `list 12`. The worker gave the numbers, within the protocol's caps.
+fn object_label(type_name: &str, size: &[u64]) -> String {
+    let name: String = type_name.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let mut label = if name.trim().is_empty() { "object".to_string() } else { name };
+    for (i, n) in size.iter().enumerate() {
+        label.push(if i == 0 { ' ' } else { 'x' });
+        label.push_str(&n.to_string());
+    }
+    label
+}
+
+fn kept_table(t: Table) -> Arc<PyTable> {
+    Arc::new(PyTable {
+        columns: t.columns,
+        rows: t.rows,
+        cols: t.cols,
+        data: t.data,
+        row_labels: t.row_labels,
+        total_rows: t.total_rows,
+        total_cols: t.total_cols,
+        text_cut: t.text_cut,
+    })
+}
+
+/// A result as a cell keeps it. A Python object shows what names it, and its preview stays for the
+/// card; only with the Python Object return type (`object`) does that hold its size and its table,
+/// whatever the worker sent.
+fn kept(output: Output, sys: DateSystem, object: bool) -> Write {
     match output {
         Output::Value(value) => Write::Result(
-            PyOutput { type_name: type_name(&value).into(), preview: preview(&value), value, convertible: true },
+            PyOutput { type_name: type_name(&value).into(), preview: preview(&value), value, convertible: true, table: None, from_run: true },
             ResultDates::default(),
         ),
         Output::Dated(dated) => {
             let (output, dates) = converted(dated, sys);
-            Write::Result(output, dates)
+            Write::Result(PyOutput { from_run: true, ..output }, dates)
         }
-        Output::Object { type_name, preview } => {
-            Write::Result(PyOutput { value: Value::text(type_name.as_str()), type_name, preview, convertible: false }, ResultDates::default())
+        Output::Object { type_name, preview, size, table } => {
+            let label = object_label(&type_name, if object { &size } else { &[] });
+            let table = table.filter(|_| object).map(kept_table);
+            Write::Result(
+                PyOutput { value: Value::text(label), type_name, preview, convertible: false, table, from_run: true },
+                ResultDates::default(),
+            )
         }
     }
 }
@@ -502,8 +533,9 @@ impl DocRun {
             self.note_kill(&flight, error.unwrap_or(CellError::Python));
         }
         let name_order = undefined_name(&outcome).and_then(|name| self.defined_later(&d.wb, name, flight.index, diag.as_ref()));
+        let object = self.entries.get(flight.index).and_then(|e| d.wb.sheet(e.sheet)?.cell(e.at)?.py.as_deref().map(|py| py.object)).unwrap_or(false);
         let (write, stdout) = match outcome {
-            Outcome::Ok { output, stdout } => (kept(output, d.wb.date_system), stdout),
+            Outcome::Ok { output, stdout } => (kept(output, d.wb.date_system, object), stdout),
             Outcome::PythonError { stdout, .. } => (Write::Error(error.unwrap_or(CellError::Python)), stdout),
             _ => (Write::Error(error.unwrap_or(CellError::Python)), String::new()),
         };

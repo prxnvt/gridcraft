@@ -23,8 +23,12 @@
 //! A value `V` is `null` (empty), a number, a string, `true` or `false`, `{"error":"#N/A"}`, a date
 //! or time as `{"date":"2024-01-15"}`, `{"dateTime":"2024-01-15T10:30:00.5"}` or
 //! `{"time":"10:30:00"}`, `{"duration":1.5}` in days, `{"array":{"rows":R,"cols":C,"data":[…]}}` with
-//! `R × C` scalars in row order, or, only as a result, `{"object":{"typeName":"…","preview":"…"}}`.
-//! Dates carry no serial numbers, as only GridCraft knows the workbook's date system ([`Stamp`]).
+//! `R × C` scalars in row order, or, only as a result, `{"object":{"typeName":"…","preview":"…",
+//! "size":[6,4],"table":{…}}}`, with `size` and `table` there when the cell's return type is a Python
+//! object and the object has them. A table is `{"columns":["a"],"rows":R,"cols":C,"data":[…],
+//! "rowLabels":true,"totalRows":N,"totalCols":M,"textCut":true}`, a bounded look at the object
+//! ([`Table`]). Dates carry no serial numbers, as only GridCraft knows the workbook's date system
+//! ([`Stamp`]).
 //!
 //! Everything the worker writes is untrusted: [`Reply::parse`] refuses a line that breaks the
 //! shape or goes over any cap below, and the client kills the worker for it. `shim.py` holds the
@@ -56,6 +60,18 @@ pub const MAX_SUBJECT_BYTES: usize = 1024;
 pub const MAX_TYPE_NAME_BYTES: usize = 256;
 /// Characters in an object's preview (its `repr`, cut).
 pub const MAX_PREVIEW_CHARS: usize = 255;
+/// Numbers in an object's size: a numpy array can have more dimensions, and then it has no size.
+pub const MAX_SIZE_DIMS: usize = 8;
+/// The largest number in an object's size, which a double holds exactly.
+pub const MAX_SIZE: u64 = 1 << 53;
+/// Rows in a table's preview.
+pub const MAX_TABLE_ROWS: usize = 200;
+/// Columns in a table's preview, row labels included.
+pub const MAX_TABLE_COLS: usize = 30;
+/// Bytes in one text of a table's preview, a cell's or a column's name.
+pub const MAX_TABLE_TEXT_BYTES: usize = 4 * 1024;
+/// Bytes of text in a whole table's preview.
+pub const MAX_TABLE_BYTES: usize = 1024 * 1024;
 /// Bytes of printed output kept per run.
 pub const MAX_STDOUT_BYTES: usize = 1024 * 1024;
 /// What the worker puts at the end of printed output it cut at [`MAX_STDOUT_BYTES`] (`shim.py`
@@ -172,7 +188,39 @@ pub enum Output {
         type_name: String,
         /// Its `repr`, at most [`MAX_PREVIEW_CHARS`] characters.
         preview: String,
+        /// Its size, as `[rows, columns]`, `[length]` or a numpy array's shape: at most
+        /// [`MAX_SIZE_DIMS`] numbers of at most [`MAX_SIZE`]. Empty when it has none.
+        size: Vec<u64>,
+        /// A bounded look at it, when it is like a table.
+        table: Option<Table>,
     },
+}
+
+impl Output {
+    /// An object with no size and no table.
+    pub fn object(type_name: impl Into<String>, preview: impl Into<String>) -> Output {
+        Output::Object { type_name: type_name.into(), preview: preview.into(), size: Vec::new(), table: None }
+    }
+}
+
+/// A bounded look at a table-like object: at most [`MAX_TABLE_ROWS`] rows and [`MAX_TABLE_COLS`]
+/// columns, at most [`MAX_TABLE_BYTES`] of text, with how much there is in all.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Table {
+    /// The column names, one per column, or none when the object doesn't name its columns.
+    pub columns: Vec<String>,
+    pub rows: usize,
+    pub cols: usize,
+    /// `rows × cols` scalars in row order. A date is its text, as the preview is only read.
+    pub data: Vec<Value>,
+    /// The first column holds row labels, which `total_cols` doesn't count.
+    pub row_labels: bool,
+    /// The object's rows.
+    pub total_rows: u64,
+    /// The object's columns.
+    pub total_cols: u64,
+    /// A text in the preview is shorter than in the object.
+    pub text_cut: bool,
 }
 
 /// The error a cell's code raised.
@@ -385,6 +433,8 @@ enum Parsed {
     Object {
         type_name: String,
         preview: String,
+        size: Vec<u64>,
+        table: Option<Table>,
     },
 }
 
@@ -394,7 +444,7 @@ impl Parsed {
             Parsed::Value(v) => Output::Value(v),
             Parsed::Stamp(s) => Output::Dated(Dated { value: Value::Empty, stamps: vec![(0, s)] }),
             Parsed::Dated(d) => Output::Dated(d),
-            Parsed::Object { type_name, preview } => Output::Object { type_name, preview },
+            Parsed::Object { type_name, preview, size, table } => Output::Object { type_name, preview, size, table },
         }
     }
 }
@@ -498,7 +548,8 @@ impl<'de> Visitor<'de> for ValueVisitor {
                 if o.preview.0.chars().count() > MAX_PREVIEW_CHARS {
                     return Err(de::Error::custom(format!("a preview over {MAX_PREVIEW_CHARS} characters")));
                 }
-                Parsed::Object { type_name: o.type_name.0, preview: o.preview.0 }
+                let table = o.table.map(RawTable::validate).transpose().map_err(de::Error::custom)?;
+                Parsed::Object { type_name: o.type_name.0, preview: o.preview.0, size: o.size.map_or_else(Vec::new, |s| s.0), table }
             }
             ValueKey::Array => return Err(de::Error::custom("an array inside an array")),
             ValueKey::Object => return Err(de::Error::custom("an object where a cell value goes")),
@@ -516,6 +567,164 @@ struct RawObject {
     type_name: Capped<MAX_TYPE_NAME_BYTES>,
     // A preview of 255 characters is at most 1,020 bytes.
     preview: Capped<{ MAX_PREVIEW_CHARS * 4 }>,
+    size: Option<Size>,
+    table: Option<RawTable>,
+}
+
+/// An object's size. Reading stops at the cap: the line is large enough for millions of numbers.
+struct Size(Vec<u64>);
+
+impl<'de> Deserialize<'de> for Size {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_seq(SizeVisitor)
+    }
+}
+
+struct SizeVisitor;
+
+impl<'de> Visitor<'de> for SizeVisitor {
+    type Value = Size;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a list of whole numbers")
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Size, A::Error> {
+        let mut out = Vec::new();
+        while let Some(n) = seq.next_element::<u64>()? {
+            if out.len() >= MAX_SIZE_DIMS {
+                return Err(de::Error::custom(format!("a size of more than {MAX_SIZE_DIMS} numbers")));
+            }
+            if n > MAX_SIZE {
+                return Err(de::Error::custom(format!("a size over {MAX_SIZE}")));
+            }
+            out.push(n);
+        }
+        if out.is_empty() {
+            return Err(de::Error::custom("a size with no numbers"));
+        }
+        Ok(Size(out))
+    }
+}
+
+/// A table's preview as it is read, before its shape is checked.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawTable {
+    columns: Option<TableColumns>,
+    rows: usize,
+    cols: usize,
+    data: TableData,
+    #[serde(default)]
+    row_labels: bool,
+    total_rows: u64,
+    total_cols: u64,
+    #[serde(default)]
+    text_cut: bool,
+}
+
+impl RawTable {
+    fn validate(self) -> Result<Table, String> {
+        let RawTable { columns, rows, cols, data, row_labels, total_rows, total_cols, text_cut } = self;
+        let columns = columns.map_or_else(Vec::new, |c| c.0);
+        if rows > MAX_TABLE_ROWS || cols > MAX_TABLE_COLS {
+            return Err(format!("a table preview of {rows} rows and {cols} columns, over the cap of {MAX_TABLE_ROWS} and {MAX_TABLE_COLS}"));
+        }
+        if rows.checked_mul(cols) != Some(data.0.len()) {
+            return Err("a table whose shape doesn't match its data".into());
+        }
+        if !columns.is_empty() && columns.len() != cols {
+            return Err("a table whose column names don't match its columns".into());
+        }
+        if row_labels && cols == 0 {
+            return Err("a table with row labels and no columns".into());
+        }
+        let data_cols = cols.saturating_sub(usize::from(row_labels)) as u64;
+        if total_rows < rows as u64 || total_cols < data_cols {
+            return Err("a table that claims less than its preview holds".into());
+        }
+        if total_rows > MAX_SIZE || total_cols > MAX_SIZE {
+            return Err(format!("a table size over {MAX_SIZE}"));
+        }
+        let text: usize = columns.iter().map(String::len).sum::<usize>().saturating_add(data.1);
+        if text > MAX_TABLE_BYTES {
+            return Err(format!("a table preview with more than {MAX_TABLE_BYTES} bytes of text"));
+        }
+        Ok(Table { columns, rows, cols, data: data.0, row_labels, total_rows, total_cols, text_cut })
+    }
+}
+
+/// A table's column names. Reading stops at the cap.
+struct TableColumns(Vec<String>);
+
+impl<'de> Deserialize<'de> for TableColumns {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_seq(TableColumnsVisitor)
+    }
+}
+
+struct TableColumnsVisitor;
+
+impl<'de> Visitor<'de> for TableColumnsVisitor {
+    type Value = TableColumns;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a list of column names")
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<TableColumns, A::Error> {
+        let mut out = Vec::new();
+        while let Some(name) = seq.next_element::<Capped<MAX_TABLE_TEXT_BYTES>>()? {
+            if out.len() >= MAX_TABLE_COLS {
+                return Err(de::Error::custom(format!("more than {MAX_TABLE_COLS} column names")));
+            }
+            out.push(name.0);
+        }
+        Ok(TableColumns(out))
+    }
+}
+
+/// A table's scalars, and how many bytes of text they hold. Reading stops at the caps.
+struct TableData(Vec<Value>, usize);
+
+impl<'de> Deserialize<'de> for TableData {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_seq(TableDataVisitor)
+    }
+}
+
+struct TableDataVisitor;
+
+impl<'de> Visitor<'de> for TableDataVisitor {
+    type Value = TableData;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a list of scalar values")
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<TableData, A::Error> {
+        let limit = MAX_TABLE_ROWS * MAX_TABLE_COLS;
+        let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(limit));
+        let mut bytes = 0usize;
+        while let Some(element) = seq.next_element_seed(ElementSeed)? {
+            if out.len() >= limit {
+                return Err(de::Error::custom(format!("a table preview of more than {limit} cells")));
+            }
+            let value = match element {
+                Parsed::Value(v) => v,
+                Parsed::Stamp(stamp) => Value::text(stamp.preview()),
+                Parsed::Dated(_) | Parsed::Object { .. } => return Err(de::Error::custom("an array or object inside a table")),
+            };
+            if let Value::Text(t) = &value {
+                if t.len() > MAX_TABLE_TEXT_BYTES {
+                    return Err(de::Error::custom(format!("a table's text of {} bytes, over the cap of {MAX_TABLE_TEXT_BYTES}", t.len())));
+                }
+                bytes = bytes.saturating_add(t.len());
+                if bytes > MAX_TABLE_BYTES {
+                    return Err(de::Error::custom(format!("a table preview with more than {MAX_TABLE_BYTES} bytes of text")));
+                }
+            }
+            out.push(value);
+        }
+        Ok(TableData(out, bytes))
+    }
 }
 
 /// `{"rows":R,"cols":C,"data":[…]}`, with the shape checked against the data.
@@ -814,12 +1023,58 @@ impl Serialize for WireOutput<'_> {
         match self.0 {
             Output::Value(v) => WireValue { value: v, element: false }.serialize(s),
             Output::Dated(d) => WireDated { value: &d.value, stamps: &d.stamps }.serialize(s),
-            Output::Object { type_name, preview } => {
+            Output::Object { type_name, preview, size, table } => {
                 let mut m = s.serialize_map(Some(1))?;
-                m.serialize_entry("object", &serde_json::json!({"typeName": type_name, "preview": preview}))?;
+                m.serialize_entry("object", &WireObject { type_name, preview, size, table: table.as_ref() })?;
                 m.end()
             }
         }
+    }
+}
+
+struct WireObject<'a> {
+    type_name: &'a str,
+    preview: &'a str,
+    size: &'a [u64],
+    table: Option<&'a Table>,
+}
+
+impl Serialize for WireObject<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut m = s.serialize_map(None)?;
+        m.serialize_entry("typeName", self.type_name)?;
+        m.serialize_entry("preview", self.preview)?;
+        if !self.size.is_empty() {
+            m.serialize_entry("size", self.size)?;
+        }
+        if let Some(table) = self.table {
+            m.serialize_entry("table", &WireTable(table))?;
+        }
+        m.end()
+    }
+}
+
+struct WireTable<'a>(&'a Table);
+
+impl Serialize for WireTable<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let t = self.0;
+        let mut m = s.serialize_map(None)?;
+        if !t.columns.is_empty() {
+            m.serialize_entry("columns", &t.columns)?;
+        }
+        m.serialize_entry("rows", &t.rows)?;
+        m.serialize_entry("cols", &t.cols)?;
+        m.serialize_entry("data", &WireData { data: &t.data, stamps: &[] })?;
+        if t.row_labels {
+            m.serialize_entry("rowLabels", &true)?;
+        }
+        m.serialize_entry("totalRows", &t.total_rows)?;
+        m.serialize_entry("totalCols", &t.total_cols)?;
+        if t.text_cut {
+            m.serialize_entry("textCut", &true)?;
+        }
+        m.end()
     }
 }
 

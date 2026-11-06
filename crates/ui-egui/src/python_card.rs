@@ -1,18 +1,23 @@
 //! Python cells on the sheet: the PY tag at the start of every Python cell, which shows the cell's
 //! state in its shape as well as its colour, and the card that a click on the tag (or Ctrl+Shift+F5)
-//! opens: the cell's result (its Python type and a preview), what the catalog says about it with one
-//! action, and Convert to Normal Cell (`python.clear`) on the card and the cell menu.
+//! opens: the cell's result (what names it and a preview, or a table with what can be done with it),
+//! what the catalog says about it with one action, and Convert to Normal Cell (`python.clear`) on the
+//! card and the cell menu.
+
+use std::sync::Arc;
 
 use egui::{Align2, FontId, Painter, Rect, Stroke, pos2, vec2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellError, CellRef, Value};
-use gridcraft_engine::model::{PyCode, Sheet, VAlign, Workbook};
+use gridcraft_engine::model::{PyCode, PyTable, Sheet, VAlign, Workbook};
 use gridcraft_engine::python::{Diagnostic, Severity};
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
 use crate::grid::Geo;
 use crate::theme::{self, Tokens};
+
+mod table;
 
 /// The most characters of a type name the card shows.
 pub const MAX_TITLE_CHARS: usize = 80;
@@ -27,6 +32,22 @@ pub const EXCEL_VALUE: &str = "Excel Value";
 
 /// The label of `python.clear`, on the card and the cell menu.
 pub const CONVERT: &str = "Convert to Normal Cell";
+
+/// The card's actions on a result.
+pub const COPY_CSV: &str = "Copy as CSV";
+pub const COPY_MARKDOWN: &str = "Copy as Markdown";
+pub const SAVE_CSV: &str = "Save as .csv…";
+pub const SPILL_HERE: &str = "Spill Here";
+pub const SPILL_LINES: &str = "Spill One Line per Row";
+/// What the card says about a table a file couldn't keep.
+pub const RUN_TO_SEE: &str = "The table isn't kept in the file. Run the cell to see it.";
+/// What the card says about a table with nothing in it.
+pub const NO_COLUMNS: &str = "This table is empty.";
+pub const NO_ROWS: &str = "This table has no rows.";
+
+/// The widest the card is with a table in it, and without.
+const TABLE_CARD_WIDTH: f32 = 560.0;
+const CARD_WIDTH: f32 = 360.0;
 
 /// The open card: the workbook, sheet and Python cell it belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,6 +203,22 @@ pub struct CardText {
     pub output: &'static str,
     /// A preview of the result, empty when there is none.
     pub body: String,
+    /// A Python Object's table, when it has one: the card shows this instead of the preview.
+    pub table: Option<Arc<PyTable>>,
+    /// The result is a Python Object with something to spill.
+    pub spillable: bool,
+    /// The table this cell's object had can't be here: the file didn't keep it.
+    pub run_to_see: bool,
+    /// A text result with line breaks: whether it spills one line per row.
+    pub spill_lines: Option<bool>,
+}
+
+/// Whether what a Python object's cell shows names a kind of object that can have a table, with or
+/// without its size: all a file leaves of it.
+fn names_a_table(shown: &str) -> bool {
+    let is_size = |s: &str| !s.is_empty() && s.split('x').all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    let name = shown.rsplit_once(' ').filter(|(_, size)| is_size(size)).map_or(shown, |(name, _)| name);
+    matches!(name, "DataFrame" | "Series" | "ndarray" | "list" | "tuple")
 }
 
 /// The card's text for the Python cell at `c`, capped ([`MAX_TITLE_CHARS`], [`MAX_PREVIEW_CHARS`]
@@ -194,11 +231,29 @@ pub fn card_text(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<CardText> {
     let (title, body) = match (&py.output, &value) {
         (Some(o), _) if !o.type_name.is_empty() => {
             let body = if o.preview.is_empty() { shown() } else { capped(&o.preview, MAX_PREVIEW_CHARS, MAX_PREVIEW_LINES) };
-            (capped(&o.type_name, MAX_TITLE_CHARS, 1), body)
+            // A Python object's cell says what it is, with its size.
+            let name = match &o.value {
+                Value::Text(label) if !o.convertible => label.as_ref(),
+                _ => o.type_name.as_str(),
+            };
+            (capped(name, MAX_TITLE_CHARS, 1), body)
         }
         _ => (capped(&gridcraft_engine::display::cell_text(wb, sh, c), MAX_TITLE_CHARS, 1), String::new()),
     };
-    Some(CardText { title, output, body })
+    let table = py.output.as_ref().and_then(|o| o.table.clone()).filter(|_| py.object);
+    let names_one = matches!(&value, Value::Text(t) if names_a_table(t));
+    let from_a_file = py.output.as_ref().is_none_or(|o| !o.from_run);
+    let spill_lines =
+        py.output.as_ref().filter(|o| o.convertible && matches!(&o.value, Value::Text(t) if t.contains(['\n', '\r']))).map(|_| py.spill_lines);
+    Some(CardText {
+        title,
+        output,
+        body,
+        spillable: py.object && (table.is_some() || names_one),
+        run_to_see: py.object && table.is_none() && names_one && from_a_file,
+        spill_lines,
+        table,
+    })
 }
 
 /// Opens the card of the active cell's Python cell (`ui.pythonCard`, Ctrl+Shift+F5).
@@ -249,6 +304,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
         cell.py.as_deref().map(|py| tag_state(&app.session, card.sheet, card.cell, py, &cell.value))
     });
     let printed = said.as_ref().filter(|d| d.kind.severity == Severity::Error).and_then(|_| last_printed(app, sh, card.cell));
+    let locked = app.session.locked_cell_message(card.sheet, card.cell);
+    let can_save = app.services.pick_save.is_some() || app.services.download.is_some();
+    let screen_size = ui.ctx().content_rect().size();
+    let wanted = if text.table.as_ref().is_some_and(|t| !t.is_empty()) { TABLE_CARD_WIDTH } else { CARD_WIDTH };
+    let width = wanted.min(screen_size.x - 32.0).max(200.0);
+    let mut action = None;
     let mut convert = false;
     let (at, pivot) = if geo.rtl { (screen.right_bottom(), Align2::RIGHT_TOP) } else { (screen.left_bottom(), Align2::LEFT_TOP) };
     let mut close = false;
@@ -261,7 +322,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
         .constrain_to(ui.ctx().content_rect());
     let resp = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(8.0).show(ui, |ui| {
-            ui.set_width(360.0);
+            ui.set_width(width);
             ui.horizontal(|ui| {
                 let (tag, _) = ui.allocate_exact_size(vec2(22.0, 15.0), egui::Sense::hover());
                 paint_tag(ui.painter(), tag, &t, state.unwrap_or(TagState::Ready));
@@ -287,13 +348,34 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
                     }
                 }
             }
-            if !text.body.is_empty() {
+            if text.run_to_see {
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(egui::RichText::new(lang.tr(RUN_TO_SEE)).font(theme::ui_font(12.5)).color(t.text)).wrap());
+                // What the catalog says comes first: Python may not be able to run yet.
+                if said.is_none() && ui.button(lang.tr("Run Again")).clicked() {
+                    action = Some(Action::Run);
+                }
+            }
+            if let Some(table) = &text.table {
+                ui.add_space(4.0);
+                show_table(ui, table, geo.rtl, screen_size.y, &t, lang);
+            } else if !text.body.is_empty() {
                 ui.add_space(4.0);
                 // A repr keeps its lines (a table's columns line up): it scrolls rather than wraps.
                 egui::ScrollArea::both().max_height(220.0).min_scrolled_height(160.0).auto_shrink([false, true]).show(ui, |ui| {
                     ui.add(egui::Label::new(egui::RichText::new(&text.body).font(crate::code_editor::font()).color(t.text)).extend());
                 });
             }
+            if let Some(on) = text.spill_lines {
+                ui.add_space(4.0);
+                let mut spill = on;
+                let check = ui.add_enabled(locked.is_none(), egui::Checkbox::new(&mut spill, lang.tr(SPILL_LINES)));
+                if check.changed() {
+                    action = Some(Action::SpillLines(spill));
+                }
+            }
+            ui.add_space(4.0);
+            action = result_buttons(ui, &text, locked.is_none(), can_save, lang).or(action);
             ui.add_space(6.0);
             convert = convert_button(ui, lang, refusal.as_deref(), true, vec2(0.0, 22.0));
         });
@@ -304,9 +386,158 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
     if convert {
         app.run_or_alert("python.clear", json!({"sheet": card.sheet, "cell": card.cell.a1()}));
     }
-    if convert || close || popup_dismissed(&resp.response, was_open) {
+    let spilled = action == Some(Action::SpillHere);
+    if let Some(action) = action {
+        act(app, ui.ctx(), card, action);
+    }
+    if convert || spilled || close || popup_dismissed(&resp.response, was_open) {
         app.grid.py_card = None;
         app.python.card_output = None;
+    }
+}
+
+/// What the card's buttons on a result ask for, done once the card is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Action {
+    Copy(&'static str),
+    Save,
+    SpillHere,
+    SpillLines(bool),
+    Run,
+}
+
+/// The table, what it has left out, or that it holds nothing.
+fn show_table(ui: &mut egui::Ui, table: &Arc<PyTable>, rtl: bool, screen_height: f32, t: &Tokens, lang: crate::i18n::Language) {
+    let dim = |ui: &mut egui::Ui, text: &str| {
+        ui.add(egui::Label::new(egui::RichText::new(text).font(theme::ui_font(12.0)).color(t.text_dim)).wrap());
+    };
+    if table.is_empty() {
+        dim(ui, lang.tr(NO_COLUMNS));
+        return;
+    }
+    table::grid(ui, table, t, rtl, (screen_height * 0.45).clamp(90.0, 260.0));
+    if table.rows == 0 {
+        dim(ui, lang.tr(NO_ROWS));
+    }
+    if let Some(note) = table::cut_note(lang, table) {
+        ui.add_space(4.0);
+        egui::Frame::new().fill(t.notice_warn_bg).stroke(Stroke::new(1.0, t.notice_warn_border)).corner_radius(3.0).inner_margin(6.0).show(
+            ui,
+            |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(egui::Label::new(egui::RichText::new(note).font(theme::ui_font(12.0)).color(t.text)).wrap());
+            },
+        );
+    }
+}
+
+/// Copy, Save and Spill Here, for a result that has them. Returns the one clicked.
+fn result_buttons(ui: &mut egui::Ui, text: &CardText, can_edit: bool, can_save: bool, lang: crate::i18n::Language) -> Option<Action> {
+    let has_cells = text.table.as_ref().is_some_and(|t| !t.is_empty());
+    if !has_cells && !text.spillable {
+        return None;
+    }
+    let mut action = None;
+    ui.horizontal_wrapped(|ui| {
+        if has_cells {
+            if ui.button(lang.tr(COPY_CSV)).clicked() {
+                action = Some(Action::Copy("csv"));
+            }
+            if ui.button(lang.tr(COPY_MARKDOWN)).clicked() {
+                action = Some(Action::Copy("markdown"));
+            }
+            if ui.add_enabled(can_save, egui::Button::new(lang.tr(SAVE_CSV))).clicked() {
+                action = Some(Action::Save);
+            }
+        }
+        if text.spillable && ui.add_enabled(can_edit, egui::Button::new(lang.tr(SPILL_HERE))).clicked() {
+            action = Some(Action::SpillHere);
+        }
+    });
+    action
+}
+
+fn act(app: &mut SheetApp, ctx: &egui::Context, card: Card, action: Action) {
+    let (sheet, cell) = (card.sheet, card.cell.a1());
+    match action {
+        Action::Copy(format) => copy_table(app, ctx, card, format),
+        Action::Save => save_table(app, json!({"sheet": sheet, "cell": cell})),
+        Action::SpillHere => app.run_or_alert("python.output", json!({"sheet": sheet, "cell": cell, "mode": "value"})),
+        Action::SpillLines(on) => {
+            let lines = if on { "rows" } else { "cell" };
+            app.run_or_alert("python.output", json!({"sheet": sheet, "cell": cell, "lines": lines}));
+        }
+        Action::Run => app.run_or_alert("python.run", json!({"sheet": sheet, "cell": cell})),
+    }
+}
+
+fn alert(app: &mut SheetApp, error: &str) {
+    app.message = Some(("GridCraft".into(), crate::clean_error(error)));
+}
+
+/// Puts the table on the clipboard. It is the bounded preview, and the person hears when that isn't
+/// all of it.
+fn copy_table(app: &mut SheetApp, ctx: &egui::Context, card: Card, format: &str) {
+    match app.run("python.table", json!({"sheet": card.sheet, "cell": card.cell.a1(), "format": format})) {
+        Ok(table) => {
+            ctx.copy_text(table["text"].as_str().unwrap_or_default().to_string());
+            let said = if table["cut"] == true { COPIED_CUT } else { "Copied to the clipboard." };
+            app.toast = Some((said.into(), crate::now_ms()));
+        }
+        Err(e) => alert(app, &e),
+    }
+}
+
+/// What the person hears after a copy or a save of a table that isn't all there.
+pub const COPIED_CUT: &str = "Copied only what is shown: the rest of the table isn't in the copy.";
+pub const SAVED_CUT: &str = "Saved only what is shown: the rest of the table isn't in the file.";
+pub const SAVED: &str = "The table is saved.";
+
+/// Asks where to save the table of the cell `at` names (`{sheet, cell}`), and saves it:
+/// `python.saveCsv` itself never asks. The native file picker on the desktop, a download on the web.
+/// Cancelling the picker does nothing.
+fn save_table(app: &mut SheetApp, at: Json) {
+    let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+    let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
+    let cell: String = at["cell"].as_str().unwrap_or_default().chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+    let name = format!("{stem}-{cell}.csv");
+    let with = |key: &str, value: &str| {
+        let mut params = at.clone();
+        params[key] = json!(value);
+        params
+    };
+    let done = if let Some(pick) = &app.services.pick_save {
+        let Some(path) = pick(&name) else { return };
+        app.run("python.saveCsv", with("path", &path))
+    } else if app.services.download.is_some() {
+        app.run("python.table", with("format", "csv")).inspect(|table| {
+            if let Some(download) = &app.services.download {
+                download(&name, table["text"].as_str().unwrap_or_default().as_bytes());
+            }
+        })
+    } else {
+        Err("Exporting needs a file picker, which this window doesn't have.".to_string())
+    };
+    match done {
+        Ok(saved) => app.toast = Some((if saved["cut"] == true { SAVED_CUT } else { SAVED }.into(), crate::now_ms())),
+        Err(e) => alert(app, &e),
+    }
+}
+
+/// `python.saveCsv` from a menu, with no path: it asks where, for the cell the parameters name or the
+/// active Python cell. Programmatic callers use `run`, which gets an error instead.
+pub(crate) fn save_with_picker(app: &mut SheetApp, params: &Json) {
+    let named = params.get("cell").is_some_and(Json::is_string);
+    match active_python_cell(app) {
+        _ if named => {
+            let mut at = json!({"cell": params["cell"]});
+            if let Some(sheet) = params.get("sheet") {
+                at["sheet"] = sheet.clone();
+            }
+            save_table(app, at);
+        }
+        Some((_, sheet, cell, _)) => save_table(app, json!({"sheet": sheet, "cell": cell.a1()})),
+        None => alert(app, "The active cell isn't a Python cell."),
     }
 }
 
@@ -389,6 +620,17 @@ pub fn switch_output(app: &mut SheetApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_label_names_a_table_with_or_without_its_size() {
+        for yes in ["DataFrame 6x4", "DataFrame", "Series 12", "list 12", "tuple 3", "ndarray 2x3", "ndarray 2x3x4", "ndarray"] {
+            assert!(names_a_table(yes), "{yes}");
+        }
+        for no in ["dict 3", "function", "set 2", "DataFrame 6x", "DataFrame x4", "DataFrame 6y4", "hello 12", "Data Frame 6x4", "", " ", "list  12"]
+        {
+            assert!(!names_a_table(no), "{no}");
+        }
+    }
 
     #[test]
     fn capped_text_stops_at_its_limits() {

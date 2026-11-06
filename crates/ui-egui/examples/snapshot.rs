@@ -14,16 +14,67 @@
 //!
 //! `--python` shows Python in that state with a fake worker and a made-up report, so no Python runs:
 //! a cell's code is `ret 1`, `print text`, `fail` (or any code with `raise` in it, failing on its
-//! second line), `denied`, `missing`, or `hang`. `shortLimit` has a time limit of a second.
+//! second line), `denied`, `missing`, `hang`, `frame ROWS COLS` (a DataFrame that big, whose table
+//! is cut as the real worker cuts it), `wide` (a table with very long cells), `dict` or `lines` (a
+//! text of three lines). `shortLimit` has a time limit of a second.
 
 use gridcraft_engine::python::{Interpreter, InterpreterKind, PythonSearch, Version};
 use gridcraft_engine::{FoundPython, PythonEnvironment, PythonState, Session};
 use gridcraft_python::fake::FakeTransport;
-use gridcraft_python::protocol::{Output, PyError, Reply, Request};
+use gridcraft_python::protocol::{MAX_TABLE_COLS, MAX_TABLE_ROWS, Output, PyError, Reply, Request, Table};
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// A made-up DataFrame, for pictures of the card.
+fn demo_frame(rows: u64, cols: u64) -> Output {
+    use gridcraft_engine::core::Value;
+    const NAMES: [&str; 5] = ["Region", "Units", "Price", "Margin", "Owner"];
+    const REGIONS: [&str; 4] = ["North", "East", "South", "West"];
+    let (shown_rows, shown_cols) = ((rows as usize).min(MAX_TABLE_ROWS), (cols as usize).min(MAX_TABLE_COLS));
+    let columns = (0..shown_cols).map(|c| NAMES.get(c).map_or_else(|| format!("Column {}", c + 1), |n| n.to_string())).collect();
+    let mut data = Vec::with_capacity(shown_rows * shown_cols);
+    for r in 0..shown_rows {
+        for c in 0..shown_cols {
+            data.push(match c {
+                0 => Value::text(REGIONS.get(r % 4).copied().unwrap_or_default()),
+                1 => Value::Number((r * 37 % 500) as f64),
+                2 => Value::Number(9.5 + r as f64 * 1.25),
+                3 => Value::Number(-0.05 + (r % 7) as f64 / 20.0),
+                4 => Value::text(if r % 3 == 0 { "Asha" } else { "Ben" }),
+                _ => Value::Number((r * c) as f64),
+            });
+        }
+    }
+    let table = Table { columns, rows: shown_rows, cols: shown_cols, data, total_rows: rows, total_cols: cols, ..Table::default() };
+    Output::Object { type_name: "DataFrame".into(), preview: "   Region  Units".into(), size: vec![rows, cols], table: Some(table) }
+}
+
+/// A made-up table with cells far wider than their columns.
+fn demo_wide() -> Output {
+    use gridcraft_engine::core::Value;
+    let long = "A note that goes on for much longer than any column in a card could ever show, ".repeat(8);
+    let data = vec![
+        Value::text(long.as_str()),
+        Value::Number(1.0),
+        Value::text("line one\nline two"),
+        Value::Bool(true),
+        Value::Error(gridcraft_engine::core::CellError::NA),
+        Value::Empty,
+    ];
+    let table = Table {
+        columns: vec!["Note".into(), long.clone()],
+        rows: 3,
+        cols: 2,
+        data,
+        total_rows: 3,
+        total_cols: 2,
+        text_cut: true,
+        ..Table::default()
+    };
+    Output::Object { type_name: "DataFrame".into(), preview: String::new(), size: vec![3, 2], table: Some(table) }
+}
 
 /// The fake worker's cells.
 fn fake_worker() -> FakeTransport {
@@ -44,9 +95,18 @@ fn fake_worker() -> FakeTransport {
                 subject: subject.map(str::to_string),
                 line,
             };
+            let frame = code.strip_prefix("frame ").and_then(|size| size.split_once(' ')).and_then(|(r, c)| Some((r.parse().ok()?, c.parse().ok()?)));
             let sent = if code == "hang" {
                 w.stall();
                 false
+            } else if let Some((rows, cols)) = frame {
+                w.done(id, Ok(demo_frame(rows, cols)))
+            } else if code == "wide" {
+                w.done(id, Ok(demo_wide()))
+            } else if code == "dict" {
+                w.done(id, Ok(Output::Object { type_name: "dict".into(), preview: "{'a': 1, 'b': 2, 'c': 3}".into(), size: vec![3], table: None }))
+            } else if code == "lines" {
+                w.done(id, Ok(Output::Value(gridcraft_engine::core::Value::text("First line\nSecond line\nThird line"))))
             } else if code == "fail" || code.contains("raise") {
                 w.done(id, Err(PyError { message: "ValueError: the input has no rows".into(), line: Some(2), ..PyError::default() }))
             } else if code == "denied" {

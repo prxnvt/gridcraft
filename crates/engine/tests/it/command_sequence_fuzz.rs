@@ -41,6 +41,7 @@ use gridcraft_engine::calc::Calc;
 use gridcraft_engine::model::{CalcMode, Formula, Sheet, SheetViewMode, Workbook};
 use gridcraft_engine::{EngineError, PythonCapability, Session, command_specs, find_command, io, python_order};
 use gridcraft_python::fake::FakeTransport;
+use gridcraft_python::protocol::Table;
 use gridcraft_python::{Input, Output, PyError};
 use serde_json::{Value as Json, json};
 
@@ -62,6 +63,7 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("file.saveAs", "writes files"),
     ("file.exportCsv", "writes files"),
     ("file.exportHtml", "writes files"),
+    ("python.saveCsv", "writes files"),
     ("file.exportPdf", "renders a PDF: slow, and may write files"),
     ("file.print", "renders a PDF: slow"),
     ("window.activate", "switches documents"),
@@ -84,6 +86,7 @@ const PYTHON_RUNS: &[&str] = &[
     "python.runLog",
     "python.clearRunLog",
     "python.refreshEnvironment",
+    "python.table",
 ];
 
 // ---------------------------------------------------------------- deterministic randomness
@@ -933,7 +936,14 @@ fn fake_answer(code: &str, inputs: &BTreeMap<String, Input>) -> Result<Output, P
         return Ok(Output::Value(Value::Empty));
     }
     if code.chars().filter(|c| *c == '\n').count() == 2 {
-        return Ok(Output::Object { type_name: "dict".into(), preview: "{}".into() });
+        return Ok(Output::object("dict", "{}"));
+    }
+    if code.chars().filter(|c| *c == '\n').count() == 1 {
+        return Ok(Output::Value(Value::text("one\ntwo\nthree")));
+    }
+    if code.chars().filter(|c| *c == '\n').count() == 3 {
+        let table = Table { rows: 1, cols: 1, data: vec![Value::Number(1.0)], total_rows: 9, total_cols: 1, ..Table::default() };
+        return Ok(Output::Object { type_name: "DataFrame".into(), preview: "df".into(), size: vec![9, 1], table: Some(table) });
     }
     let spelled: usize = gridcraft_engine::model::python::xl_calls(code).iter().filter_map(|c| c.span.as_ref()).map(|s| s.len()).sum();
     Ok(Output::Value(Value::Number((code.len().saturating_sub(spelled) + inputs.len()) as f64)))
@@ -956,7 +966,10 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
         "python.set" => {
             // Code with xl() references (which follow structural edits), quotes and line breaks;
             // sometimes long enough to meet the formula limit.
-            let mut code = match rng.below(5) {
+            let mut code = match rng.below(7) {
+                // What `fake_answer` makes a text with line breaks of, and a table of.
+                5 => "s = 'text'\ns".to_string(),
+                6 => "a = 1\nb = 2\nc = 3\nframe".to_string(),
                 0 => format!("xl(\"{}\") + 1", near_range(rng).a1()),
                 1 => format!("a = xl('{}')\nb = \"q\\\"uote\"\na", near_cell(rng).a1()),
                 2 => "[[1, 2], [3, 4]]".to_string(),
@@ -977,6 +990,9 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
             let mut p = json!({"cell": near_cell(rng).a1()});
             if rng.chance(50) {
                 p["mode"] = json!(if rng.chance(50) { "object" } else { "value" });
+            }
+            if rng.chance(30) {
+                p["lines"] = json!(if rng.chance(70) { "rows" } else { "cell" });
             }
             p
         }

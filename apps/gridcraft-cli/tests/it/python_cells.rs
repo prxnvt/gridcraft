@@ -242,7 +242,7 @@ fn an_object_shows_its_type_with_its_preview_for_the_card() {
     s.execute("python.set", json!({"cell": "A1", "code": "{'a': 1}", "output": "object"})).unwrap();
     py(&mut s, "A2", "def f():\n    pass\nf");
     settle(&mut s);
-    assert_eq!(v(&s, "A1"), Value::text("dict"));
+    assert_eq!(v(&s, "A1"), Value::text("dict 1"));
     let got = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
     assert_eq!((got["python"]["typeName"].as_str(), got["python"]["preview"].as_str()), (Some("dict"), Some("{'a': 1}")));
     assert_eq!(v(&s, "A2"), Value::text("function"), "no cell form, even as an Excel value");
@@ -275,11 +275,99 @@ fn a_dataframe_result_spills_with_its_header_row() {
     assert_eq!((v(&s, "A2"), v(&s, "B2")), (num(1.0), num(3.5)));
     assert_eq!((v(&s, "A3"), v(&s, "B3")), (num(2.0), num(4.5)));
     assert_eq!(v(&s, "A4"), Value::Empty);
-    // As an object it stays in one cell.
+    // As an object it stays in one cell, with its size.
     s.execute("python.output", json!({"cell": "A1", "mode": "object"})).unwrap();
     settle(&mut s);
-    assert_eq!(v(&s, "A1"), Value::text("DataFrame"));
+    assert_eq!(v(&s, "A1"), Value::text("DataFrame 2x2"));
     assert_eq!(v(&s, "A2"), Value::Empty);
+}
+
+fn object_cell(s: &mut Session, cell: &str, code: &str) {
+    s.execute("python.set", json!({"cell": cell, "code": code, "output": "object"})).unwrap();
+}
+
+#[test]
+fn a_python_object_says_what_it_is_and_a_list_of_rows_gives_its_table() {
+    let Some(mut s) = session() else { return };
+    object_cell(&mut s, "A1", "[[1, 'a'], [2, '=b']]");
+    object_cell(&mut s, "A2", "list(range(12))");
+    object_cell(&mut s, "A3", "{'a': 1, 'b': 2, 'c': 3}");
+    object_cell(&mut s, "A4", "object()");
+    object_cell(&mut s, "A5", "[[r, c] for r in range(500) for c in range(1)]");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("list 2"));
+    assert_eq!(v(&s, "A2"), Value::text("list 12"));
+    assert_eq!(v(&s, "A3"), Value::text("dict 3"));
+    assert_eq!(v(&s, "A4"), Value::text("object"));
+    assert_eq!(v(&s, "A5"), Value::text("list 500"));
+    assert_eq!(kind(&s, "A1"), None);
+
+    let t = s.execute("python.table", json!({"cell": "A1", "format": "csv"})).unwrap();
+    assert_eq!(t["text"], "1,a\r\n2,\"'=b\"\r\n");
+    assert_eq!(t["cut"], false);
+    assert!(s.execute("python.table", json!({"cell": "A2"})).is_err(), "a flat list has no table");
+
+    // A table bigger than the preview: the file says what the answer says.
+    let dir = std::env::temp_dir().join(format!("gridcraft-python-table-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("cut.csv");
+    let r = s.execute("python.saveCsv", json!({"cell": "A5", "path": path})).unwrap();
+    assert_eq!((r["cut"].as_bool(), r["rows"].as_u64(), r["totalRows"].as_u64()), (Some(true), Some(200), Some(500)));
+    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 200);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_text_with_line_breaks_stays_in_its_cell_until_it_is_asked_to_spill() {
+    let Some(mut s) = session() else { return };
+    py(&mut s, "A1", "'first\\nsecond\\r\\nthird\\n'");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("first\nsecond\r\nthird\n"));
+    assert_eq!(v(&s, "A2"), Value::Empty);
+    s.execute("python.output", json!({"cell": "A1", "lines": "rows"})).unwrap();
+    assert_eq!(
+        (v(&s, "A1"), v(&s, "A2"), v(&s, "A3"), v(&s, "A4")),
+        (Value::text("first"), Value::text("second"), Value::text("third"), Value::Empty)
+    );
+    // It lasts through another run.
+    s.execute("python.run", json!({"cell": "A1"})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "A3"), Value::text("third"));
+}
+
+#[test]
+fn pandas_and_numpy_objects_show_their_size_and_their_table_on_the_card() {
+    let Some(mut s) = pandas_session() else { return };
+    s.execute("range.setValues", json!({"range": "A1", "values": [["name", "score"], ["a", 1], ["b", 2], ["c", 4]]})).unwrap();
+    object_cell(&mut s, "D1", "xl(\"A1:B4\", headers=True)");
+    object_cell(&mut s, "D2", "xl(\"A1:B4\", headers=True)[\"score\"]");
+    object_cell(&mut s, "D3", "np.arange(6).reshape(2, 3)");
+    object_cell(&mut s, "D4", "pd.DataFrame(np.zeros((1000, 50)))");
+    settle(&mut s);
+    assert_eq!(v(&s, "D1"), Value::text("DataFrame 3x2"));
+    assert_eq!(v(&s, "D2"), Value::text("Series 3"));
+    assert_eq!(v(&s, "D3"), Value::text("ndarray 2x3"));
+    assert_eq!(v(&s, "D4"), Value::text("DataFrame 1000x50"));
+
+    let t = s.execute("python.table", json!({"cell": "D1", "format": "csv"})).unwrap();
+    assert_eq!(t["text"], "name,score\r\na,1\r\nb,2\r\nc,4\r\n");
+    let md = s.execute("python.table", json!({"cell": "D1", "format": "markdown"})).unwrap();
+    assert_eq!(md["text"], "| name | score |\n| --- | --- |\n| a | 1 |\n| b | 2 |\n| c | 4 |\n");
+    let series = s.execute("python.table", json!({"cell": "D2"})).unwrap();
+    assert_eq!(series["columns"], json!(["score"]));
+    let big = s.execute("python.table", json!({"cell": "D4"})).unwrap();
+    assert_eq!((big["rows"].as_u64(), big["cols"].as_u64(), big["cut"].as_bool()), (Some(200), Some(30), Some(true)));
+
+    // Spill Here gives the whole table, as a cell's value is the whole of it.
+    s.execute("python.output", json!({"cell": "D4", "mode": "value"})).unwrap();
+    settle(&mut s);
+    assert_eq!(s.execute("cell.get", json!({"cell": "D4"})).unwrap()["spill"], "D4:BA1004");
+    // It doesn't change a thing about what a file keeps: only the name and its size.
+    let bytes = gridcraft_engine::io::save_bytes(&s.doc().unwrap().wb, "o.xlsx").unwrap();
+    let (back, _) = gridcraft_engine::io::open_bytes("o.xlsx", &bytes).unwrap();
+    let sheet = back.sheet(0).unwrap();
+    assert_eq!(sheet.value(CellRef::parse("D1").unwrap()), Value::text("DataFrame 3x2"));
+    assert_eq!(sheet.cell(CellRef::parse("D1").unwrap()).and_then(|c| c.py.as_ref()).and_then(|p| p.output.as_ref()), None);
 }
 
 #[test]

@@ -47,16 +47,29 @@ pub(super) fn converted(dated: Dated, sys: DateSystem) -> (PyOutput, ResultDates
                 *slot = number(*stamp);
             }
         }
-        let output = PyOutput { value, type_name: "list".into(), preview: format!("{rows} rows, {cols} columns"), convertible: true };
+        let output =
+            PyOutput { value, type_name: "list".into(), preview: format!("{rows} rows, {cols} columns"), convertible: true, ..Default::default() };
         return (output, kinds_by_column(&stamps, sys, cols));
     }
     match stamps.first() {
         Some((_, stamp)) => (
-            PyOutput { value: number(*stamp), type_name: stamp.type_name().into(), preview: stamp.preview(), convertible: true },
+            PyOutput {
+                value: number(*stamp),
+                type_name: stamp.type_name().into(),
+                preview: stamp.preview(),
+                convertible: true,
+                ..Default::default()
+            },
             stamps.iter().filter_map(|(at, stamp)| Some((*at, kind_of(*stamp, sys)?))).collect(),
         ),
         None => (
-            PyOutput { value: Value::Error(CellError::Value), type_name: "error".into(), preview: String::new(), convertible: true },
+            PyOutput {
+                value: Value::Error(CellError::Value),
+                type_name: "error".into(),
+                preview: String::new(),
+                convertible: true,
+                ..Default::default()
+            },
             ResultDates::default(),
         ),
     }

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use gridcraft_core::{Array, CellError, Value};
 use gridcraft_python::interp::{self, Detection, SearchEnv};
 use gridcraft_python::process::ProcessTransport;
+use gridcraft_python::protocol::{MAX_PREVIEW_CHARS, MAX_TABLE_BYTES, MAX_TABLE_COLS, MAX_TABLE_ROWS, MAX_TABLE_TEXT_BYTES, Table};
 use gridcraft_python::{Client, Clock, Dated, Day, Input, Limits, Outcome, Output, PyError, RunResult, SelfTest, Stamp, Transport};
 
 fn python() -> Option<PathBuf> {
@@ -69,7 +70,7 @@ fn values_and_errors() {
     assert_eq!(value(run(&mut c, "[1, 2, 3]")), array(3, 1, vec![1.0.into(), 2.0.into(), 3.0.into()]), "a flat list is a column");
     assert_eq!(value(run(&mut c, "[]")), Value::Error(CellError::Calc));
     match run(&mut c, "{'a': 1}") {
-        Outcome::Ok { output: Output::Object { type_name, preview }, .. } => {
+        Outcome::Ok { output: Output::Object { type_name, preview, .. }, .. } => {
             assert_eq!(type_name, "dict");
             assert_eq!(preview, "{'a': 1}");
         }
@@ -387,7 +388,8 @@ fn the_return_type_decides_between_cells_and_an_object() {
     };
     assert_eq!((a.rows, a.cols), (2, 1));
     let id = c.submit_cell("[1, 2]", BTreeMap::new(), true).unwrap();
-    let Some(RunResult { outcome: Outcome::Ok { output: Output::Object { type_name, preview }, .. }, .. }) = c.wait().filter(|r| r.id == id) else {
+    let Some(RunResult { outcome: Outcome::Ok { output: Output::Object { type_name, preview, .. }, .. }, .. }) = c.wait().filter(|r| r.id == id)
+    else {
         panic!("object")
     };
     assert_eq!((type_name.as_str(), preview.as_str()), ("list", "[1, 2]"));
@@ -749,4 +751,217 @@ fn a_range_of_dates_survives_a_pandas_it_cannot_ask() {
     )]);
     assert_eq!(value(c.run("xl('A1:A1').rows[0][0].isoformat()", inputs).unwrap()), Value::text("2024-01-15"));
     std::fs::remove_dir_all(site).unwrap();
+}
+
+/// What a Python Object cell gets: the object's name, its size and its table.
+fn object(c: &mut Client, code: &str) -> (String, Vec<u64>, Option<Table>) {
+    let id = c.submit_cell(code, BTreeMap::new(), true).unwrap();
+    match c.wait().filter(|r| r.id == id).map(|r| r.outcome) {
+        Some(Outcome::Ok { output: Output::Object { type_name, size, table, .. }, .. }) => (type_name, size, table),
+        other => panic!("{code}: {other:?}"),
+    }
+}
+
+#[test]
+fn a_python_object_says_its_size() {
+    let Some(p) = python() else { return };
+    let mut c = client(p);
+    for (code, name, size) in [
+        ("list(range(12))", "list", vec![12]),
+        ("[]", "list", vec![0]),
+        ("(1, 2, 3)", "tuple", vec![3]),
+        ("{'a': 1, 'b': 2, 'c': 3}", "dict", vec![3]),
+        ("{1, 2}", "set", vec![2]),
+        ("frozenset()", "frozenset", vec![0]),
+        // A subclass names itself.
+        ("class Rows(list): pass\nRows([1, 2])", "Rows", vec![2]),
+        // Other objects show their type's name alone.
+        ("object()", "object", vec![]),
+        ("range(5)", "range", vec![]),
+        ("def f(): pass\nf", "function", vec![]),
+        // An object that lies, or raises, about its length still gets a result.
+        ("class Rows(list):\n    def __len__(self): raise RuntimeError('no')\nRows([1])", "Rows", vec![]),
+        ("class Rows(list):\n    def __len__(self): return 2 ** 60\nRows([1])", "Rows", vec![]),
+        ("class Rows(list):\n    def __len__(self): raise SystemExit(3)\nRows([1])", "Rows", vec![]),
+    ] {
+        let got = object(&mut c, code);
+        assert_eq!((got.0.as_str(), &got.1), (name, &size), "{code}");
+    }
+    // The cell still gets a worker after all that.
+    assert_eq!(value(run(&mut c, "1 + 1")), Value::Number(2.0));
+}
+
+#[test]
+fn a_list_of_rows_gives_a_table_and_a_flat_list_none() {
+    let Some(p) = python() else { return };
+    let mut c = client(p);
+    assert_eq!(object(&mut c, "[1, 2, 3]").2, None, "a flat list");
+    assert_eq!(object(&mut c, "[]").2, None);
+    assert_eq!(object(&mut c, "[[1], 2]").2, None, "not all rows");
+    assert_eq!(object(&mut c, "{'a': [1]}").2, None, "a dict isn't one");
+
+    let table = object(&mut c, "[[1, 'a', True], [None, 2.5]]").2.unwrap();
+    assert_eq!((table.rows, table.cols, table.total_rows, table.total_cols), (2, 3, 2, 3));
+    assert!(table.columns.is_empty() && !table.row_labels && !table.text_cut);
+    assert_eq!(
+        table.data,
+        vec![1.0.into(), Value::text("a"), Value::Bool(true), Value::Empty, 2.5.into(), Value::Error(CellError::NA)],
+        "a short row is padded as a spill is"
+    );
+    // No columns at all.
+    let empty = object(&mut c, "[[], []]").2.unwrap();
+    assert_eq!((empty.cols, empty.data.len()), (0, 0));
+
+    // A list whose methods fail has no table, and still its result.
+    assert_eq!(object(&mut c, "class Rows(list):\n    def __getitem__(self, i): raise SystemExit(4)\nRows([[1]])").2, None);
+    // In an Excel value cell a dict has neither size nor table.
+    let id = c.submit_cell("{'a': 1}", BTreeMap::new(), false).unwrap();
+    match c.wait().filter(|r| r.id == id).map(|r| r.outcome) {
+        Some(Outcome::Ok { output: Output::Object { size, table, .. }, .. }) => assert!(size.is_empty() && table.is_none()),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_table_past_a_cap_is_cut_and_says_so() {
+    let Some(p) = python() else { return };
+    let mut c = client(p);
+    // Rows and columns alike.
+    let big = object(&mut c, "[[r * 1000 + c for c in range(40)] for r in range(500)]").2.unwrap();
+    assert_eq!((big.rows, big.cols, big.total_rows, big.total_cols), (MAX_TABLE_ROWS, MAX_TABLE_COLS, 500, 40));
+    assert_eq!(big.data.len(), MAX_TABLE_ROWS * MAX_TABLE_COLS);
+    assert_eq!(big.data.last(), Some(&Value::Number(199_029.0)));
+    assert!(!big.text_cut);
+
+    // A long text is cut in its cell, on a character's edge.
+    let long = object(&mut c, "[['é' * 100000, 'short']]").2.unwrap();
+    assert!(long.text_cut);
+    let Value::Text(first) = &long.data[0] else { panic!("{:?}", long.data[0]) };
+    assert_eq!(first.len(), MAX_TABLE_TEXT_BYTES);
+    assert_eq!(long.data[1], Value::text("short"));
+
+    // The budget in bytes stops the rows, however many fit by count, and the line stays good.
+    let wide = object(&mut c, "[['x' * 4000 for _ in range(30)] for _ in range(200)]").2.unwrap();
+    assert!(wide.rows < MAX_TABLE_ROWS && wide.rows > 0, "{}", wide.rows);
+    assert_eq!((wide.total_rows, wide.cols), (200, 30));
+    assert!(wide.data.len() * 4000 <= MAX_TABLE_BYTES);
+    // JSON escapes count against it too: a text of quotes takes twice the room on the wire.
+    let quoted = object(&mut c, "[['\"' * 4000 for _ in range(30)] for _ in range(200)]").2.unwrap();
+    assert!(quoted.rows < wide.rows, "{} {}", quoted.rows, wide.rows);
+}
+
+#[test]
+fn a_cell_that_isnt_a_scalar_is_its_repr_whatever_that_does() {
+    let Some(p) = python() else { return };
+    let mut c = client(p);
+    let odd =
+        object(&mut c, "class Bad:\n    def __repr__(self): raise SystemExit(1)\n[[list(range(10000)), {'k': 1}, Bad(), float('nan'), 10 ** 400]]")
+            .2
+            .unwrap();
+    assert!(odd.text_cut);
+    assert!(matches!(&odd.data[0], Value::Text(t) if t.starts_with("[0, 1, 2") && t.chars().count() == MAX_PREVIEW_CHARS));
+    assert_eq!(odd.data[1], Value::text("{'k': 1}"));
+    assert_eq!(odd.data[2], Value::text("<Bad object>"));
+    assert_eq!(odd.data[3], Value::Error(CellError::Num));
+    assert_eq!(odd.data[4], Value::Error(CellError::Num));
+}
+
+/// A client on `GRIDCRAFT_TEST_PYTHON` with pandas and numpy imported.
+fn client_with_imports() -> Option<Client> {
+    let mut c = client_with_pandas()?;
+    assert_eq!(value(run(&mut c, "import numpy, pandas\n1")), Value::Number(1.0));
+    Some(c)
+}
+
+#[test]
+fn a_dataframe_has_its_shape_and_its_table() {
+    let Some(mut c) = client_with_imports() else { return };
+    let (name, size, table) = object(&mut c, "pandas.DataFrame({'x': [1, 2, None], 'y': ['a', 'b', 'c'], 'z': [True, False, True]})");
+    assert_eq!((name.as_str(), size), ("DataFrame", vec![3, 3]));
+    let table = table.unwrap();
+    assert_eq!(table.columns, ["x", "y", "z"]);
+    assert!(!table.row_labels);
+    assert_eq!(table.data[6], Value::Empty, "a missing value is an empty cell");
+    assert_eq!(table.data[1], Value::text("a"));
+
+    // Row labels unless they are 0, 1, 2..., in the first column, and not counted as a column.
+    let (_, size, table) = object(&mut c, "pandas.DataFrame({'x': [1, 2]}, index=pandas.Index(['p', 'q'], name='key'))");
+    assert_eq!(size, vec![2, 1]);
+    let table = table.unwrap();
+    assert!(table.row_labels);
+    assert_eq!((table.columns.as_slice(), table.cols, table.total_cols), (["key".to_string(), "x".to_string()].as_slice(), 2, 1));
+    assert_eq!(table.data, vec![Value::text("p"), 1.0.into(), Value::text("q"), 2.0.into()]);
+
+    // Big ones are cut, with their label column inside the 30, without being read whole.
+    let (_, size, table) = object(&mut c, "pandas.DataFrame(numpy.zeros((300000, 50))).set_index(pandas.RangeIndex(1, 300001))");
+    assert_eq!(size, vec![300_000, 50]);
+    let table = table.unwrap();
+    assert_eq!((table.rows, table.cols, table.total_rows, table.total_cols), (MAX_TABLE_ROWS, MAX_TABLE_COLS, 300_000, 50));
+    assert!(table.row_labels);
+}
+
+#[test]
+fn a_dataframe_that_is_empty_or_odd_has_its_table_too() {
+    let Some(mut c) = client_with_imports() else { return };
+    let (_, size, table) = object(&mut c, "pandas.DataFrame()");
+    assert_eq!(size, vec![0, 0]);
+    assert_eq!(table.unwrap().cols, 0);
+    let (_, size, table) = object(&mut c, "pandas.DataFrame(columns=['a', 'b'])");
+    assert_eq!(size, vec![0, 2]);
+    let table = table.unwrap();
+    assert_eq!((table.rows, table.columns.len()), (0, 2));
+
+    // Dates in a table are their text, and missing ones empty.
+    let (_, _, table) = object(&mut c, "pandas.DataFrame({'when': pandas.to_datetime(['2024-01-15', None, '2024-01-16 10:30'], format='ISO8601')})");
+    assert_eq!(table.unwrap().data, vec![Value::text("2024-01-15"), Value::Empty, Value::text("2024-01-16 10:30:00")]);
+
+    // A column of objects, a MultiIndex, and duplicate names.
+    let (_, _, table) = object(&mut c, "pandas.DataFrame({'x': [[1, 2]]})");
+    assert_eq!(table.unwrap().data, vec![Value::text("[1, 2]")]);
+    let (_, size, table) = object(&mut c, "pandas.DataFrame([[1, 2]], columns=pandas.MultiIndex.from_tuples([('a', 'b'), ('a', 'c')]))");
+    assert_eq!(size, vec![1, 2]);
+    assert_eq!(table.unwrap().columns, ["('a', 'b')", "('a', 'c')"]);
+    let (_, _, table) = object(&mut c, "pandas.DataFrame([[1, 2]], columns=['a', 'a'])");
+    assert_eq!(table.unwrap().columns, ["a", "a"]);
+    // A subclass of a table is a table.
+    let (name, size, table) = object(&mut c, "class Mine(pandas.DataFrame): pass\nMine({'x': [1]})");
+    assert_eq!((name.as_str(), size), ("Mine", vec![1, 1]));
+    assert!(table.is_some());
+}
+
+#[test]
+fn a_series_has_its_length_and_its_table() {
+    let Some(mut c) = client_with_imports() else { return };
+    let (name, size, table) = object(&mut c, "pandas.Series(range(12))");
+    assert_eq!((name.as_str(), size), ("Series", vec![12]));
+    let table = table.unwrap();
+    assert!(table.columns.is_empty() && !table.row_labels);
+    assert_eq!((table.rows, table.cols), (12, 1));
+    let (_, _, table) = object(&mut c, "pandas.Series([1.5, None], index=['p', 'q'], name='v')");
+    let table = table.unwrap();
+    assert!(table.row_labels);
+    assert_eq!(table.columns, ["", "v"]);
+    assert_eq!(table.data, vec![Value::text("p"), 1.5.into(), Value::text("q"), Value::Empty]);
+    assert_eq!((table.cols, table.total_cols), (2, 1));
+}
+
+#[test]
+fn an_array_has_its_shape_and_at_two_dimensions_its_table() {
+    let Some(mut c) = client_with_imports() else { return };
+    let (name, size, table) = object(&mut c, "numpy.arange(6).reshape(2, 3)");
+    assert_eq!((name.as_str(), size), ("ndarray", vec![2, 3]));
+    assert_eq!(table.unwrap().data, vec![0.0.into(), 1.0.into(), 2.0.into(), 3.0.into(), 4.0.into(), 5.0.into()]);
+    let (_, size, table) = object(&mut c, "numpy.arange(12)");
+    assert_eq!((size, table), (vec![12], None));
+    let (_, size, table) = object(&mut c, "numpy.zeros((2, 3, 4))");
+    assert_eq!((size, table), (vec![2, 3, 4], None));
+    let (_, size, _) = object(&mut c, "numpy.zeros((1,) * 9)");
+    assert!(size.is_empty(), "more dimensions than a size holds");
+    let (_, _, table) = object(&mut c, "numpy.array([['2024-01-15']], dtype='datetime64[D]')");
+    assert_eq!(table.unwrap().data, vec![Value::text("2024-01-15")]);
+    let (_, _, table) = object(&mut c, "numpy.array([[float('nan')]])");
+    assert_eq!(table.unwrap().data, vec![Value::Error(CellError::Num)], "as a spill has it");
+    let (name, size, table) = object(&mut c, "numpy.matrix([[1, 2]])");
+    assert_eq!((name.as_str(), size), ("matrix", vec![1, 2]));
+    assert!(table.is_some());
 }

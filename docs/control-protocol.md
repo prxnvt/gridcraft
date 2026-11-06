@@ -167,10 +167,10 @@ GridCraft accepts the existing `file.print` sheet/pagination params on `ui.print
 
 ## Python cells
 
-`engine.execute` reaches the `python.*` commands: `python.set`, `python.run`, `python.runAll`,
-`python.stop`, `python.reset`, `python.initialization`, `python.calculation`, `python.diagnostics`,
-`python.runLog`, `python.clearRunLog`, `python.environment` and `python.refreshEnvironment`. None opens
-a dialog.
+`engine.execute` reaches the `python.*` commands: `python.set`, `python.output`, `python.run`,
+`python.runAll`, `python.stop`, `python.reset`, `python.initialization`, `python.calculation`,
+`python.table`, `python.saveCsv`, `python.diagnostics`, `python.runLog`, `python.clearRunLog`,
+`python.environment` and `python.refreshEnvironment`. None opens a dialog.
 
 Python runs only after a person turned it on in File › Options › Python, and a workbook from a file
 only after a person enabled it. Nothing here can do either, or choose the interpreter or the limits:
@@ -190,6 +190,25 @@ doesn't run. `diagnostic` is the `init.failed` every cell shows when it failed, 
 `python.diagnostics` lists it, and `init.skipped` with the module as `detail` and the name to install as
 `install`, once each with `initialization: true` and no `cell`. In `python.runLog` a run of it has
 `initialization: true` and no `sheet` or `cell`.
+
+A Python Object cell's value names the object and its size (`DataFrame 6x4`), and `cell.get` has the
+`python.typeName` (`DataFrame`) and, for a table-like object, `python.table`, a summary as below.
+`python.table {cell?, sheet?, format?: json|csv|markdown}` gives the table the cell keeps from its last
+run: `{cell, rows, cols, totalRows, totalCols, rowLabels, textCut, cut}` with `{columns, data}` for
+`json` (the default), and `{text}` for `csv` or `markdown`. It holds at most 200 rows, 30 columns and
+1 MiB of text. `totalCols` doesn't count the row labels, and `cut` is true when anything of the object
+isn't there. A cell with no table is an error: a flat list and a dict have none, and a file doesn't keep
+one, so a cell opened from a file must run first.
+
+`python.saveCsv {cell?, sheet?, path}` writes that table's CSV, adding `.csv` to a path without it, and
+replies `{cell, path, bytes, rows, cols, totalRows, totalCols, rowLabels, textCut, cut}`. Without a path
+it is an error. A macro step needs the macro's permission, as for the other commands that write a file,
+and a script can't write files.
+
+`python.output {cell?, mode?, lines?: cell|rows}` also says what a text result with line breaks does: it
+stays in the cell (`cell`, the default) or spills one line per row (`rows`), with no run. With `lines` and
+no `mode` the return type stays. `cell.get` reports it as `python.lines`. GridCraft JSON keeps it; an xlsx
+file doesn't.
 
 `ui.pythonInitialization {on?, force?}` opens the Python editor window on that code, and closes it; it
 replies as `ui.pythonEditor` does, with `initialization: true`, `title: "Initialization"` and no `sheet`
