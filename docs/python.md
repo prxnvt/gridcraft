@@ -62,7 +62,8 @@ Cells can:
 
 - read cells through `xl("A1:B5")`, with the reference written as text in the code;
 - import the packages installed in that Python;
-- compute, print (the output is kept in the Run Log) and use threads.
+- compute, print (the output is kept in the Run Log) and use threads;
+- draw plots with `matplotlib` and `seaborn`, and give any other picture. See [Plots and pictures](#plots-and-pictures).
 
 Cells can't:
 
@@ -70,9 +71,7 @@ Cells can't:
 - use the network;
 - start other programs;
 - see your environment variables;
-- open windows, or ask for input;
-- draw plots. Python cells don't draw plots: the data goes to a sheet and a chart is built from it,
-  so `matplotlib` and `seaborn` are not supported.
+- open windows, or ask for input. `plt.show()` does nothing, and the plot appears in the cell anyway.
 
 Cells run in row order, sheet by sheet in tab order, as in Excel, and share one set of variables.
 **Reset** clears them and runs every cell again. Each time Python starts, GridCraft first tries to
@@ -163,6 +162,82 @@ starts no extra line. It is one undo step, and it stays with the cell when its c
 JSON file keeps it. An xlsx file has no place for it, so there it lasts until the workbook closes: the
 file keeps the cells it showed, and when the cell next runs, the text goes back into one cell.
 
+## Plots and pictures
+
+`plt` and `sns` work without an import, and `import matplotlib.pyplot` and `import seaborn` work.
+Both need the packages in your Python, which the commands above install. Any picture counts as a
+result: a matplotlib figure, a seaborn plot, a pandas plot, a PIL image, or any other object with
+`_repr_png_` or `_repr_jpeg_`. A package that draws in a web browser (plotly, bokeh, altair) has no
+picture to give, and the editor says so.
+
+**Which result is a picture.** At the end of a cell:
+
+1. If the last expression can give a picture, the cell's result is that picture. This covers what a
+   plot call returns: a line, a list of lines, the tuple `plt.hist` gives, an array of axes, a seaborn
+   grid.
+2. If the last expression gives nothing, and the cell changed pyplot's current figure, the result is
+   that figure. This covers an assignment, such as `pairplot = sns.pairplot(df)`, and `plt.show()`.
+3. Otherwise the result is the ordinary value. A number or a table comes before an open figure.
+
+One cell gives one picture. An object that can only give SVG or HTML stays an ordinary Python object.
+
+**How it shows.** The cell says `Image`, and its card shows the picture and its size. The Python Output
+menu in the formula bar, or Ctrl+Alt+Shift+M, switches between the two return types:
+
+- **Python Object:** the cell says `Image`. This is what a picture does until you choose.
+- **Excel Value:** the picture is drawn inside the cell, so the cell's size limits it.
+
+A new cell is an Excel Value, so that tables spill. A picture in a cell where nobody chose a type
+behaves as a Python Object, and if the code later gives a table, the table spills.
+
+**Display Plot over Cells** (Ctrl+Alt+Shift+C, on the cell's menu, the card and the Python tab) places a
+floating picture you can move and resize. It stays tied to its cell:
+
+- When the cell gives a new picture, the floating picture shows it.
+- Copy and paste it, or cut and paste it, anywhere in the workbook, or use **Create Reference** beside the
+  selected picture: every copy stays tied to the same cell. A floating object can't be pasted into
+  another workbook. To take a picture elsewhere, use Copy Image or Save Image on the card.
+- The tie follows the cell when rows and columns are inserted, when the cell is cut and pasted, and when
+  its sheet is renamed.
+
+**When the pictures go.** A floating picture goes when its cell can no longer give one: when the cell is
+cleared, or a value or formula replaces its code, when its row, column or sheet is deleted, or when a run
+of its code finishes with something that isn't a picture. Undo brings the code or the cell back, with its
+result and every picture, in one step.
+
+A run that doesn't finish deletes nothing. An error, a limit, Stop, or a lost worker leaves the picture
+with its last image and a mark, so a typing error doesn't destroy a picture you placed. The mark says which
+cell has the problem, and it goes when the cell gives a picture again.
+
+**Resizing.** If the code didn't choose the figure's size, resizing its picture draws the figure again at
+the new shape, without running the cell: text keeps its size, and the plot areas stretch. Each copy has
+its own shape. With Excel Value, such a figure fills its cell. Below half its natural size it stops being
+drawn again, and the picture is scaled, because text would no longer fit.
+
+The code chooses the size with `figsize`, `set_size_inches`, `set_figwidth`, `set_figheight`, `height` or
+`aspect` on a seaborn figure-level function, or `figure.figsize` in `rcParams`. Such a figure, and any
+other picture, scales as a plain image. Without a worker that has run the cell (Python off, the Enable bar
+up, the web), the picture scales until the next run.
+
+**Later cells.** A figure stays open for the cells after it, so `plt.title("...")` in a later cell adds to
+it. When a cell runs again, the figures it and later cells made are closed first, so lines don't pile up,
+and a cell that changed an earlier cell's figure runs again from that earlier cell. Reset closes every
+figure and restores matplotlib's settings.
+
+**Text in other scripts.** The worker adds the system's non-Latin fonts to matplotlib's list, so Chinese,
+Japanese, Korean and Thai text draws without any code. `excel.FontPath.CHINESE_SIMPLIFIED` and its
+neighbours name a font file, so code written for Excel runs unchanged.
+
+**Limits.** A picture can be 8192 pixels a side, 16 million pixels in all and 16 MiB. A figure past those
+gets `plot.tooLarge`, which names its size, before any memory is spent on it. A figure is stored at twice
+its own resolution where that fits, so it stays sharp on a dense screen, and the card and `python.image`
+report the size at its own resolution, as Excel does. So a figure's file size is about two to four times
+what a save at its own resolution gives.
+
+**Start-up time.** The sandbox can't write bytecode, so without compiled bytecode the first plot in every
+new worker takes about 10 seconds where it otherwise takes about 0.3. The `uv pip install` lines GridCraft
+shows pass `--compile-bytecode` for this reason.
+
 ## Initialization code
 
 A workbook can hold code that runs before its Python cells, in the variables they share, as in Excel:
@@ -188,8 +263,8 @@ cells:
 
 - `import numpy as np`, `import pandas as pd` and `import statsmodels as sm` wait until the name is
   used, as they do without this code. So a workbook doesn't pay for what it doesn't use.
-- `matplotlib` and `seaborn` aren't imported, since cells don't draw plots. `plt` and `sns` say so when
-  used.
+- `import matplotlib.pyplot as plt` and `import seaborn as sns` wait until the name is used, in the
+  same way.
 - Any other import that fails is skipped, with the lines that use what it would have given, and a
   setting on a module that fails is skipped as well. Excel's own `excel` module, which no other Python
   has, is one of these.
@@ -296,7 +371,7 @@ pip is behind **Other package managers**.
 **In the editors**, the formula bar in Python mode and the Python editor window check your code as
 you type, with Python off too and on systems with no sandbox. They need nothing to run:
 
-- a wavy underline on what the sandbox will refuse (a file, the network, another program, a plot, an
+- a wavy underline on what the sandbox will refuse (a file, the network, another program, a package that draws in a browser, an
   `xl()` whose reference is computed) and on a package this Python doesn't have, with the reason when
   you hover over it;
 - a chip with Python's state, which opens the Environment pane;
@@ -318,4 +393,7 @@ Agents can read all of this and run cells, once a person has turned Python on: `
 happened, and the reply says which cells weren't finished; `engine.execute` with `wait` holds it until
 Python is idle. See [control-protocol.md](control-protocol.md#saving-and-waiting-for-python-cells).
 `python.table`, `python.saveCsv`, `ui.pythonInitialization`, `ui.inspect`. See
-[control-protocol.md](control-protocol.md).
+[control-protocol.md](control-protocol.md). For pictures: `python.image` gives a cell's picture as base64
+with its size, `python.saveImage` writes it to a path, `python.output` sets the return type,
+`python.displayOverCells` and `python.createReference` make linked pictures, and `object.move` resizes
+one, which draws a free figure again. None of them opens a dialog.

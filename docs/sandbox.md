@@ -17,10 +17,11 @@ account. Without a sandbox it could read and change the person's files, use the 
 other programs. The sandbox's job is that it can do none of these:
 
 - **Files:** it can read only the paths its policy lists (the interpreter's installation, the
-  system's shared libraries) and write no file except `/dev/null`. The home directory, documents and
-  other workbooks are out of reach. So `tempfile` finds no folder it can use, and matplotlib, which
-  needs a writable folder, doesn't import: Python cells don't draw plots. The data goes to a sheet
-  and charts are built from it.
+  system's shared libraries and font folders) and write no file except `/dev/null`. The home directory,
+  documents and other workbooks are out of reach. So `tempfile` finds no folder it can use. matplotlib,
+  which asks for a writable folder, is given a path that doesn't exist for that one call: it can't save
+  its font list there, keeps it in memory, and nothing is written. A plot comes back as bytes in the
+  worker's reply.
 - **Programs:** it can execute only the programs its policy lists, and it can't start a new
   process at all, so even those only replace itself.
 - **Network:** no sockets, no connections and no listeners.

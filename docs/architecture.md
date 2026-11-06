@@ -357,7 +357,7 @@ one `Client`, made when first needed and dropped with the workbook, which stops 
   next edit. Code past `MAX_INIT_CHARS` fails without a worker.
   **Whose code it is** (`protocol::Init`) decides what a failing line means, in the worker
   (`initialize` in `shim.py`), which runs code that isn't a person's a statement at a time. It leaves
-  out imports of what it provides lazily (`np`, `pd`, `sm`) and of plotting modules. It skips an import
+  out imports of what it provides lazily (`np`, `pd`, `sm`, `plt`, `sns`). It skips an import
   that fails, a statement that hits a name such a line would have bound, and a top-level call on a module
   that fails; its reply's value lists the packages it went without, as rows of `module, line`, which
   become `init.skipped`. Anything else is the code's failure. A person's code is one `exec`, unless it

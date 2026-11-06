@@ -260,6 +260,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | Python pictures: `Image` in the cell, the card with the picture, its size and a resize grip, the Python Output menu in the formula bar, Display Plot over Cells (Ctrl+Alt+Shift+C), and Create Reference and a problem mark on a linked picture |
 | 2026-11-05 | minor | A cell a Python result spilled into shows the code greyed in the code's font in the formula bar, not the interface's |
 | 2026-11-05 | minor | On a Python cell the formula bar's PY badge takes the place of fx, with a Run Cell triangle a line below it (the bar is at least two lines there); fx stays on every other cell |
 | 2026-11-05 | minor | A save waits for running Python cells: the bar with Save Now and Cancel, the cap and the message naming the cells, AutoSave, Close and Quit during a wait |
