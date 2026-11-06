@@ -258,7 +258,7 @@ fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Lo
     let v = q.sheet.value(c);
     let p = q.painter;
     let z = q.geo.z;
-    if let Some(picture) = q.sheet.cell_pictures.get(&c) {
+    if let Some(picture) = q.sheet.picture_at(c) {
         crate::cell_pictures::paint(p, rect, picture);
         return true;
     }

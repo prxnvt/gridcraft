@@ -34,8 +34,9 @@ fn answer(code: &str) -> Output {
         preview: "repr".into(),
         size,
         table: Some(table),
+        picture: None,
     };
-    let sized = |type_name: &str, size: Vec<u64>| Output::Object { type_name: type_name.into(), preview: "repr".into(), size, table: None };
+    let sized = |type_name: &str, size: Vec<u64>| Output::Object { type_name: type_name.into(), preview: "repr".into(), size, table: None, picture: None };
     let words: Vec<&str> = code.split_whitespace().collect();
     match words.as_slice() {
         ["frame"] => table("DataFrame", vec![6, 4], frame(6, 4, 6, 4)),

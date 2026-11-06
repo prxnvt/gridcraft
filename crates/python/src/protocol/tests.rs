@@ -27,7 +27,7 @@ fn requests_and_replies_round_trip() {
             stamps: Vec::new(),
         },
     );
-    let run = Request::Run { id: 7, object: false, code: "x = xl(\"A1\")\nx * 2".into(), inputs, init: None };
+    let run = Request::Run { id: 7, object: false, code: "x = xl(\"A1\")\nx * 2".into(), inputs, init: None, at: None };
     let line = run.to_line();
     assert!(line.ends_with(b"\n") && !line[..line.len() - 1].contains(&b'\n'), "one line");
     assert_eq!(Request::parse(&line[..line.len() - 1]).unwrap(), run);
@@ -38,21 +38,21 @@ fn requests_and_replies_round_trip() {
     for reply in [
         Reply::Ready { self_test: SelfTest::NotChecked },
         Reply::Ready { self_test: SelfTest::Failed("socket opened".into()) },
-        Reply::Done { id: 3, result: Ok(Output::Value(array(1, 2, vec![Value::Number(1.0), Value::text("b")]))), stdout: "hi\n".into(), peak: None },
-        Reply::Done { id: 4, result: Ok(Output::object("dict", "{'a': 1}")), stdout: String::new(), peak: Some(123) },
+        Reply::Done { id: 3, result: Ok(Output::Value(array(1, 2, vec![Value::Number(1.0), Value::text("b")]))), stdout: "hi\n".into(), peak: None, touched: None },
+        Reply::Done { id: 4, result: Ok(Output::object("dict", "{'a': 1}")), stdout: String::new(), peak: Some(123), touched: None },
         Reply::Done {
             id: 5,
             result: Err(PyError { message: "NameError: name 'y' is not defined".into(), line: Some(2), ..PyError::default() }),
             stdout: String::new(),
-            peak: Some(456),
+            peak: Some(456), touched: None,
         },
         Reply::Done {
             id: 6,
             result: Err(PyError { message: "SyntaxError".into(), line: None, ..PyError::default() }),
             stdout: String::new(),
-            peak: None,
+            peak: None, touched: None,
         },
-        Reply::Done { id: 9, result: Ok(Output::Value(Value::Empty)), stdout: String::new(), peak: None },
+        Reply::Done { id: 9, result: Ok(Output::Value(Value::Empty)), stdout: String::new(), peak: None, touched: None },
     ] {
         let line = reply.to_line();
         assert_eq!(Reply::parse(line.trim_ascii_end()).unwrap(), reply);
@@ -210,7 +210,7 @@ fn inputs_never_carry_objects_and_odd_numbers_become_errors() {
     let mut inputs = BTreeMap::new();
     inputs.insert("A1".to_string(), Input::new(Value::Number(f64::NAN)));
     inputs.insert("B1:B2".to_string(), Input::new(array(2, 1, vec![inner, Value::Number(f64::INFINITY)])));
-    let line = Request::Run { id: 1, code: String::new(), inputs, object: true, init: None }.to_line();
+    let line = Request::Run { id: 1, code: String::new(), inputs, object: true, init: None, at: None }.to_line();
     let Request::Run { inputs, object: true, .. } = Request::parse(line.trim_ascii_end()).unwrap() else { panic!() };
     assert_eq!(inputs["A1"].value, Value::Error(CellError::Num));
     assert_eq!(inputs["B1:B2"].value, array(2, 1, vec![Value::Error(CellError::Value), Value::Error(CellError::Num)]));
@@ -288,7 +288,7 @@ fn dates_in_requests_and_replies_round_trip() {
             stamps: vec![(0, Stamp::DateTime(DAY, CLOCK)), (2, Stamp::Time(CLOCK))],
         },
     );
-    let run = Request::Run { id: 1, code: "xl('A1')".into(), inputs, object: false, init: None };
+    let run = Request::Run { id: 1, code: "xl('A1')".into(), inputs, object: false, init: None, at: None };
     let line = run.to_line();
     let text = String::from_utf8(line.clone()).unwrap();
     assert!(text.contains(r#""A1":{"value":{"date":"2024-01-15"}}"#), "{text}");
@@ -305,7 +305,7 @@ fn dates_in_requests_and_replies_round_trip() {
             stamps: vec![(1, Stamp::Date(DAY)), (3, Stamp::Duration(-2.0))],
         }),
     ] {
-        let reply = Reply::Done { id: 2, result: Ok(output), stdout: String::new(), peak: None };
+        let reply = Reply::Done { id: 2, result: Ok(output), stdout: String::new(), peak: None, touched: None };
         assert_eq!(Reply::parse(reply.to_line().trim_ascii_end()).unwrap(), reply);
     }
 }
@@ -560,12 +560,12 @@ fn a_stamp_says_what_it_is_for_the_card() {
 #[test]
 fn initialization_code_says_whose_it_is() {
     for (init, wire) in [(Init::Person, "person"), (Init::File, "file")] {
-        let run = Request::Run { id: 3, code: "import x".into(), inputs: BTreeMap::new(), object: false, init: Some(init) };
+        let run = Request::Run { id: 3, code: "import x".into(), inputs: BTreeMap::new(), object: false, init: Some(init), at: None };
         let line = run.to_line();
         assert!(String::from_utf8_lossy(&line).contains(&format!("\"init\":\"{wire}\"")), "{line:?}");
         assert_eq!(Request::parse(line.trim_ascii_end()).unwrap(), run);
     }
-    let cell = Request::Run { id: 3, code: "1".into(), inputs: BTreeMap::new(), object: false, init: None };
+    let cell = Request::Run { id: 3, code: "1".into(), inputs: BTreeMap::new(), object: false, init: None, at: None };
     assert!(!String::from_utf8_lossy(&cell.to_line()).contains("init"), "a cell's request doesn't mention it");
     // What this build doesn't know is no initialization.
     let odd = Request::parse(br#"{"type":"run","id":1,"code":"","init":"later"}"#).unwrap();
@@ -635,9 +635,9 @@ fn objects_with_a_size_and_a_table_round_trip() {
     for table in [table, empty, Table::default()] {
         let reply = Reply::Done {
             id: 1,
-            result: Ok(Output::Object { type_name: "DataFrame".into(), preview: "p".into(), size: vec![1000, 50], table: Some(table) }),
+            result: Ok(Output::Object { type_name: "DataFrame".into(), preview: "p".into(), size: vec![1000, 50], table: Some(table), picture: None }),
             stdout: String::new(),
-            peak: None,
+            peak: None, touched: None,
         };
         assert_eq!(Reply::parse(reply.to_line().trim_ascii_end()).unwrap(), reply);
     }
@@ -725,4 +725,109 @@ fn a_tables_caps_hold() {
 
     // A table only goes on an object, and an object only as a result.
     assert!(value_of(&done_line(r#"{"table":{"rows":0,"cols":0,"data":[],"totalRows":0,"totalCols":0}}"#)).is_err());
+}
+
+/// The first bytes of a PNG that says it is `width` x `height`. Nothing reads further than this.
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    b.extend(width.to_be_bytes());
+    b.extend(height.to_be_bytes());
+    b.extend([8, 6, 0, 0, 0]);
+    b
+}
+
+fn picture_line(mime: &str, base64: &str, density: Option<u32>, size: [u64; 2]) -> Vec<u8> {
+    let density = density.map_or(String::new(), |d| format!(",\"density\":{d}"));
+    format!(
+        "{{\"type\":\"done\",\"id\":2,\"ok\":true,\"value\":{{\"object\":{{\"typeName\":\"Image\",\"preview\":\"Image\",\"size\":[{},{}],\"image\":{{\"mime\":\"{mime}\",\"base64\":\"{base64}\"{density}}}}}}}}}",
+        size[0], size[1]
+    )
+    .into_bytes()
+}
+
+#[test]
+fn a_picture_goes_there_and_back() {
+    for density in [1, 2] {
+        for bytes in [png(40, 30), png(1, 1), png(8192, 1953)] {
+            let picture = Picture::from_bytes(bytes.clone(), density).unwrap();
+            assert_eq!(picture.bytes, bytes);
+            let reply = Reply::Done { id: 2, result: Ok(Output::picture(picture.clone())), stdout: String::new(), peak: None, touched: Some([1, 2, 3]) };
+            assert_eq!(Reply::parse(reply.to_line().trim_ascii_end()), Ok(reply));
+        }
+    }
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xFF, 0xC2, 0, 8, 8, 0, 30, 0, 40, 3];
+    jpeg.extend([0; 8]);
+    let picture = Picture::from_bytes(jpeg, 1).unwrap();
+    assert_eq!((picture.mime, picture.width, picture.height), (PictureType::Jpeg, 40, 30));
+}
+
+#[test]
+fn base64_reads_what_it_writes_and_nothing_else() {
+    for n in 0..64usize {
+        let bytes: Vec<u8> = (0..n).map(|i| (i * 37) as u8).collect();
+        assert_eq!(from_base64(&to_base64(&bytes)).as_ref(), Some(&bytes));
+    }
+    for bad in ["A", "AB", "ABC", "A===", "====", "AB=C", "A=BC", "AB\nC", "\u{e9}ABC", "ABC="[..3].repeat(5).as_str()] {
+        assert_eq!(from_base64(bad), None, "{bad:?}");
+    }
+    assert_eq!(from_base64("QQ=="), Some(b"A".to_vec()));
+}
+
+#[test]
+fn a_forged_picture_is_refused() {
+    let good = to_base64(&png(40, 30));
+    assert!(Reply::parse(&picture_line("image/png", &good, None, [40, 30])).is_ok());
+    assert!(Reply::parse(&picture_line("image/png", &good, Some(2), [20, 15])).is_ok());
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("not base64", picture_line("image/png", "@@@@", None, [40, 30])),
+        ("cut base64", picture_line("image/png", "QQ", None, [40, 30])),
+        ("not a picture", picture_line("image/png", &to_base64(b"GIF89a and so on"), None, [40, 30])),
+        ("empty", picture_line("image/png", "", None, [40, 30])),
+        ("a header cut short", picture_line("image/png", &to_base64(&png(40, 30)[..20]), None, [40, 30])),
+        ("the wrong type", picture_line("image/jpeg", &good, None, [40, 30])),
+        ("the wrong size", picture_line("image/png", &good, None, [41, 30])),
+        ("a size for another density", picture_line("image/png", &good, Some(2), [40, 30])),
+        ("density 0", picture_line("image/png", &good, Some(0), [40, 30])),
+        ("density 3", picture_line("image/png", &good, Some(3), [13, 10])),
+        ("no width", picture_line("image/png", &to_base64(&png(0, 30)), None, [0, 30])),
+        ("no height", picture_line("image/png", &to_base64(&png(30, 0)), None, [30, 0])),
+        ("too wide", picture_line("image/png", &to_base64(&png(MAX_PICTURE_SIDE + 1, 1)), None, [u64::from(MAX_PICTURE_SIDE) + 1, 1])),
+        ("too tall", picture_line("image/png", &to_base64(&png(1, MAX_PICTURE_SIDE + 1)), None, [1, u64::from(MAX_PICTURE_SIDE) + 1])),
+        ("too many pixels", picture_line("image/png", &to_base64(&png(8000, 8000)), None, [8000, 8000])),
+        ("a huge header", picture_line("image/png", &to_base64(&png(u32::MAX, u32::MAX)), None, [u64::from(u32::MAX), u64::from(u32::MAX)])),
+    ];
+    for (what, line) in cases {
+        assert!(Reply::parse(&line).is_err(), "{what}");
+    }
+    // Over the cap in bytes, in both directions a worker could try.
+    let mut big = png(40, 30);
+    big.resize(MAX_PICTURE_BYTES + 1, 0);
+    assert!(Picture::from_bytes(big.clone(), 1).is_err());
+    assert!(Reply::parse(&picture_line("image/png", &to_base64(&big), None, [40, 30])).is_err());
+    // A JPEG whose lengths lead nowhere ends, without reading past its end.
+    for bytes in [vec![0xFF, 0xD8], vec![0xFF, 0xD8, 0xFF], vec![0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xFF], vec![0xFF, 0xD8, 0, 0], vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 8]] {
+        assert!(Picture::from_bytes(bytes.clone(), 1).is_err(), "{bytes:?}");
+    }
+}
+
+#[test]
+fn a_cell_value_cant_be_a_picture_and_ready_carries_no_touched() {
+    let good = to_base64(&png(1, 1));
+    let input = format!(
+        "{{\"type\":\"run\",\"id\":1,\"code\":\"\",\"inputs\":{{\"A1\":{{\"value\":{{\"object\":{{\"typeName\":\"Image\",\"preview\":\"Image\",\"image\":{{\"mime\":\"image/png\",\"base64\":\"{good}\"}}}}}}}}}}}}"
+    );
+    assert!(Request::parse(input.as_bytes()).is_err());
+    assert!(Reply::parse(b"{\"type\":\"ready\",\"selfTest\":{\"status\":\"notChecked\"},\"touched\":[0,0,0]}").is_err());
+    let unknown = format!(
+        "{{\"type\":\"done\",\"id\":2,\"ok\":true,\"value\":{{\"object\":{{\"typeName\":\"Image\",\"preview\":\"Image\",\"size\":[1,1],\"image\":{{\"mime\":\"image/png\",\"base64\":\"{good}\",\"other\":1}}}}}}}}"
+    );
+    assert!(Reply::parse(unknown.as_bytes()).is_err());
+}
+
+#[test]
+fn a_run_says_where_its_cell_is() {
+    let run = Request::Run { id: 1, code: String::new(), inputs: BTreeMap::new(), object: false, init: None, at: Some([2, 3, 4]) };
+    let line = run.to_line();
+    assert!(std::str::from_utf8(&line).unwrap().contains("\"at\":[2,3,4]"));
+    assert_eq!(Request::parse(line.trim_ascii_end()), Ok(run));
 }

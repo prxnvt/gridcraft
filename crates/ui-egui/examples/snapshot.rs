@@ -121,7 +121,7 @@ fn fake_worker() -> FakeTransport {
             } else if code == "missing" {
                 w.done(id, Err(error("module.missing", "No module named 'sklearn'", Some("sklearn"), Some(1))))
             } else if let Some(text) = code.strip_prefix("print ") {
-                w.send(&Reply::Done { id, result: value, stdout: format!("{text}\n"), peak: None })
+                w.send(&Reply::Done { id, result: value, stdout: format!("{text}\n"), peak: None, touched: None })
             } else {
                 w.done(id, value)
             };

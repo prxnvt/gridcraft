@@ -139,7 +139,7 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "hyperlink": sh.hyperlinks.get(&c),
         "python": cell.and_then(|x| x.py.as_deref()).map(|py| json!({
             "code": py.code,
-            "output": if py.object { "object" } else { "value" },
+            "output": if py.shows_object() { "object" } else { "value" },
             "typeName": py.output.as_ref().map(|o| o.type_name.as_str()),
             "preview": py.output.as_ref().map(|o| o.preview.as_str()),
             "lines": if py.spill_lines { "rows" } else { "cell" },

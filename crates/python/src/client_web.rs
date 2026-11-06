@@ -35,6 +35,10 @@ impl Client {
     pub fn alive(&self) -> bool {
         false
     }
+    pub fn take_touched(&mut self) -> Option<[u32; 3]> {
+        None
+    }
+
     pub fn self_test(&self) -> Option<&SelfTest> {
         None
     }
@@ -44,7 +48,7 @@ impl Client {
     pub fn submit_run(&mut self, _code: &str, _inputs: BTreeMap<String, Input>) -> Result<u64, Busy> {
         self.refuse()
     }
-    pub fn submit_cell(&mut self, _code: &str, _inputs: BTreeMap<String, Input>, _object: bool) -> Result<u64, Busy> {
+    pub fn submit_cell(&mut self, _code: &str, _inputs: BTreeMap<String, Input>, _object: bool, _at: Option<[u32; 3]>) -> Result<u64, Busy> {
         self.refuse()
     }
     pub fn submit_init(&mut self, _code: &str, _init: Init) -> Result<u64, Busy> {

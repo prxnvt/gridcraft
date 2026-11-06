@@ -51,7 +51,7 @@ fn worker() -> FakeTransport {
                     id,
                     result: Err(error("python.exception", "ValueError: boom", None, Some(1))),
                     stdout: "printed before it failed\n".into(),
-                    peak: None,
+                    peak: None, touched: None,
                 })
             } else if code == "denied" {
                 w.done(id, Err(error("denied.file", "[Errno 1] Operation not permitted: '/home/you/data.csv'", Some("/home/you/data.csv"), Some(1))))

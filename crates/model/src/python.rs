@@ -7,6 +7,8 @@ use std::sync::Arc;
 use gridcraft_core::{Array, CellError, Value};
 use serde::{Deserialize, Serialize};
 
+use crate::cell::CellPicture;
+
 mod table;
 
 pub use table::PyTable;
@@ -156,6 +158,10 @@ pub struct PyCode {
     /// saved: in a file the formats are just the cells' formats.
     #[serde(skip)]
     pub dates: PyDates,
+    /// A person or a file chose the return type. With no such choice, a picture behaves as a Python
+    /// Object, since a plot is no use drawn inside a small cell, and anything else as an Excel Value.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub output_chosen: bool,
 }
 
 /// What a number in a Python result stands for, which decides the format it shows with.
@@ -216,11 +222,52 @@ pub struct PyOutput {
     /// a file has lost its table, if it had one. A state of this session, never saved.
     #[serde(skip)]
     pub from_run: bool,
+    /// The picture the result is, when it is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<PyImage>,
+}
+
+/// A picture a Python cell gave.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PyImage {
+    /// The encoded bytes, shared, so an undo step doesn't copy them.
+    #[serde(serialize_with = "picture_out", deserialize_with = "picture_in")]
+    pub picture: Arc<CellPicture>,
+    /// Its size as reported to people and agents: pixels at the figure's own resolution.
+    pub width: u32,
+    pub height: u32,
+    /// How many pixels of `picture` stand for one of that size.
+    pub density: u32,
+}
+
+fn picture_out<S: serde::Serializer>(picture: &Arc<CellPicture>, s: S) -> Result<S::Ok, S::Error> {
+    picture.as_ref().serialize(s)
+}
+
+fn picture_in<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<CellPicture>, D::Error> {
+    CellPicture::deserialize(d).map(Arc::new)
 }
 
 impl PyCode {
     pub fn new(code: &str) -> PyCode {
         PyCode { code: normalize_code(code), ..PyCode::default() }
+    }
+
+    /// The picture its last result is, when it is one.
+    pub fn image(&self) -> Option<&PyImage> {
+        self.output.as_ref()?.image.as_ref()
+    }
+
+    /// The return type in effect: the one chosen, or for a cell with no choice, a Python Object when
+    /// its result is a picture.
+    pub fn shows_object(&self) -> bool {
+        self.object || (!self.output_chosen && self.image().is_some())
+    }
+
+    /// The picture to draw inside the cell: its result's, with Excel Value in effect.
+    pub fn image_in_cell(&self) -> Option<&Arc<CellPicture>> {
+        self.image().filter(|_| !self.shows_object()).map(|i| &i.picture)
     }
 
     /// What the cell shows for its result: cell values (an array spills from the cell), or, for a
@@ -246,7 +293,7 @@ impl PyCode {
         let chunks = chunk(&self.code, CHUNK_CHARS);
         let lits: Vec<String> = chunks.iter().map(|c| format!("\"{}\"", c.replace('"', "\"\""))).collect();
         let lits = if lits.is_empty() { "\"\"".to_string() } else { lits.join("&") };
-        format!("PY({lits},{})", u8::from(self.object))
+        format!("PY({lits},{})", u8::from(self.shows_object()))
     }
 
     /// [`PyCode::to_formula`] with Excel's `_xlfn._xlws.` prefix: the string-literal form

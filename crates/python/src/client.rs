@@ -88,11 +88,12 @@ pub struct Client {
     next_id: u64,
     starts: u64,
     self_test: Option<SelfTest>,
+    touched: Option<[u32; 3]>,
 }
 
 impl Client {
     pub fn new(transport: Box<dyn Transport>, limits: Limits) -> Client {
-        Client { transport, limits: limits.clamped(), conn: None, inflight: None, local: None, next_id: 1, starts: 0, self_test: None }
+        Client { transport, limits: limits.clamped(), conn: None, touched: None, inflight: None, local: None, next_id: 1, starts: 0, self_test: None }
     }
 
     pub fn limits(&self) -> &Limits {
@@ -121,6 +122,12 @@ impl Client {
     }
 
     /// What the current worker reported about its confinement, once it is ready.
+    /// The first earlier cell whose figure the last finished request changed, as sheet, row and
+    /// column. Asking forgets it.
+    pub fn take_touched(&mut self) -> Option<[u32; 3]> {
+        self.touched.take()
+    }
+
     pub fn self_test(&self) -> Option<&SelfTest> {
         self.self_test.as_ref()
     }
@@ -134,14 +141,15 @@ impl Client {
 
     /// Runs `code` with the `xl()` inputs, in the globals the earlier runs left.
     pub fn submit_run(&mut self, code: &str, inputs: std::collections::BTreeMap<String, Input>) -> Result<u64, Busy> {
-        self.submit_cell(code, inputs, false)
+        self.submit_cell(code, inputs, false, None)
     }
 
     /// [`Client::submit_run`] for a cell with its return type: with `object`, a result with no
-    /// single-cell form comes back as a Python object rather than cells to spill.
-    pub fn submit_cell(&mut self, code: &str, inputs: std::collections::BTreeMap<String, Input>, object: bool) -> Result<u64, Busy> {
+    /// single-cell form comes back as a Python object rather than cells to spill. `at` is the cell's
+    /// place in the run order, as sheet, row and column.
+    pub fn submit_cell(&mut self, code: &str, inputs: std::collections::BTreeMap<String, Input>, object: bool, at: Option<[u32; 3]>) -> Result<u64, Busy> {
         let id = self.take_id()?;
-        self.send(Request::Run { id, code: code.to_string(), inputs, object, init: None });
+        self.send(Request::Run { id, code: code.to_string(), inputs, object, init: None, at });
         Ok(id)
     }
 
@@ -149,7 +157,7 @@ impl Client {
     /// or a row of `module, line` for each package it skipped.
     pub fn submit_init(&mut self, code: &str, init: Init) -> Result<u64, Busy> {
         let id = self.take_id()?;
-        self.send(Request::Run { id, code: code.to_string(), inputs: std::collections::BTreeMap::new(), object: false, init: Some(init) });
+        self.send(Request::Run { id, code: code.to_string(), inputs: std::collections::BTreeMap::new(), object: false, init: Some(init), at: None });
         Ok(id)
     }
 
@@ -358,7 +366,7 @@ impl Client {
                     None
                 }
                 Ok(Reply::Done { .. }) if !ready => Some(Outcome::ProtocolViolation("an answer before Python was ready".into())),
-                Ok(Reply::Done { id, result, stdout, peak }) => {
+                Ok(Reply::Done { id, result, stdout, peak, touched }) => {
                     let expected = self.inflight.as_ref().map(|r| r.id);
                     if Some(id) != expected {
                         return Some(Outcome::ProtocolViolation(format!("an answer for request {id} while request {} ran", expected.unwrap_or(0))));
@@ -368,6 +376,7 @@ impl Client {
                     if let Some(rss_bytes) = peak.filter(|p| *p > self.limits.memory_bytes) {
                         return Some(Outcome::OverMemory { rss_bytes });
                     }
+                    self.touched = touched;
                     Some(match result {
                         Ok(output) => Outcome::Ok { output, stdout },
                         Err(error) => Outcome::PythonError { error, stdout },

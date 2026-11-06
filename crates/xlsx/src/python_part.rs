@@ -346,7 +346,7 @@ pub fn cell_code(scripts: &mut ScriptsIn, formula: &gridcraft_model::Formula, ra
     match code.filter(|c| c.len() <= scripts.budget) {
         Some(code) => {
             scripts.budget -= code.len();
-            PyFormula::Code(PyCode { object, ..PyCode::new(&code) })
+            PyFormula::Code(PyCode { object, output_chosen: true, ..PyCode::new(&code) })
         }
         None => {
             scripts.missing += 1;

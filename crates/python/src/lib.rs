@@ -43,7 +43,7 @@ pub mod fake;
 pub mod process;
 
 pub use client::Client;
-pub use protocol::{Clock, Dated, Day, Input, Output, PyError, SelfTest, Stamp};
+pub use protocol::{Clock, Dated, Day, Input, Output, Picture, PictureType, PyError, SelfTest, Stamp};
 pub use run::{Busy, Limits, Outcome, RunResult, Transport};
 
 /// Whether this build can run Python at all (the web build can't).

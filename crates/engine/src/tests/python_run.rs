@@ -69,17 +69,27 @@ fn answer(w: &mut FakeWorker, id: u64, code: &str, inputs: &BTreeMap<String, Inp
             value(Value::from(Array::new(r, c, data).unwrap()))
         }
         "obj" => Ok(Output::object("dict", "{'a': 1}")),
+        "picture" => {
+            let size = |i: usize| words.get(i).and_then(|n| n.parse().ok()).unwrap_or(1);
+            let density = size(3);
+            Ok(Output::picture(gridcraft_python::Picture::from_bytes(picture_bytes(size(1), size(2)), density).unwrap()))
+        }
+        // It changed a figure an earlier cell made: sheet, row and column.
+        "touch" => {
+            let n = |i: usize| words[i].parse().unwrap();
+            return w.send(&Reply::Done { id, result: value(Value::Number(1.0)), stdout: String::new(), peak: None, touched: Some([n(1), n(2), n(3)]) });
+        }
         "fail" => Err(PyError { message: "ValueError: boom".into(), line: Some(1), kind: None, subject: None }),
         "num" => value(Value::Error(CellError::Num)),
         "empty" => value(Value::Error(CellError::Calc)),
         "none" => value(Value::Empty),
         "print" => {
             let n: usize = words[1].parse().unwrap();
-            return w.send(&Reply::Done { id, result: value(Value::Number(1.0)), stdout: "x".repeat(n), peak: None });
+            return w.send(&Reply::Done { id, result: value(Value::Number(1.0)), stdout: "x".repeat(n), peak: None, touched: None });
         }
         "failprint" => {
             let error = PyError { message: "ValueError: boom".into(), ..PyError::default() };
-            return w.send(&Reply::Done { id, result: Err(error), stdout: "before the error\n".into(), peak: None });
+            return w.send(&Reply::Done { id, result: Err(error), stdout: "before the error\n".into(), peak: None, touched: None });
         }
         "tick" => {
             let n = vars.entry("tick".into()).or_insert(0.0);
@@ -100,6 +110,15 @@ fn answer(w: &mut FakeWorker, id: u64, code: &str, inputs: &BTreeMap<String, Inp
         other => value(Value::text(other)),
     };
     w.done(id, result)
+}
+
+/// A real PNG of `width` x `height`, one colour.
+pub(super) fn picture_bytes(width: u32, height: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::RgbaImage::from_pixel(width, height, image::Rgba([10, 120, 200, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
 }
 
 pub(super) fn worker() -> FakeTransport {

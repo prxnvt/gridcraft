@@ -54,6 +54,24 @@ pub fn specs() -> Vec<CommandSpec> {
             table
         ),
         cmd!(
+            query "python.image",
+            "Python Image",
+            [],
+            None,
+            "{cell?, sheet?} → {cell, mime, width, height, density, bytes, base64}: the picture a Python cell (default: the active cell) gave in its last run. `width` and `height` are what the card reports, and `density` is how many pixels of the bytes stand for one of those. An error for a cell with no picture.",
+            has_doc,
+            image
+        ),
+        cmd!(
+            noundo "python.saveImage",
+            "Save Python Image",
+            [],
+            None,
+            "{cell?, sheet?, path} → {cell, path, bytes, mime}: writes the picture `python.image` gives, with `.png` or `.jpg` added to `path` when it has no such ending. Refused inside a script, as other file writes are.",
+            has_doc,
+            save_image
+        ),
+        cmd!(
             noundo "python.saveCsv",
             "Save Python Table as CSV",
             [],
@@ -201,7 +219,8 @@ fn set(s: &mut Session, p: &Json) -> Result<Json> {
     let mode = output_mode("python.set", p, "output")?;
     let old = existing(s, sheet, at)?;
     let object = mode.or(old.as_ref().map(|o| o.object)).unwrap_or(false);
-    store(s, "python.set", sheet, at, PyCode { object, ..PyCode::new(code) }, old)?;
+    let output_chosen = mode.is_some() || old.as_ref().is_some_and(|o| o.output_chosen);
+    store(s, "python.set", sheet, at, PyCode { object, output_chosen, ..PyCode::new(code) }, old)?;
     s.python_after_edit();
     let d = s.doc()?;
     let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
@@ -272,13 +291,20 @@ fn output(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let lines = lines_mode(p)?;
     let requested = output_mode("python.output", p, "mode")?;
-    let object = requested.unwrap_or(if lines.is_some() { old.object } else { !old.object });
+    let current = old.shows_object();
+    let object = requested.unwrap_or(if lines.is_some() { current } else { !current });
     let mode = |object: bool| if object { "object" } else { "value" };
     let spill_lines = lines.unwrap_or(old.spill_lines);
+    let chooses = requested.is_some() || lines.is_none();
     if object != old.object {
         // One edit, so one undo step, when `lines` changes too.
-        let py = PyCode { code: old.code.clone(), object, ..PyCode::default() };
+        let py = PyCode { code: old.code.clone(), object, output_chosen: chooses || old.output_chosen, ..PyCode::default() };
         store(s, "python.output", sheet, at, py, Some(PyCode { spill_lines, ..old }))?;
+        s.python_after_edit();
+    } else if chooses && !old.output_chosen && old.image().is_some() {
+        // A picture with no choice behaves as a Python Object, and now it is a choice. It needs no new
+        // run to move into the cell.
+        set_output_chosen(s, sheet, at, spill_lines)?;
         s.python_after_edit();
     } else if spill_lines != old.spill_lines {
         set_spill_lines(s, sheet, at, spill_lines)?;
@@ -316,6 +342,62 @@ fn set_spill_lines(s: &mut Session, sheet: usize, at: CellRef, on: bool) -> Resu
         cx.touch(sheet, at);
         Ok(())
     })
+}
+
+/// The return type stays and is now a choice.
+fn set_output_chosen(s: &mut Session, sheet: usize, at: CellRef, spill_lines: bool) -> Result<()> {
+    if let Some(m) = s.locked_cell_message(sheet, at) {
+        return Err(EngineError::Other(m));
+    }
+    edit(s, |cx| {
+        let Some(py) = cx.sheet_mut(sheet)?.cells.get_mut(at).and_then(|c| c.py.as_mut()) else { return Ok(()) };
+        let py = Arc::make_mut(py);
+        py.output_chosen = true;
+        py.spill_lines = spill_lines;
+        cx.touch(sheet, at);
+        Ok(())
+    })
+}
+
+/// The picture a Python cell keeps from its last run.
+fn kept_image(s: &Session, sheet: usize, at: CellRef) -> Result<gridcraft_model::PyImage> {
+    let Some(py) = existing(s, sheet, at)? else {
+        return Err(EngineError::Other(format!("{} isn't a Python cell, so it has no picture", at.a1())));
+    };
+    py.image().cloned().ok_or_else(|| {
+        EngineError::Other(format!("{} has no picture: only a Python cell whose last run gave one has it. A file keeps it, and a cell waiting to run has none.", at.a1()))
+    })
+}
+
+/// `python.image`: the picture, for agents and other tools.
+fn image(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, at) = target_cell(s, p)?;
+    let i = kept_image(s, sheet, at)?;
+    Ok(json!({
+        "cell": at.a1(),
+        "mime": i.picture.mime,
+        "width": i.width,
+        "height": i.height,
+        "density": i.density,
+        "bytes": i.picture.data.len(),
+        "base64": crate::io::base64_encode(&i.picture.data),
+    }))
+}
+
+/// `python.saveImage`: the picture as a file. Refused inside a script, or a macro step without the
+/// permission, by [`crate::io::write_file`].
+fn save_image(s: &mut Session, p: &Json) -> Result<Json> {
+    let path = match p.get("path") {
+        Some(Json::String(path)) if !path.trim().is_empty() => path.as_str(),
+        _ => return Err(bad("python.saveImage", "missing `path`")),
+    };
+    let (sheet, at) = target_cell(s, p)?;
+    let i = kept_image(s, sheet, at)?;
+    let (ending, endings): (&str, &[&str]) = if i.picture.mime == "image/jpeg" { (".jpg", &["jpg", "jpeg"]) } else { (".png", &["png"]) };
+    let has_ending = std::path::Path::new(path).extension().is_some_and(|e| endings.iter().any(|x| e.eq_ignore_ascii_case(x)));
+    let target = if has_ending { path.to_string() } else { format!("{path}{ending}") };
+    crate::io::write_file(&target, &i.picture.data)?;
+    Ok(json!({"cell": at.a1(), "path": target, "bytes": i.picture.data.len(), "mime": i.picture.mime}))
 }
 
 /// The table a Python Object cell keeps from its last run.
@@ -442,8 +524,13 @@ fn clear(s: &mut Session, p: &Json) -> Result<Json> {
             Some(r) => sh.spill.range(r.start..=r.end).map(|(c, _)| *c).filter(|c| *c != at && r.contains(*c)).collect(),
             None => Vec::new(),
         };
+        // What it shows is kept: a picture drawn in the cell stays there as an ordinary cell picture.
+        let in_cell = sh.cell(at).and_then(|c| c.py.as_deref()).and_then(|py| py.image_in_cell().cloned());
         if let Some(cell) = sh.cells.get_mut(at) {
             cell.py = None;
+        }
+        if let Some(picture) = in_cell {
+            sh.set_picture(at, picture);
         }
         sh.settle_spill(at);
         for c in std::iter::once(at).chain(spilled.iter().copied()) {

@@ -186,7 +186,7 @@ impl FakeWorker {
     }
 
     pub fn done(&mut self, id: u64, result: Result<Output, PyError>) -> bool {
-        self.send(&Reply::Done { id, result, stdout: String::new(), peak: None })
+        self.send(&Reply::Done { id, result, stdout: String::new(), peak: None, touched: None })
     }
 
     /// Writes bytes as they are (forged or broken lines).

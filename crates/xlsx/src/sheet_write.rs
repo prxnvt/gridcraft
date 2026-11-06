@@ -758,7 +758,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     } else {
         cell.and_then(|x| x.py.as_ref()).map(|p| {
             out.python_scripts.push(p.code.clone());
-            crate::python_part::file_formula(out.python_scripts.len().saturating_sub(1), p.object)
+            crate::python_part::file_formula(out.python_scripts.len().saturating_sub(1), p.shows_object())
         })
     };
     let value: Value = match (ov, extra) {

@@ -90,6 +90,8 @@ pub(super) struct Entry {
     /// The cell's flags as written: (busy, stale).
     pub shown: (bool, bool),
     pub diag: Option<Diagnostic>,
+    /// The earlier cell whose figure this one changes, which has to run before it runs again.
+    pub run_from: Option<(u64, CellRef)>,
 }
 
 impl Entry {
@@ -110,6 +112,7 @@ impl Entry {
             in_worker: false,
             shown: (py.busy, py.stale),
             diag: None,
+            run_from: None,
         }
     }
 
@@ -604,7 +607,28 @@ impl DocRun {
         self.first_due(None).filter(|f| *f > done)
     }
 
+    /// The first cell to run so that every cell from `first` on starts clean: a cell that changes an
+    /// earlier cell's figure needs that cell to run first.
+    fn with_figures(&self, first: usize) -> usize {
+        let mut first = first;
+        let mut from = first;
+        // Each pass can only move `first` back, so this ends. Earlier cells run first anyway.
+        while let Some(e) = self.entries.get(from) {
+            if let Some((uid, at)) = e.run_from
+                && let Some(owner) = self.entries.iter().position(|o| o.uid == uid && o.at == at)
+                && owner < first
+            {
+                first = owner;
+                from = owner;
+                continue;
+            }
+            from += 1;
+        }
+        first
+    }
+
     fn mark_due(&mut self, first: usize, cx: Cx, quiet: bool) {
+        let first = self.with_figures(first);
         let target = if cx.manual || cx.gate == Gate::No { CellState::Stale } else { CellState::Queued };
         for e in self.entries.iter_mut().skip(first) {
             // A cell someone asked to run stays queued under manual calculation.

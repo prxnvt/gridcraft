@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use gridcraft_core::date::DateSystem;
 use gridcraft_core::{CellError, CellRef, Value};
-use gridcraft_model::{PyCode, PyOutput, PyTable};
+use gridcraft_model::{CellPicture, PyCode, PyImage, PyOutput, PyTable};
 use gridcraft_python::diagnostics::{Diagnostic, for_outcome};
 use gridcraft_python::protocol::{OUTPUT_CUT, Table};
 use gridcraft_python::{Client, Input, Outcome, Output, RunResult, Transport};
@@ -159,18 +159,36 @@ fn kept_table(t: Table) -> Arc<PyTable> {
 fn kept(output: Output, sys: DateSystem, object: bool) -> Write {
     match output {
         Output::Value(value) => Write::Result(
-            PyOutput { type_name: type_name(&value).into(), preview: preview(&value), value, convertible: true, table: None, from_run: true },
+            PyOutput { type_name: type_name(&value).into(), preview: preview(&value), value, convertible: true, table: None, from_run: true, image: None },
             ResultDates::default(),
         ),
         Output::Dated(dated) => {
             let (output, dates) = converted(dated, sys);
             Write::Result(PyOutput { from_run: true, ..output }, dates)
         }
-        Output::Object { type_name, preview, size, table } => {
+        Output::Object { type_name, preview, picture: Some(p), .. } => {
+            let (width, height) = (p.width / p.density.max(1), p.height / p.density.max(1));
+            let alt = format!("{type_name} {width} x {height}");
+            let picture = Arc::new(CellPicture { data: p.bytes, mime: p.mime.mime().to_string(), alt });
+            let image = PyImage { picture, width: width.max(1), height: height.max(1), density: p.density };
+            Write::Result(
+                PyOutput {
+                    value: Value::text(object_label(&type_name, &[])),
+                    type_name,
+                    preview,
+                    convertible: false,
+                    table: None,
+                    from_run: true,
+                    image: Some(image),
+                },
+                ResultDates::default(),
+            )
+        }
+        Output::Object { type_name, preview, size, table, picture: None } => {
             let label = object_label(&type_name, if object { &size } else { &[] });
             let table = table.filter(|_| object).map(kept_table);
             Write::Result(
-                PyOutput { value: Value::text(label), type_name, preview, convertible: false, table, from_run: true },
+                PyOutput { value: Value::text(label), type_name, preview, convertible: false, table, from_run: true, image: None },
                 ResultDates::default(),
             )
         }
@@ -372,7 +390,8 @@ impl DocRun {
     /// the cell with its variables gone. So that is checked around the send: then the cells before it
     /// run first, in a fresh worker, and the send is taken back.
     fn submit(&mut self, index: usize, fp: u64, py: &PyCode, inputs: BTreeMap<String, Input>, starter: &Starter, stats: &mut PythonStats) -> Step {
-        match self.send(starter, stats, |client| client.submit_cell(&py.code, inputs, py.object)) {
+        let place = self.entries.get(index).map(|e| [u32::try_from(e.sheet).unwrap_or(u32::MAX), e.at.row, e.at.col]);
+        match self.send(starter, stats, |client| client.submit_cell(&py.code, inputs, py.object, place)) {
             Ok(id) => {
                 self.inflight = Some(Inflight { id, index, fp, started: now(), discard: false });
                 Step::Submitted
@@ -523,6 +542,7 @@ impl DocRun {
             return out;
         }
         self.start_tries = 0;
+        let touched = self.client.as_mut().and_then(Client::take_touched);
         let diag = for_outcome(&outcome);
         let refused = diag.as_ref().is_some_and(|d| d.kind.id == "blocked.sandboxCheck");
         let lost = outcome.lost_worker();
@@ -556,6 +576,7 @@ impl DocRun {
         if lost {
             self.worker_gone();
         }
+        self.note_touched(flight.index, touched);
         let Some(e) = self.entries.get_mut(flight.index) else { return out };
         let (sheet, at) = (e.sheet, e.at);
         e.diag = cell_diag;
@@ -570,6 +591,18 @@ impl DocRun {
             e.ran = None;
         }
         out
+    }
+
+    /// The cell at `index` changed a figure an earlier cell made: running it again has to start from
+    /// that cell, or the figure would collect what it adds on every run.
+    fn note_touched(&mut self, index: usize, touched: Option<[u32; 3]>) {
+        let earlier = touched.and_then(|[sheet, row, col]| {
+            let e = self.entries.iter().find(|e| u32::try_from(e.sheet).ok() == Some(sheet) && e.at.row == row && e.at.col == col)?;
+            Some((e.uid, e.at))
+        });
+        if let Some(e) = self.entries.get_mut(index) {
+            e.run_from = earlier;
+        }
     }
 
     fn record(&mut self, d: &DocState, flight: &Inflight, stdout: String, cut: bool, diag: Option<&Diagnostic>) {
