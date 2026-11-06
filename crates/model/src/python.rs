@@ -7,6 +7,10 @@ use std::sync::Arc;
 use gridcraft_core::{CellError, Value};
 use serde::{Deserialize, Serialize};
 
+mod table;
+
+pub use table::PyTable;
+
 /// Excel's limit on the characters of one formula. A Python cell's code must fit in it once it is
 /// written as the PY formula of the function's syntax ([`PyCode::to_file_formula`]): quotes are
 /// doubled and every 255 characters add `"&"`, so the limit on the code itself depends on what the
@@ -199,6 +203,14 @@ pub struct PyOutput {
     pub preview: String,
     /// Whether `value` is the result converted to cells.
     pub convertible: bool,
+    /// A Python object that is like a table: a bounded look at it, for the card. A state of this
+    /// session, never saved.
+    #[serde(skip)]
+    pub table: Option<Arc<PyTable>>,
+    /// A run in this session gave this result, so `table` is all there is to know. A result read from
+    /// a file has lost its table, if it had one. A state of this session, never saved.
+    #[serde(skip)]
+    pub from_run: bool,
 }
 
 impl PyCode {
@@ -207,11 +219,11 @@ impl PyCode {
     }
 
     /// What the cell shows for its result: cell values (an array spills from the cell), or, for a
-    /// Python object, its type name. `None` before the code has run.
+    /// Python object, what names it (`value` holds that, with its size when it has one). `None` before the code has
+    /// run.
     pub fn result_value(&self) -> Option<Value> {
         let out = self.output.as_ref()?;
-        let scalar = !matches!(out.value, Value::Array(_)) && out.convertible;
-        Some(if self.object && !scalar { Value::text(out.type_name.as_str()) } else { out.value.clone() })
+        Some(if self.object && matches!(out.value, Value::Array(_)) { Value::text(out.type_name.as_str()) } else { out.value.clone() })
     }
 
     /// The cell as a formula (without `=`): `PY("…"&"…",0)`, with the code in string literals of
@@ -546,15 +558,42 @@ mod tests {
     #[test]
     fn result_values() {
         let arr = gridcraft_core::Array::new(2, 1, vec![1.0.into(), 2.0.into()]).map(Value::from).unwrap();
-        let out = PyOutput { value: arr.clone(), type_name: "list".into(), preview: "[1, 2]".into(), convertible: true };
+        let out = PyOutput { value: arr.clone(), type_name: "list".into(), preview: "[1, 2]".into(), convertible: true, ..PyOutput::default() };
         let mut py = PyCode { output: Some(out), ..PyCode::new("[1, 2]") };
         assert_eq!(py.result_value(), Some(arr));
         py.object = true;
         assert_eq!(py.result_value(), Some(Value::text("list")));
-        py.output = Some(PyOutput { value: Value::Number(3.0), type_name: "int".into(), preview: "3".into(), convertible: true });
+        py.output =
+            Some(PyOutput { value: Value::Number(3.0), type_name: "int".into(), preview: "3".into(), convertible: true, ..PyOutput::default() });
         assert_eq!(py.result_value(), Some(Value::Number(3.0)), "scalars show as values in object mode too");
         py.output = None;
         assert_eq!(py.result_value(), None);
+    }
+
+    #[test]
+    fn a_python_object_shows_what_names_it() {
+        let object = |value: Value, type_name: &str| PyOutput { value, type_name: type_name.into(), ..PyOutput::default() };
+        let mut py = PyCode { object: true, output: Some(object(Value::text("DataFrame 6x4"), "DataFrame")), ..PyCode::new("df") };
+        assert_eq!(py.result_value(), Some(Value::text("DataFrame 6x4")));
+        // A result cells can hold, read from a file, still shows the object's name, and doesn't spill.
+        let arr = gridcraft_core::Array::new(2, 1, vec![1.0.into(), 2.0.into()]).map(Value::from).unwrap();
+        py.output = Some(object(arr.clone(), "list"));
+        assert_eq!(py.result_value(), Some(Value::text("list")));
+        py.object = false;
+        assert_eq!(py.result_value(), Some(arr));
+    }
+
+    #[test]
+    fn what_a_session_keeps_stays_out_of_json() {
+        let table = Arc::new(PyTable { rows: 0, cols: 1, ..PyTable::default() });
+        let output = PyOutput { value: Value::text("list 1"), type_name: "list".into(), table: Some(table), from_run: true, ..PyOutput::default() };
+        let py = PyCode { object: true, output: Some(output), ..PyCode::new("x") };
+        let json = serde_json::to_value(&py).unwrap();
+        assert!(json["output"].get("table").is_none() && json["output"].get("fromRun").is_none(), "{json}");
+        let back: PyCode = serde_json::from_value(json).unwrap();
+        let output = back.output.unwrap();
+        assert_eq!((output.table, output.from_run), (None, false));
+        assert_eq!(output.value, Value::text("list 1"));
     }
 
     #[test]

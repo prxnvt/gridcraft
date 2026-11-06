@@ -39,7 +39,13 @@ fn unchanged_code_keeps_its_cached_result() {
         let sh = wb.sheet_mut(0).unwrap();
         let cell = sh.cells.get_mut(gridcraft_core::CellRef::new(0, 0)).unwrap();
         let py = std::sync::Arc::make_mut(cell.py.as_mut().unwrap());
-        py.output = Some(gridcraft_model::PyOutput { value: Value::Number(42.0), type_name: "int".into(), preview: "42".into(), convertible: true });
+        py.output = Some(gridcraft_model::PyOutput {
+            value: Value::Number(42.0),
+            type_name: "int".into(),
+            preview: "42".into(),
+            convertible: true,
+            ..Default::default()
+        });
         cell.value = Value::Number(42.0);
     }
     set(&mut s, "A1", "21 * 2");
@@ -98,7 +104,13 @@ fn cache_list(s: &mut crate::Session, cell: &str) {
     let sh = wb.sheet_mut(0).unwrap();
     let py = std::sync::Arc::make_mut(sh.cells.get_mut(at).unwrap().py.as_mut().unwrap());
     let arr = gridcraft_core::Array::new(3, 1, vec![1.0.into(), 2.0.into(), 3.0.into()]).map(Value::from).unwrap();
-    py.output = Some(gridcraft_model::PyOutput { value: arr, type_name: "list".into(), preview: "[1, 2, 3]".into(), convertible: true });
+    py.output = Some(gridcraft_model::PyOutput {
+        value: arr,
+        type_name: "list".into(),
+        preview: "[1, 2, 3]".into(),
+        convertible: true,
+        ..Default::default()
+    });
 }
 
 /// A1 holds `[1, 2, 3]` with its cached list spilled over A1:A3 as Excel values; B1 reads A3.
@@ -369,8 +381,13 @@ fn cache_shown(s: &mut crate::Session, cell: &str, value: Value, output: Option<
     let wb = std::sync::Arc::make_mut(&mut d.wb);
     let c = wb.sheet_mut(0).unwrap().cells.get_mut(at).unwrap();
     c.value = value;
-    std::sync::Arc::make_mut(c.py.as_mut().unwrap()).output =
-        output.map(|value| gridcraft_model::PyOutput { value, type_name: "object".into(), preview: String::new(), convertible: true });
+    std::sync::Arc::make_mut(c.py.as_mut().unwrap()).output = output.map(|value| gridcraft_model::PyOutput {
+        value,
+        type_name: "object".into(),
+        preview: String::new(),
+        convertible: true,
+        ..Default::default()
+    });
 }
 
 fn bold(s: &mut crate::Session, cell: &str) -> bool {

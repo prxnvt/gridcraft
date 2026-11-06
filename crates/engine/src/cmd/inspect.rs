@@ -142,6 +142,7 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
             "output": if py.object { "object" } else { "value" },
             "typeName": py.output.as_ref().map(|o| o.type_name.as_str()),
             "preview": py.output.as_ref().map(|o| o.preview.as_str()),
+            "table": py.output.as_ref().and_then(|o| o.table.as_deref()).map(crate::cmd::python::table_summary),
             "stale": py.stale,
             "busy": py.busy,
         })),

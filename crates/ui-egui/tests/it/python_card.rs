@@ -24,9 +24,13 @@ fn session(rtl: bool) -> Session {
     s.execute("python.set", json!({"cell": "C4", "code": "df", "output": "object"})).unwrap();
     s.execute("python.set", json!({"cell": "E2", "code": "[1, 2, 3]"})).unwrap();
     let long = (0..2_000).map(|i| format!("row {i}")).collect::<Vec<_>>().join("\n");
-    cache(&mut s, "C4", PyOutput { value: Value::text("DataFrame"), type_name: "DataFrame".into(), preview: long, convertible: false });
+    cache(
+        &mut s,
+        "C4",
+        PyOutput { value: Value::text("DataFrame"), type_name: "DataFrame".into(), preview: long, convertible: false, ..Default::default() },
+    );
     let list = gridcraft_engine::core::Array::new(3, 1, vec![1.0.into(), 2.0.into(), 3.0.into()]).map(Value::from).unwrap();
-    cache(&mut s, "E2", PyOutput { value: list, type_name: "list".into(), preview: "[1, 2, 3]".into(), convertible: true });
+    cache(&mut s, "E2", PyOutput { value: list, type_name: "list".into(), preview: "[1, 2, 3]".into(), convertible: true, ..Default::default() });
     // Lay the cached results out, as opening a file does.
     s.execute("formulas.calculateNow", json!({})).unwrap();
     if rtl {
@@ -278,7 +282,11 @@ fn the_warning_button_says_python_did_not_run_only_for_blocked() {
     let mut s = session(false);
     s.execute("python.set", json!({"cell": "G2", "code": "1 / 0"})).unwrap();
     let error = Value::Error(gridcraft_engine::core::CellError::Python);
-    cache(&mut s, "G2", PyOutput { value: error, type_name: "ZeroDivisionError".into(), preview: String::new(), convertible: true });
+    cache(
+        &mut s,
+        "G2",
+        PyOutput { value: error, type_name: "ZeroDivisionError".into(), preview: String::new(), convertible: true, ..Default::default() },
+    );
     s.execute("formulas.calculateNow", json!({})).unwrap();
     let mut h = harness(s);
     select(&mut h, "G2");
