@@ -477,6 +477,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "Çalışıyor",
         "Python|Blocked" => "Engellendi",
         "Enable Python in cells" => "Hücrelerde Python'u etkinleştir",
+        "Waiting for Python cells to finish before saving..." => "Kaydetmeden önce Python hücrelerinin bitmesi bekleniyor...",
+        "Save Now" => "Şimdi Kaydet",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Çalışma kitabı kaydedildi, ancak bu Python hücreleri bitmedi, bu yüzden dosyada varsa son sonuçları bulunuyor: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} ve {count} tane daha",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, çok eski: Python hücreleri 3.11 veya daha yenisini gerektirir",
         "Looking for Python…" => "Python aranıyor…",
         "Copied to the clipboard." => "Panoya kopyalandı.",

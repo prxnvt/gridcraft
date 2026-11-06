@@ -1038,6 +1038,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "Виконується",
         "Python|Blocked" => "Заблоковано",
         "Enable Python in cells" => "Увімкнути Python у клітинках",
+        "Waiting for Python cells to finish before saving..." => "Очікування завершення клітинок Python перед збереженням...",
+        "Save Now" => "Зберегти зараз",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Книгу збережено, але ці клітинки Python не завершилися, тому у файлі їхні останні результати, якщо вони були: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} і ще {count}",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, надто стара: клітинкам Python потрібна версія 3.11 або новіша",
         "Looking for Python…" => "Пошук Python…",
         "Copied to the clipboard." => "Скопійовано до буфера обміну.",

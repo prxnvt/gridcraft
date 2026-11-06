@@ -507,6 +507,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "Radi",
         "Python|Blocked" => "Blokirano",
         "Enable Python in cells" => "Omogući Python u ćelijama",
+        "Waiting for Python cells to finish before saving..." => "Čeka se da se Python ćelije završe pre čuvanja...",
+        "Save Now" => "Sačuvaj odmah",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Radna sveska je sačuvana, ali ove Python ćelije nisu završene, pa datoteka sadrži njihove poslednje rezultate, ako ih je bilo: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} i još {count}",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, prestara: Python ćelije zahtevaju verziju 3.11 ili noviju",
         "Looking for Python…" => "Traži se Python…",
         "Copied to the clipboard." => "Kopirano u privremenu memoriju.",

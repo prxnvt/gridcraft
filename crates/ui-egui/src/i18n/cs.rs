@@ -625,6 +625,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "Spuštěno",
         "Python|Blocked" => "Zablokováno",
         "Enable Python in cells" => "Povolit Python v buňkách",
+        "Waiting for Python cells to finish before saving..." => "Před uložením se čeká na dokončení buněk Python...",
+        "Save Now" => "Uložit hned",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Sešit byl uložen, ale tyto buňky Python nebyly dokončeny, takže soubor obsahuje jejich poslední výsledky, pokud nějaké měly: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} a ještě {count}",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, příliš stará: buňky Pythonu vyžadují verzi 3.11 nebo novější",
         "Looking for Python…" => "Hledá se Python…",
         "Copied to the clipboard." => "Zkopírováno do schránky.",

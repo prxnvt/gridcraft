@@ -548,6 +548,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "Läuft",
         "Python|Blocked" => "Blockiert",
         "Enable Python in cells" => "Python in Zellen aktivieren",
+        "Waiting for Python cells to finish before saving..." => "Vor dem Speichern wird auf den Abschluss der Python-Zellen gewartet...",
+        "Save Now" => "Jetzt speichern",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Die Arbeitsmappe wurde gespeichert, aber diese Python-Zellen wurden nicht fertig, daher enthält die Datei ihre letzten Ergebnisse, falls vorhanden: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} und {count} weitere",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, zu alt: Python-Zellen benötigen 3.11 oder neuer",
         "Looking for Python…" => "Python wird gesucht…",
         "Copied to the clipboard." => "In die Zwischenablage kopiert.",

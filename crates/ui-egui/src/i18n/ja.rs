@@ -477,6 +477,13 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Python|Running", "実行中"),
     ("Python|Blocked", "ブロック中"),
     ("Enable Python in cells", "セルで Python を有効にする"),
+    ("Waiting for Python cells to finish before saving...", "保存の前に Python セルの完了を待っています..."),
+    ("Save Now", "今すぐ保存"),
+    (
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}",
+        "ブックは保存されましたが、次の Python セルは完了していなかったため、ファイルには最後の結果 (ある場合) が入っています: {cells}",
+    ),
+    ("{cells} and {count} more", "{cells} ほか {count} 個"),
     ("{version}, too old: Python cells need 3.11 or newer", "{version}: バージョンが古すぎます。Python セルには 3.11 以降が必要です"),
     ("Looking for Python…", "Python を検索しています…"),
     ("Copied to the clipboard.", "クリップボードにコピーしました。"),

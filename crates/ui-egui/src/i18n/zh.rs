@@ -508,6 +508,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "运行中",
         "Python|Blocked" => "已阻止",
         "Enable Python in cells" => "在单元格中启用 Python",
+        "Waiting for Python cells to finish before saving..." => "正在等待 Python 单元格完成后再保存...",
+        "Save Now" => "立即保存",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "工作簿已保存,但这些 Python 单元格尚未完成,因此文件中是它们的上一次结果(如果有):{cells}"
+        }
+        "{cells} and {count} more" => "{cells} 等另外 {count} 个",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}，版本过旧：Python 单元格需要 3.11 或更高版本",
         "Looking for Python…" => "正在查找 Python…",
         "Copied to the clipboard." => "已复制到剪贴板。",

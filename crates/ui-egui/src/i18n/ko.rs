@@ -516,6 +516,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "실행 중",
         "Python|Blocked" => "차단됨",
         "Enable Python in cells" => "셀에서 Python 사용",
+        "Waiting for Python cells to finish before saving..." => "저장하기 전에 Python 셀이 끝나기를 기다리는 중...",
+        "Save Now" => "지금 저장",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "통합 문서는 저장되었지만 다음 Python 셀이 끝나지 않아 파일에는 마지막 결과(있는 경우)가 들어 있습니다: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} 외 {count}개",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, 버전이 너무 낮음: Python 셀에는 3.11 이상이 필요합니다",
         "Looking for Python…" => "Python을 찾는 중…",
         "Copied to the clipboard." => "클립보드에 복사했습니다.",

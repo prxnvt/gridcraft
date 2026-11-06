@@ -1042,6 +1042,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "Εκτελείται",
         "Python|Blocked" => "Αποκλείστηκε",
         "Enable Python in cells" => "Ενεργοποίηση της Python στα κελιά",
+        "Waiting for Python cells to finish before saving..." => "Αναμονή για την ολοκλήρωση των κελιών Python πριν από την αποθήκευση...",
+        "Save Now" => "Αποθήκευση τώρα",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Το βιβλίο εργασίας αποθηκεύτηκε, αλλά αυτά τα κελιά Python δεν ολοκληρώθηκαν, οπότε το αρχείο έχει τα τελευταία τους αποτελέσματα, αν υπήρχαν: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} και {count} ακόμη",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, πολύ παλιά: τα κελιά Python απαιτούν έκδοση 3.11 ή νεότερη",
         "Looking for Python…" => "Αναζήτηση για Python…",
         "Copied to the clipboard." => "Αντιγράφηκε στο πρόχειρο.",

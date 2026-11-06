@@ -588,6 +588,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "Wordt uitgevoerd",
         "Python|Blocked" => "Geblokkeerd",
         "Enable Python in cells" => "Python in cellen inschakelen",
+        "Waiting for Python cells to finish before saving..." => "Wachten tot de Python-cellen klaar zijn voordat er wordt opgeslagen...",
+        "Save Now" => "Nu opslaan",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "De werkmap is opgeslagen, maar deze Python-cellen waren niet klaar, dus het bestand bevat hun laatste resultaten, voor zover ze die hadden: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} en nog {count}",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, te oud: Python-cellen vereisen versie 3.11 of nieuwer",
         "Looking for Python…" => "Zoeken naar Python…",
         "Copied to the clipboard." => "Naar het klembord gekopieerd.",

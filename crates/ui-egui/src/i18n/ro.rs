@@ -1096,6 +1096,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "În execuție",
         "Python|Blocked" => "Blocat",
         "Enable Python in cells" => "Activează Python în celule",
+        "Waiting for Python cells to finish before saving..." => "Se așteaptă finalizarea celulelor Python înainte de salvare...",
+        "Save Now" => "Salvează acum",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Registrul a fost salvat, dar aceste celule Python nu s-au terminat, așa că fișierul conține ultimele lor rezultate, dacă au avut: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} și încă {count}",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, prea veche: celulele Python necesită versiunea 3.11 sau mai nouă",
         "Looking for Python…" => "Se caută Python…",
         "Copied to the clipboard." => "Copiat în clipboard.",

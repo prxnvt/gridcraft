@@ -477,6 +477,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "Đang chạy",
         "Python|Blocked" => "Bị chặn",
         "Enable Python in cells" => "Bật Python trong ô",
+        "Waiting for Python cells to finish before saving..." => "Đang chờ các ô Python hoàn tất trước khi lưu...",
+        "Save Now" => "Lưu ngay",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Sổ làm việc đã được lưu, nhưng các ô Python này chưa hoàn tất, vì vậy tệp chứa kết quả cuối cùng của chúng, nếu có: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} và {count} ô khác",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, quá cũ: ô Python cần phiên bản 3.11 trở lên",
         "Looking for Python…" => "Đang tìm Python…",
         "Copied to the clipboard." => "Đã sao chép vào bảng tạm.",

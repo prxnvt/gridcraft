@@ -520,6 +520,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python|Running" => "Выполняется",
         "Python|Blocked" => "Заблокирован",
         "Enable Python in cells" => "Включить Python в ячейках",
+        "Waiting for Python cells to finish before saving..." => "Ожидание завершения ячеек Python перед сохранением...",
+        "Save Now" => "Сохранить сейчас",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Книга сохранена, но эти ячейки Python не завершились, поэтому в файле их последние результаты, если они были: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} и ещё {count}",
         "{version}, too old: Python cells need 3.11 or newer" => "{version}, слишком старая: ячейкам Python нужна версия 3.11 или новее",
         "Looking for Python…" => "Поиск Python…",
         "Copied to the clipboard." => "Скопировано в буфер обмена.",
