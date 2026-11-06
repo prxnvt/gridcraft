@@ -23,6 +23,7 @@ mod dates;
 mod environment;
 mod initialization;
 mod inputs;
+pub mod links;
 mod packages;
 mod plan;
 mod runner;

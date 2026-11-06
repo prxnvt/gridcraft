@@ -203,3 +203,250 @@ fn a_cell_that_changes_an_earlier_figure_runs_again_from_that_cell() {
 fn set(s: &mut Session, cell: &str, input: &str) {
     s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
 }
+
+// ---- Linked floating pictures
+
+fn images(s: &Session, sheet: usize) -> usize {
+    s.doc().unwrap().wb.sheets[sheet].images.len()
+}
+
+fn image_bytes(s: &Session, sheet: usize) -> Vec<Vec<u8>> {
+    s.doc().unwrap().wb.sheets[sheet].images.iter().map(|o| (*o.data).clone()).collect()
+}
+
+/// A workbook whose A1 gave a picture, shown over the cells at D1.
+fn with_linked_picture() -> (Session, gridcraft_python::fake::FakeHandle) {
+    let (mut s, h) = session();
+    py(&mut s, "A1", "picture 40 30");
+    settle(&mut s);
+    let r = s.execute("python.displayOverCells", json!({"cell": "A1", "at": "D1"})).unwrap();
+    assert_eq!(r["source"], "Sheet1!$A$1");
+    assert_eq!(images(&s, 0), 1);
+    (s, h)
+}
+
+/// `edit`, then Undo and Redo: the picture goes, comes back with the code, and goes again.
+fn gone_and_back(s: &mut Session, what: &str) {
+    assert_eq!(images(s, 0), 0, "{what}");
+    s.execute("edit.undo", json!({})).unwrap();
+    settle(s);
+    assert_eq!(images(s, 0), 1, "{what}: undo");
+    assert_eq!(python(s, "A1").code, "picture 40 30", "{what}: undo");
+    assert!(python(s, "A1").image().is_some(), "{what}: undo");
+    s.execute("edit.redo", json!({})).unwrap();
+    settle(s);
+    assert_eq!(images(s, 0), 0, "{what}: redo");
+}
+
+#[test]
+fn a_linked_picture_shows_the_cells_picture_and_changes_with_it() {
+    let (mut s, _h) = with_linked_picture();
+    assert_eq!(image_bytes(&s, 0), [picture_bytes(40, 30)]);
+    py(&mut s, "A1", "picture 20 30");
+    settle(&mut s);
+    assert_eq!(image_bytes(&s, 0), [picture_bytes(20, 30)], "the code changed, and so did the picture");
+    let o = s.doc().unwrap().wb.sheets[0].images[0].clone();
+    assert_eq!(o.anchor.width, 40.0, "the width stays");
+    assert_eq!(o.anchor.height, 60.0, "the height follows the proportions");
+    assert_eq!(o.anchor.cell, c("D1"));
+}
+
+#[test]
+fn a_picture_needs_a_picture_to_show() {
+    let (mut s, _h) = session();
+    py(&mut s, "A1", "ret 1");
+    settle(&mut s);
+    assert!(s.execute("python.displayOverCells", json!({"cell": "A1"})).is_err());
+    assert!(s.execute("python.displayOverCells", json!({"cell": "C3"})).is_err());
+    assert!(s.execute("python.createReference", json!({})).is_err());
+    assert!(s.execute("python.createReference", json!({"id": 99})).is_err());
+    assert_eq!(images(&s, 0), 0);
+}
+
+#[test]
+fn create_reference_makes_another_linked_picture() {
+    let (mut s, _h) = with_linked_picture();
+    let id = s.doc().unwrap().wb.sheets[0].images[0].id;
+    s.execute("python.createReference", json!({"id": id})).unwrap();
+    assert_eq!(images(&s, 0), 2);
+    py(&mut s, "A1", "picture 20 30");
+    settle(&mut s);
+    assert_eq!(image_bytes(&s, 0), [picture_bytes(20, 30), picture_bytes(20, 30)]);
+    s.execute("insert.picture", json!({"base64": crate::io::base64_encode(&picture_bytes(2, 2)), "at": "H1"})).unwrap();
+    let plain = s.doc().unwrap().wb.sheets[0].images[2].id;
+    assert!(s.execute("python.createReference", json!({"id": plain})).is_err(), "not linked");
+}
+
+#[test]
+fn clearing_the_source_deletes_the_picture_and_undo_brings_both_back() {
+    let (mut s, _h) = with_linked_picture();
+    s.execute("edit.clearContents", json!({"range": "A1"})).unwrap();
+    settle(&mut s);
+    gone_and_back(&mut s, "cleared");
+}
+
+#[test]
+fn a_value_over_the_source_deletes_the_picture() {
+    let (mut s, _h) = with_linked_picture();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    settle(&mut s);
+    gone_and_back(&mut s, "a value");
+}
+
+#[test]
+fn convert_to_normal_cell_deletes_the_picture() {
+    let (mut s, _h) = with_linked_picture();
+    s.execute("python.clear", json!({"cell": "A1"})).unwrap();
+    settle(&mut s);
+    gone_and_back(&mut s, "converted");
+}
+
+#[test]
+fn deleting_the_row_or_the_column_deletes_the_picture() {
+    let (mut s, _h) = with_linked_picture();
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    settle(&mut s);
+    gone_and_back(&mut s, "row");
+    s.execute("edit.undo", json!({})).unwrap();
+    settle(&mut s);
+    s.execute("home.deleteColumns", json!({"cols": "A:A"})).unwrap();
+    settle(&mut s);
+    gone_and_back(&mut s, "column");
+}
+
+#[test]
+fn deleting_the_sources_sheet_deletes_pictures_on_other_sheets() {
+    let (mut s, _h) = session();
+    s.execute("home.insertSheet", json!({"name": "Plots"})).unwrap();
+    let plots = s.doc().unwrap().wb.active_sheet();
+    assert_eq!(plots, 1);
+    s.execute("python.set", json!({"sheet": "Sheet1", "cell": "A1", "code": "picture 40 30"})).unwrap();
+    settle(&mut s);
+    let r = s.execute("python.displayOverCells", json!({"sheet": "Sheet1", "cell": "A1", "at": "B2"})).unwrap();
+    assert_eq!(r["source"], "Sheet1!$A$1");
+    assert_eq!(images(&s, 1), 1, "it is on the active sheet");
+    s.execute("home.deleteSheet", json!({"sheet": "Sheet1"})).unwrap();
+    settle(&mut s);
+    assert_eq!(images(&s, 0), 0, "the sheet that is left is Plots");
+    s.execute("edit.undo", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(images(&s, 1), 1);
+    assert_eq!(s.doc().unwrap().wb.sheets[0].cell(c("A1")).unwrap().py.as_deref().unwrap().code, "picture 40 30");
+}
+
+#[test]
+fn code_that_stops_giving_a_picture_deletes_it_and_undo_brings_both_back() {
+    let (mut s, _h) = with_linked_picture();
+    let steps = s.doc().unwrap().undo.len();
+    py(&mut s, "A1", "ret 5");
+    assert_eq!(images(&s, 0), 1, "the result isn't here yet");
+    settle(&mut s);
+    assert_eq!(value(&s, "A1"), Value::Number(5.0));
+    assert_eq!(s.doc().unwrap().undo.len(), steps + 1, "the deletion belongs to the edit");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(images(&s, 0), 1, "at once, with the old code and result");
+    assert_eq!(python(&s, "A1").code, "picture 40 30");
+    settle(&mut s);
+    assert_eq!(value(&s, "A1"), Value::text("Image"));
+    assert_eq!(images(&s, 0), 1, "and running that code again keeps it");
+    assert_eq!(image_bytes(&s, 0), [picture_bytes(40, 30)]);
+    s.execute("edit.redo", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(images(&s, 0), 0);
+    assert_eq!(value(&s, "A1"), Value::Number(5.0));
+}
+
+#[test]
+fn a_change_to_what_the_source_reads_counts_too() {
+    let (mut s, _h) = session();
+    s.execute("cell.set", json!({"cell": "C1", "input": "1"})).unwrap();
+    // The fake worker's `picturewhen`: a picture while the input is 1, else a number.
+    py(&mut s, "A1", "picturewhen xl(\"C1\")");
+    settle(&mut s);
+    s.execute("python.displayOverCells", json!({"cell": "A1", "at": "D1"})).unwrap();
+    assert_eq!(images(&s, 0), 1);
+    let steps = s.doc().unwrap().undo.len();
+    s.execute("cell.set", json!({"cell": "C1", "input": "2"})).unwrap();
+    settle(&mut s);
+    assert_eq!(images(&s, 0), 0);
+    assert_eq!(s.doc().unwrap().undo.len(), steps + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(images(&s, 0), 1);
+    assert_eq!(value(&s, "C1"), Value::Number(1.0));
+}
+
+#[test]
+fn a_run_with_no_edit_behind_it_makes_its_own_step_when_it_deletes() {
+    let (mut s, _h) = session();
+    // The fake worker's `pictureonce`: a picture on its first run in a worker, then a number.
+    py(&mut s, "A1", "pictureonce");
+    settle(&mut s);
+    s.execute("python.displayOverCells", json!({"cell": "A1", "at": "D1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F9", "input": "1"})).unwrap();
+    let steps = s.doc().unwrap().undo.len();
+    s.execute("python.run", json!({"cell": "A1"})).unwrap();
+    settle(&mut s);
+    assert_eq!(images(&s, 0), 0);
+    assert_eq!(value(&s, "A1"), Value::Number(1.0));
+    assert_eq!(s.doc().unwrap().undo.len(), steps + 1);
+    assert_eq!(s.doc().unwrap().undo.last().unwrap().label, "Run Python Cell");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(images(&s, 0), 1, "the picture and the earlier result, and nothing else");
+    assert_eq!(value(&s, "A1"), Value::text("Image"));
+    assert_eq!(value(&s, "F9"), Value::Number(1.0));
+}
+
+#[test]
+fn a_run_that_doesnt_finish_deletes_nothing_and_says_so() {
+    let (mut s, _h) = with_linked_picture();
+    for code in ["fail", "die", "garbage"] {
+        py(&mut s, "A1", code);
+        settle(&mut s);
+        assert_eq!(images(&s, 0), 1, "{code}");
+        assert_eq!(image_bytes(&s, 0), [picture_bytes(40, 30)], "{code}: its last image");
+        let wb = &s.doc().unwrap().wb;
+        assert!(crate::python::links::problem(wb, &wb.sheets[0].images[0]).is_some(), "{code}: marked");
+    }
+    py(&mut s, "A1", "picture 20 30");
+    settle(&mut s);
+    let wb = &s.doc().unwrap().wb;
+    assert_eq!(crate::python::links::problem(wb, &wb.sheets[0].images[0]), None, "the next picture clears it");
+    assert_eq!(image_bytes(&s, 0), [picture_bytes(20, 30)]);
+}
+
+#[test]
+fn the_link_follows_the_source() {
+    let (mut s, _h) = with_linked_picture();
+    let source = |s: &Session| s.doc().unwrap().wb.sheets[0].images[0].python_source.clone().unwrap();
+    s.execute("home.insertRows", json!({"rows": "1:2"})).unwrap();
+    settle(&mut s);
+    assert_eq!(source(&s), "Sheet1!$A$3");
+    s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
+    settle(&mut s);
+    assert_eq!(source(&s), "Sheet1!$B$3");
+    s.execute("sheet.rename", json!({"name": "My Data"})).unwrap();
+    assert_eq!(source(&s), "'My Data'!$B$3");
+    settle(&mut s);
+    assert_eq!(images(&s, 0), 1);
+    py(&mut s, "B3", "picture 20 30");
+    settle(&mut s);
+    assert_eq!(image_bytes(&s, 0), [picture_bytes(20, 30)], "it still shows that cell");
+    // A cut and paste of the cell moves the link.
+    s.execute("selection.set", json!({"range": "B3"})).unwrap();
+    s.execute("edit.cut", json!({})).unwrap();
+    s.execute("edit.paste", json!({"at": "E5"})).unwrap();
+    settle(&mut s);
+    assert_eq!(source(&s), "'My Data'!$E$5");
+    assert_eq!(images(&s, 0), 1);
+}
+
+#[test]
+fn deleting_the_picture_leaves_the_cell() {
+    let (mut s, _h) = with_linked_picture();
+    let id = s.doc().unwrap().wb.sheets[0].images[0].id;
+    s.execute("object.delete", json!({"kind": "image", "id": id})).unwrap();
+    assert_eq!(images(&s, 0), 0);
+    assert_eq!(python(&s, "A1").code, "picture 40 30");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(images(&s, 0), 1);
+}

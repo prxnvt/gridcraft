@@ -11,7 +11,7 @@ use gridcraft_model::python::{MAX_FORMULA_CHARS, MAX_INIT_CHARS, init_fits, norm
 use gridcraft_model::{Cell, PyCode, PyTable};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, always, bad, cell_param_on, cmd, edit, has_doc, str_param, target_sheet};
+use super::{CommandSpec, always, bad, cell_param, cell_param_on, cmd, edit, has_doc, str_param, target_sheet, u32_param};
 use crate::python::{PythonCalculation, diagnostic_entry_json, environment_json, run_json};
 use crate::{EngineError, Result, Session};
 
@@ -70,6 +70,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{cell?, sheet?, path} → {cell, path, bytes, mime}: writes the picture `python.image` gives, with `.png` or `.jpg` added to `path` when it has no such ending. Refused inside a script, as other file writes are.",
             has_doc,
             save_image
+        ),
+        cmd!(
+            "python.displayOverCells",
+            "Display Plot over Cells",
+            ["Python", "Plots"],
+            Some("Ctrl+Alt+Shift+C"),
+            "{cell?, sheet?, at?} → {image, cell}: a floating picture of the picture a Python cell gave (default: the active cell), placed at `at` (default: the cell to its right) on the active sheet. It is linked to the cell: it changes when the cell's result does, and goes when the cell can no longer give a picture.",
+            has_doc,
+            display_over_cells
+        ),
+        cmd!(
+            "python.createReference",
+            "Create Reference",
+            ["Python", "Plots"],
+            None,
+            "{id} → {image, cell}: another picture linked to the same cell as the linked picture `id` on the active sheet, a little below and to the right of it.",
+            has_doc,
+            create_reference
         ),
         cmd!(
             noundo "python.saveCsv",
@@ -398,6 +416,43 @@ fn save_image(s: &mut Session, p: &Json) -> Result<Json> {
     let target = if has_ending { path.to_string() } else { format!("{path}{ending}") };
     crate::io::write_file(&target, &i.picture.data)?;
     Ok(json!({"cell": at.a1(), "path": target, "bytes": i.picture.data.len(), "mime": i.picture.mime}))
+}
+
+/// `python.displayOverCells`: the picture, floating, and linked to its cell.
+fn display_over_cells(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, at) = target_cell(s, p)?;
+    let image = kept_image(s, sheet, at)?;
+    let d = s.doc()?;
+    let target = d.wb.active_sheet();
+    let place = cell_param(s, p, "at")?.unwrap_or_else(|| CellRef::new(at.row, at.col.saturating_add(1).min(gridcraft_core::MAX_COLS - 1)));
+    let id = d.wb.next_object_id();
+    let picture = crate::python::links::new_picture(&d.wb, sheet, at, &image, id, place).ok_or(EngineError::NoDocument)?;
+    let source = picture.python_source.clone();
+    edit(s, |cx| {
+        cx.sheet_mut(target)?.images.push(picture);
+        Ok(json!({"image": id, "cell": at.a1(), "source": source}))
+    })
+}
+
+/// `python.createReference`: another picture of the same cell, near the first.
+fn create_reference(s: &mut Session, p: &Json) -> Result<Json> {
+    let Some(id) = u32_param(p, "id") else { return Err(bad("python.createReference", "missing `id`")) };
+    let d = s.doc()?;
+    let target = d.wb.active_sheet();
+    let sh = d.wb.sheet(target).ok_or(EngineError::NoDocument)?;
+    let Some(first) = sh.images.iter().find(|o| o.id == id) else { return Err(bad("python.createReference", "no such picture")) };
+    if first.python_source.is_none() {
+        return Err(bad("python.createReference", "that picture isn't linked to a Python cell"));
+    }
+    let mut picture = first.clone();
+    picture.id = d.wb.next_object_id();
+    picture.anchor.dx += 16.0;
+    picture.anchor.dy += 16.0;
+    let new = picture.id;
+    edit(s, |cx| {
+        cx.sheet_mut(target)?.images.push(picture);
+        Ok(json!({"image": new}))
+    })
 }
 
 /// The table a Python Object cell keeps from its last run.

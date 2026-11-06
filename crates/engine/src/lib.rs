@@ -826,6 +826,15 @@ impl Session {
                 recent::note(&mut self.prefs.recent_functions, id, &params);
             }
         }
+        // A linked picture goes with its source, in the command that removed the source, so that
+        // command's undo step brings both back.
+        if spec.undoable
+            && result.is_ok()
+            && let Some(uid) = doc_uid
+            && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
+        {
+            python::links::prune(d);
+        }
         // Inside an undo group the group owns the step. A command that ended a group open before
         // it leaves the group its step and makes one of its own for what it changed after the end.
         // A command that opened and closed its own groups makes one step of its own, which

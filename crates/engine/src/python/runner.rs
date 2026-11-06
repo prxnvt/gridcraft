@@ -572,6 +572,15 @@ impl DocRun {
             }
             return out;
         }
+        // An edit caused this run when what the cell last ran with was something else. A cell that has
+        // never run here has an edit behind it only if the last undo step changed its code.
+        let edit_behind = self.entries.get(flight.index).is_some_and(|e| match e.ran {
+            Some(ran) => ran != flight.fp,
+            None => d.undo.last().is_some_and(|step| {
+                let code = |wb: &gridcraft_model::Workbook| wb.sheet(e.sheet).and_then(|s| s.cell(e.at)).and_then(|c| c.py.as_deref()).map(|py| py.code.clone());
+                code(&step.wb) != code(&d.wb)
+            }),
+        });
         self.settled(flight.index, flight.fp, !lost);
         if lost {
             self.worker_gone();
@@ -580,7 +589,9 @@ impl DocRun {
         let Some(e) = self.entries.get_mut(flight.index) else { return out };
         let (sheet, at) = (e.sheet, e.at);
         e.diag = cell_diag;
+        let before = d.wb.clone();
         out.wrote = write_cell(d, sheet, at, write);
+        out.wrote |= super::links::after_result(d, sheet, at, &before, edit_behind);
         out.wrote |= self.plan(d, cx, Source::Result(flight.index), stats);
         self.give_up_after_losses();
         out.wrote |= self.sync_flags(d);

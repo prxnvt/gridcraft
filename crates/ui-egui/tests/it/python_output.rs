@@ -38,7 +38,7 @@ fn frame(rows: usize, cols: usize, total_rows: u64, total_cols: u64) -> Table {
 }
 
 fn object(type_name: &str, size: Vec<u64>, table: Table) -> Output {
-    Output::Object { type_name: type_name.into(), preview: "the repr".into(), size, table: Some(table) }
+    Output::Object { type_name: type_name.into(), preview: "the repr".into(), size, table: Some(table), picture: None }
 }
 
 /// What the worker answers each code with.
@@ -80,7 +80,7 @@ fn answer(code: &str) -> Output {
             object("DataFrame", vec![1, 1], table)
         }
         "flat" => Output::Object { type_name: "list".into(), preview: "[1, 2]".into(), size: vec![2], table: None },
-        "dict" => Output::Object { type_name: "dict".into(), preview: "{'a': 1}".into(), size: vec![1], table: None },
+        "dict" => Output::Object { type_name: "dict".into(), preview: "{'a': 1}".into(), size: vec![1], table: None, picture: None },
         "text" => Output::Value(Value::text("one\ntwo\nthree")),
         _ => Output::Value(Value::Number(1.0)),
     }

@@ -74,6 +74,24 @@ fn answer(w: &mut FakeWorker, id: u64, code: &str, inputs: &BTreeMap<String, Inp
             let density = size(3);
             Ok(Output::picture(gridcraft_python::Picture::from_bytes(picture_bytes(size(1), size(2)), density).unwrap()))
         }
+        // A picture while its input is 1, else a number.
+        "picturewhen" => {
+            if inputs.values().map(number).sum::<f64>() == 1.0 {
+                Ok(Output::picture(gridcraft_python::Picture::from_bytes(picture_bytes(4, 3), 1).unwrap()))
+            } else {
+                value(Value::Number(2.0))
+            }
+        }
+        // A picture the first time, then a number.
+        "pictureonce" => {
+            let n = vars.entry("pictureonce".into()).or_insert(0.0);
+            *n += 1.0;
+            if *n == 1.0 {
+                Ok(Output::picture(gridcraft_python::Picture::from_bytes(picture_bytes(4, 3), 1).unwrap()))
+            } else {
+                value(Value::Number(1.0))
+            }
+        }
         // It changed a figure an earlier cell made: sheet, row and column.
         "touch" => {
             let n = |i: usize| words[i].parse().unwrap();
