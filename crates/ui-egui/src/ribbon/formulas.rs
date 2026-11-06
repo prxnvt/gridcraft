@@ -104,9 +104,8 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if insert_python.clicked() | invoke(app, "python.insert") {
         app.insert_python();
     }
-    if super::python::formulas_group(app, ui) {
-        sep(ui);
-    }
+    super::python::formulas_group(app, ui);
+    sep(ui);
     let __k = big_button(ui, Icon::Name, "Name\nManager", "Name Manager", false);
     control_keytip(app, ui, &__k, "dialog:nameManager");
     if __k.clicked() {

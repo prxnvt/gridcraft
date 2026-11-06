@@ -221,30 +221,21 @@ fn problems_button(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-/// The window width from which Formulas' groups all fit with the labels of Reset, Initialization and
-/// Diagnostics.
-const FORMULAS_LABELS_FROM: f32 = 1530.0;
-
-/// Formulas › Python's Reset, Initialization and Diagnostics, beside Insert Python, as in Excel. In a
-/// window too narrow for their labels they show only their icons, as Excel's groups do, so that the tab's other
-/// groups stay in view in the window the app opens with. Returns whether they show their labels, and
-/// so whether the group takes its separator too.
-pub(super) fn formulas_group(app: &mut SheetApp, ui: &mut Ui) -> bool {
-    let labelled = ui.ctx().content_rect().width() >= FORMULAS_LABELS_FROM;
-    let label = |text| if labelled { text } else { "" };
+/// Formulas › Python's Reset, Initialization and Diagnostics, beside Insert Python, as in Excel. They
+/// keep their labels at any width: a window too narrow for the tab scrolls the ribbon.
+pub(super) fn formulas_group(app: &mut SheetApp, ui: &mut Ui) {
     let blocked = python_ui::run_blocked(app);
     ui.vertical(|ui| {
-        let r = gated(ui, blocked.as_deref(), |ui| small_button(ui, Icon::PythonReset, label("Reset"), "Reset", false));
+        let r = gated(ui, blocked.as_deref(), |ui| small_button(ui, Icon::PythonReset, "Reset", "Reset", false));
         control_keytip(app, ui, &r, "python.reset");
         if r.clicked() {
             act(app, "python.reset", json!({}));
         }
-        initialization_button(app, ui, label(crate::python_window::INITIALIZATION), crate::python_window::INITIALIZATION);
-        let r = small_button(ui, Icon::PythonProblems, label("Diagnostics"), "Diagnostics", false);
+        initialization_button(app, ui, crate::python_window::INITIALIZATION, crate::python_window::INITIALIZATION);
+        let r = small_button(ui, Icon::PythonProblems, "Diagnostics", "Diagnostics", false);
         control_keytip(app, ui, &r, "python.problems");
         if r.clicked() | invoke(app, "python.problems") {
             python_ui::toggle_pane(app, PROBLEMS);
         }
     });
-    labelled
 }

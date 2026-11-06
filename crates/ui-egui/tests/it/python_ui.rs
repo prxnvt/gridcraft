@@ -651,8 +651,10 @@ fn formulas_python_opens_the_same_things() {
     h.check_accessibility();
 }
 
+/// Reset, Initialization and Diagnostics keep their labels at any width; a window too narrow for the
+/// tab scrolls the ribbon.
 #[test]
-fn formulas_gives_up_the_labels_before_it_scrolls() {
+fn formulas_keeps_the_labels_and_scrolls() {
     let overflow = |width| {
         let mut setup = Setup::new();
         setup.tab = "Formulas";
@@ -660,14 +662,15 @@ fn formulas_gives_up_the_labels_before_it_scrolls() {
         let (h, _) = setup.build();
         assert!(h.query_by_role_and_label(Role::Button, "Reset").is_some(), "{width}");
         assert!(h.query_by_role_and_label(Role::Button, "Diagnostics").is_some(), "{width}");
-        let width_of_reset = button(&h, "Reset").rect().width();
-        (RibbonOverflow::get(&h.ctx), width_of_reset)
+        let width_of = |label| button(&h, label).rect().width();
+        (RibbonOverflow::get(&h.ctx), [width_of("Reset"), width_of("Initialization"), width_of("Diagnostics")])
     };
-    let (narrow, narrow_reset) = overflow(1440.0);
-    let (wide, wide_reset) = overflow(1560.0);
-    eprintln!("Formulas at 1440: {narrow:?}; at 1560: {wide:?}");
-    assert!(narrow_reset < wide_reset, "only the icon: {narrow_reset} and {wide_reset}");
-    assert!(narrow.content + 60.0 < wide.content, "{narrow:?} and {wide:?}");
+    let (narrow, narrow_widths) = overflow(1000.0);
+    let (wide, wide_widths) = overflow(2000.0);
+    assert_eq!(narrow_widths, wide_widths, "the same buttons at either width");
+    assert!(narrow_widths.iter().all(|w| *w > 50.0), "wider than an icon: {narrow_widths:?}");
+    assert!(narrow.overflows(), "{narrow:?}");
+    assert!(!wide.overflows(), "{wide:?}");
 }
 
 // ---------------------------------------------------------------- the tab comes and goes
