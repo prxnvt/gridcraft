@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Output",
             ["Python", "Code"],
             Some("Ctrl+Alt+Shift+M"),
-            "{cell?, mode?: object|value} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` it switches to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs.",
+            "{cell?, mode?: object|value, lines?: cell|rows} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` or `lines` it switches to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs. `lines` says what a text result with line breaks does: it stays in the cell (`cell`, the default) or spills one line per row (`rows`); the result is kept, so this runs nothing. GridCraft JSON keeps this choice; an xlsx file has no place for it, so there it lasts for the session",
             has_doc,
             output
         ),
@@ -233,9 +233,11 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
     // Unchanged code with the same return type keeps its result (and its value); new code, or a
     // new return type, has none until it runs: a result of the other type would show a value and
     // preview that don't belong to the cell.
-    // The formats its results wrote stay its to take back, whatever the new code gives.
+    // The formats its results wrote stay its to take back, whatever the new code gives, and what a
+    // text does with its lines is the cell's choice.
     if let Some(o) = &old {
         py.dates.written = o.dates.written.clone();
+        py.spill_lines = o.spill_lines;
     }
     let keep = old.filter(|o| o.code == py.code && o.object == py.object);
     let value = match &keep {
@@ -268,16 +270,52 @@ fn output(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(old) = existing(s, sheet, at)? else {
         return Err(EngineError::Other(format!("{} isn't a Python cell, so it has no Python output to change", at.a1())));
     };
-    let object = output_mode("python.output", p, "mode")?.unwrap_or(!old.object);
+    let lines = lines_mode(p)?;
+    let requested = output_mode("python.output", p, "mode")?;
+    let object = requested.unwrap_or(if lines.is_some() { old.object } else { !old.object });
     let mode = |object: bool| if object { "object" } else { "value" };
+    let spill_lines = lines.unwrap_or(old.spill_lines);
     if object != old.object {
+        // One edit, so one undo step, when `lines` changes too.
         let py = PyCode { code: old.code.clone(), object, ..PyCode::default() };
-        store(s, "python.output", sheet, at, py, Some(old))?;
+        store(s, "python.output", sheet, at, py, Some(PyCode { spill_lines, ..old }))?;
+        s.python_after_edit();
+    } else if spill_lines != old.spill_lines {
+        set_spill_lines(s, sheet, at, spill_lines)?;
         s.python_after_edit();
     }
     let d = s.doc()?;
     let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
-    Ok(json!({"cell": at.a1(), "output": mode(object), "value": crate::cmd::inspect::value_json(&shown)}))
+    Ok(json!({
+        "cell": at.a1(),
+        "output": mode(object),
+        "lines": if spill_lines { "rows" } else { "cell" },
+        "value": crate::cmd::inspect::value_json(&shown),
+    }))
+}
+
+fn lines_mode(p: &Json) -> Result<Option<bool>> {
+    match p.get("lines") {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(m)) if m.eq_ignore_ascii_case("cell") => Ok(Some(false)),
+        Some(Json::String(m)) if m.eq_ignore_ascii_case("rows") => Ok(Some(true)),
+        Some(_) => Err(bad("python.output", "`lines` is `cell` or `rows`")),
+    }
+}
+
+/// What a text result does with its line breaks. The result stays, so nothing runs: the calculation
+/// lays it out again, and what reads the cells it spills over is recalculated. A locked cell on a
+/// protected sheet is refused here, as the option isn't what the edit itself compares.
+fn set_spill_lines(s: &mut Session, sheet: usize, at: CellRef, on: bool) -> Result<()> {
+    if let Some(m) = s.locked_cell_message(sheet, at) {
+        return Err(EngineError::Other(m));
+    }
+    edit(s, |cx| {
+        let Some(py) = cx.sheet_mut(sheet)?.cells.get_mut(at).and_then(|c| c.py.as_mut()) else { return Ok(()) };
+        Arc::make_mut(py).spill_lines = on;
+        cx.touch(sheet, at);
+        Ok(())
+    })
 }
 
 /// The table a Python Object cell keeps from its last run.

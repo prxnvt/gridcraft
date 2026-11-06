@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::{CellError, Value};
+use gridcraft_core::{Array, CellError, Value};
 use serde::{Deserialize, Serialize};
 
 mod table;
@@ -139,6 +139,11 @@ pub struct PyCode {
     /// The cell's inputs changed while calculation was manual: its value is out of date until
     /// the workbook is calculated.
     pub stale: bool,
+    /// A text result with line breaks spills one line per row, instead of staying in the cell. Only
+    /// GridCraft JSON holds this: the file format has no place for it, so in an xlsx file it lasts
+    /// for the session.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub spill_lines: bool,
     /// The cell is waiting to run or running: it shows `#BUSY!` while its kept result, and what that
     /// result spilled, stay until the new one arrives. A state of this session, never saved.
     #[serde(skip)]
@@ -219,10 +224,18 @@ impl PyCode {
     }
 
     /// What the cell shows for its result: cell values (an array spills from the cell), or, for a
-    /// Python object, what names it (`value` holds that, with its size when it has one). `None` before the code has
-    /// run.
+    /// Python object, what names it (`value` holds that, with its size when it has one). A text with
+    /// line breaks stays in the cell unless [`PyCode::spill_lines`] says one line per row. `None`
+    /// before the code has run.
     pub fn result_value(&self) -> Option<Value> {
         let out = self.output.as_ref()?;
+        if self.spill_lines
+            && out.convertible
+            && let Value::Text(text) = &out.value
+            && let Some(lines) = spilled_lines(text)
+        {
+            return Some(lines);
+        }
         Some(if self.object && matches!(out.value, Value::Array(_)) { Value::text(out.type_name.as_str()) } else { out.value.clone() })
     }
 
@@ -308,6 +321,25 @@ fn skip_space(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
     while chars.peek().is_some_and(|c| c.is_whitespace()) {
         chars.next();
     }
+}
+
+/// A text with line breaks as one line per row: `\n`, `\r\n` and `\r` each end a line, and a line
+/// break at the very end doesn't start another. `None` for a text with no line breaks, and for one
+/// with more lines than a result may have, which stays in its cell.
+fn spilled_lines(text: &str) -> Option<Value> {
+    if !text.contains(['\n', '\r']) {
+        return None;
+    }
+    let text = normalize_code(text);
+    let text = text.strip_suffix('\n').unwrap_or(&text);
+    let rows = text.bytes().filter(|b| *b == b'\n').count().saturating_add(1);
+    if rows > MAX_RESULT_CELLS {
+        return None;
+    }
+    if rows == 1 {
+        return Some(Value::text(text));
+    }
+    Array::new(rows, 1, text.split('\n').map(Value::text).collect()).map(Value::from)
 }
 
 /// Line breaks as `\n`.
@@ -576,11 +608,48 @@ mod tests {
         let mut py = PyCode { object: true, output: Some(object(Value::text("DataFrame 6x4"), "DataFrame")), ..PyCode::new("df") };
         assert_eq!(py.result_value(), Some(Value::text("DataFrame 6x4")));
         // A result cells can hold, read from a file, still shows the object's name, and doesn't spill.
-        let arr = gridcraft_core::Array::new(2, 1, vec![1.0.into(), 2.0.into()]).map(Value::from).unwrap();
+        let arr = Array::new(2, 1, vec![1.0.into(), 2.0.into()]).map(Value::from).unwrap();
         py.output = Some(object(arr.clone(), "list"));
         assert_eq!(py.result_value(), Some(Value::text("list")));
         py.object = false;
         assert_eq!(py.result_value(), Some(arr));
+    }
+
+    fn lines_of(text: &str) -> Option<Value> {
+        let output = PyOutput { value: Value::text(text), type_name: "str".into(), convertible: true, ..PyOutput::default() };
+        PyCode { spill_lines: true, output: Some(output), ..PyCode::new("s") }.result_value()
+    }
+
+    fn rows(lines: &[&str]) -> Option<Value> {
+        Array::new(lines.len(), 1, lines.iter().map(|l| Value::text(*l)).collect()).map(Value::from)
+    }
+
+    #[test]
+    fn a_text_stays_in_its_cell_unless_it_spills_one_line_per_row() {
+        let text = "a\nb";
+        let output = PyOutput { value: Value::text(text), type_name: "str".into(), convertible: true, ..PyOutput::default() };
+        let py = PyCode { output: Some(output), ..PyCode::new("s") };
+        assert_eq!(py.result_value(), Some(Value::text(text)), "by default");
+        assert_eq!(lines_of(text), rows(&["a", "b"]));
+        // Every kind of line break, and an empty line in the middle.
+        assert_eq!(lines_of("a\r\nb\rc\n\nd"), rows(&["a", "b", "c", "", "d"]));
+        // A line break at the end starts no line, one more does.
+        assert_eq!(lines_of("a\nb\n"), rows(&["a", "b"]));
+        assert_eq!(lines_of("a\nb\r\n"), rows(&["a", "b"]));
+        assert_eq!(lines_of("a\nb\n\n"), rows(&["a", "b", ""]));
+        // One line, or none, is a text.
+        assert_eq!(lines_of("a\n"), Some(Value::text("a")));
+        assert_eq!(lines_of("\n"), Some(Value::text("")));
+        assert_eq!(lines_of("a"), Some(Value::text("a")));
+        assert_eq!(lines_of(""), Some(Value::text("")));
+        // At the limit it spills, past it the text stays in its cell.
+        let at = "\n".repeat(MAX_RESULT_CELLS);
+        assert!(matches!(lines_of(&at), Some(Value::Array(a)) if a.rows == MAX_RESULT_CELLS));
+        let over = "\n".repeat(MAX_RESULT_CELLS + 1);
+        assert!(matches!(lines_of(&over), Some(Value::Text(_))));
+        // A label is no text, whatever a type's name holds.
+        let object = PyOutput { value: Value::text("a\nb 2"), type_name: "a\nb".into(), ..PyOutput::default() };
+        assert_eq!(PyCode { spill_lines: true, object: true, output: Some(object), ..PyCode::new("s") }.result_value(), Some(Value::text("a\nb 2")));
     }
 
     #[test]
@@ -590,10 +659,16 @@ mod tests {
         let py = PyCode { object: true, output: Some(output), ..PyCode::new("x") };
         let json = serde_json::to_value(&py).unwrap();
         assert!(json["output"].get("table").is_none() && json["output"].get("fromRun").is_none(), "{json}");
+        assert!(json.get("spillLines").is_none(), "off is the default: {json}");
         let back: PyCode = serde_json::from_value(json).unwrap();
         let output = back.output.unwrap();
         assert_eq!((output.table, output.from_run), (None, false));
         assert_eq!(output.value, Value::text("list 1"));
+        // The option is in the file.
+        let on = PyCode { spill_lines: true, ..PyCode::new("x") };
+        let json = serde_json::to_value(&on).unwrap();
+        assert_eq!(json["spillLines"], true);
+        assert!(serde_json::from_value::<PyCode>(json).unwrap().spill_lines);
     }
 
     #[test]

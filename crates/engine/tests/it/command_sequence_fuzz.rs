@@ -938,6 +938,9 @@ fn fake_answer(code: &str, inputs: &BTreeMap<String, Input>) -> Result<Output, P
     if code.chars().filter(|c| *c == '\n').count() == 2 {
         return Ok(Output::object("dict", "{}"));
     }
+    if code.chars().filter(|c| *c == '\n').count() == 1 {
+        return Ok(Output::Value(Value::text("one\ntwo\nthree")));
+    }
     if code.chars().filter(|c| *c == '\n').count() == 3 {
         let table = Table { rows: 1, cols: 1, data: vec![Value::Number(1.0)], total_rows: 9, total_cols: 1, ..Table::default() };
         return Ok(Output::Object { type_name: "DataFrame".into(), preview: "df".into(), size: vec![9, 1], table: Some(table) });
@@ -963,9 +966,10 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
         "python.set" => {
             // Code with xl() references (which follow structural edits), quotes and line breaks;
             // sometimes long enough to meet the formula limit.
-            let mut code = match rng.below(6) {
-                // What `fake_answer` makes a table of.
-                5 => "a = 1\nb = 2\nc = 3\nframe".to_string(),
+            let mut code = match rng.below(7) {
+                // What `fake_answer` makes a text with line breaks of, and a table of.
+                5 => "s = 'text'\ns".to_string(),
+                6 => "a = 1\nb = 2\nc = 3\nframe".to_string(),
                 0 => format!("xl(\"{}\") + 1", near_range(rng).a1()),
                 1 => format!("a = xl('{}')\nb = \"q\\\"uote\"\na", near_cell(rng).a1()),
                 2 => "[[1, 2], [3, 4]]".to_string(),
@@ -986,6 +990,9 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
             let mut p = json!({"cell": near_cell(rng).a1()});
             if rng.chance(50) {
                 p["mode"] = json!(if rng.chance(50) { "object" } else { "value" });
+            }
+            if rng.chance(30) {
+                p["lines"] = json!(if rng.chance(70) { "rows" } else { "cell" });
             }
             p
         }

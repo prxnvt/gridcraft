@@ -318,6 +318,24 @@ fn a_python_object_says_what_it_is_and_a_list_of_rows_gives_its_table() {
 }
 
 #[test]
+fn a_text_with_line_breaks_stays_in_its_cell_until_it_is_asked_to_spill() {
+    let Some(mut s) = session() else { return };
+    py(&mut s, "A1", "'first\\nsecond\\r\\nthird\\n'");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("first\nsecond\r\nthird\n"));
+    assert_eq!(v(&s, "A2"), Value::Empty);
+    s.execute("python.output", json!({"cell": "A1", "lines": "rows"})).unwrap();
+    assert_eq!(
+        (v(&s, "A1"), v(&s, "A2"), v(&s, "A3"), v(&s, "A4")),
+        (Value::text("first"), Value::text("second"), Value::text("third"), Value::Empty)
+    );
+    // It lasts through another run.
+    s.execute("python.run", json!({"cell": "A1"})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "A3"), Value::text("third"));
+}
+
+#[test]
 fn pandas_and_numpy_objects_show_their_size_and_their_table_on_the_card() {
     let Some(mut s) = pandas_session() else { return };
     s.execute("range.setValues", json!({"range": "A1", "values": [["name", "score"], ["a", 1], ["b", 2], ["c", 4]]})).unwrap();

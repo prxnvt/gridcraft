@@ -1,9 +1,9 @@
 //! What a Python Object cell keeps and what can be done with it, with a fake worker: its sized label,
-//! its table, and the commands that read and save the table.
+//! its table, the commands that read and save the table, and a text's lines.
 
 use std::sync::Arc;
 
-use gridcraft_core::Value;
+use gridcraft_core::{Array, CellError, Value};
 use gridcraft_python::fake::FakeTransport;
 use gridcraft_python::protocol::{MAX_TABLE_COLS, MAX_TABLE_ROWS, Table};
 use gridcraft_python::{Limits, Output};
@@ -57,6 +57,9 @@ fn answer(code: &str) -> Output {
             vec![2],
             Table { rows: 2, cols: 1, data: vec![Value::text("=1+1"), Value::text("x|y\nz")], total_rows: 2, total_cols: 1, ..Table::default() },
         ),
+        ["text"] => Output::Value(Value::text("one\ntwo\nthree")),
+        ["single"] => Output::Value(Value::text("one line")),
+        ["spill"] => Output::Value(Array::new(2, 1, vec![1.0.into(), 2.0.into()]).map(Value::from).unwrap()),
         _ => Output::Value(Value::Number(1.0)),
     }
 }
@@ -311,4 +314,108 @@ fn a_script_cannot_write_the_table_to_a_file() {
     assert!(e.contains("can't read or write files"), "{e}");
     assert!(!file.exists());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_text_stays_in_its_cell_until_the_option_spills_its_lines() {
+    let mut s = session();
+    py(&mut s, "A1", "text");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("one\ntwo\nthree"), "by default");
+    assert_eq!(v(&s, "A2"), Value::Empty);
+    assert_eq!(cell_get(&mut s, "A1")["python"]["lines"], "cell");
+    formula(&mut s, "C1", "=A3");
+    let undo = s.doc().unwrap().undo.len();
+    // The option needs no run: the result is kept.
+    let requests = s.python_stats().clients;
+    let r = s.execute("python.output", json!({"cell": "A1", "lines": "rows"})).unwrap();
+    assert_eq!((r["lines"].as_str(), r["output"].as_str()), (Some("rows"), Some("value")), "and leaves the return type");
+    assert_eq!(v(&s, "A1"), Value::text("one"));
+    assert_eq!(v(&s, "A2"), Value::text("two"));
+    assert_eq!(v(&s, "A3"), Value::text("three"));
+    assert_eq!(v(&s, "C1"), Value::text("three"), "what reads a line sees it");
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1, "one undo step");
+    settle(&mut s);
+    assert_eq!(v(&s, "A3"), Value::text("three"));
+    assert_eq!(s.python_stats().clients, requests, "nothing started");
+    // Undo takes it back, and redo brings it again.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("one\ntwo\nthree"));
+    assert_eq!(v(&s, "A3"), Value::Empty);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text("three"));
+    // It stays when the code changes, and when the return type does.
+    s.execute("python.set", json!({"cell": "A1", "code": "single"})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("one line"), "a text of one line has nothing to spill");
+    assert_eq!(v(&s, "A2"), Value::Empty);
+    s.execute("python.set", json!({"cell": "A1", "code": "text"})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "A2"), Value::text("two"));
+    s.execute("python.output", json!({"cell": "A1", "mode": "object"})).unwrap();
+    settle(&mut s);
+    assert_eq!(cell_get(&mut s, "A1")["python"]["lines"], "rows");
+    assert_eq!(v(&s, "A2"), Value::text("two"), "a text is a text under either return type");
+    // Back in the cell.
+    let r = s.execute("python.output", json!({"cell": "A1", "lines": "cell"})).unwrap();
+    assert_eq!(r["output"], "object");
+    assert_eq!(v(&s, "A1"), Value::text("one\ntwo\nthree"));
+    assert_eq!(v(&s, "A2"), Value::Empty);
+    // Both at once are one undo step.
+    let undo = s.doc().unwrap().undo.len();
+    let r = s.execute("python.output", json!({"cell": "A1", "mode": "value", "lines": "rows"})).unwrap();
+    assert_eq!((r["output"].as_str(), r["lines"].as_str()), (Some("value"), Some("rows")));
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+    settle(&mut s);
+    assert_eq!(v(&s, "A2"), Value::text("two"));
+    // Not a text: no effect, and no harm.
+    s.execute("python.set", json!({"cell": "B1", "code": "spill"})).unwrap();
+    settle(&mut s);
+    s.execute("python.output", json!({"cell": "B1", "lines": "rows"})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Number(2.0));
+    // Words it doesn't take.
+    for bad in [json!("sideways"), json!(1), json!(true)] {
+        assert!(s.execute("python.output", json!({"cell": "A1", "lines": bad})).is_err());
+    }
+    assert!(s.execute("python.output", json!({"cell": "Z9", "lines": "rows"})).is_err());
+}
+
+#[test]
+fn a_text_whose_lines_are_blocked_says_so() {
+    let mut s = session();
+    py(&mut s, "A1", "text");
+    settle(&mut s);
+    formula(&mut s, "A2", "in the way");
+    s.execute("python.output", json!({"cell": "A1", "lines": "rows"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Error(CellError::Spill));
+    assert_eq!(v(&s, "A2"), Value::text("in the way"));
+    // Clearing the way lets them out.
+    s.execute("cell.set", json!({"cell": "A2", "input": ""})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text("three"));
+}
+
+#[test]
+fn the_lines_option_is_refused_on_a_locked_cell_of_a_protected_sheet() {
+    let mut s = session();
+    py(&mut s, "A1", "text");
+    settle(&mut s);
+    s.execute("review.protectSheet", json!({})).unwrap();
+    assert!(s.execute("python.output", json!({"cell": "A1", "lines": "rows"})).is_err());
+    assert_eq!(v(&s, "A2"), Value::Empty);
+}
+
+#[test]
+fn the_lines_option_lasts_in_json_and_for_the_session_in_xlsx() {
+    let mut s = session();
+    py(&mut s, "A1", "text");
+    settle(&mut s);
+    s.execute("python.output", json!({"cell": "A1", "lines": "rows"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let (json_back, _) = crate::io::open_bytes("o.json", &crate::io::save_bytes(&wb, "o.json").unwrap()).unwrap();
+    assert!(json_back.sheet(0).unwrap().cell(c("A1")).unwrap().py.as_ref().unwrap().spill_lines);
+    let (xlsx_back, _) = crate::io::open_bytes("o.xlsx", &crate::io::save_bytes(&wb, "o.xlsx").unwrap()).unwrap();
+    assert!(!xlsx_back.sheet(0).unwrap().cell(c("A1")).unwrap().py.as_ref().unwrap().spill_lines);
+    // The file keeps what the cells showed.
+    assert_eq!(xlsx_back.sheet(0).unwrap().value(c("A1")), Value::text("one"));
+    assert_eq!(xlsx_back.sheet(0).unwrap().value(c("A2")), Value::text("two"));
 }
