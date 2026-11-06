@@ -297,3 +297,223 @@ fn a_memory_spike_lands_on_its_cell_and_the_next_cell_keeps_its_variables() {
     assert_eq!((v(&s, "A3"), kind(&s, "A3")), (num(41.0), None), "a fresh worker ran A1 first");
     assert_eq!((v(&s, "A4"), kind(&s, "A4")), (num(42.0), None));
 }
+
+fn on_1904(s: &mut Session) {
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).date_system = gridcraft_core::DateSystem::D1904;
+}
+
+fn format_cell(s: &mut Session, range: &str, code: &str) {
+    s.execute("home.numberFormat", json!({"range": range, "code": code})).unwrap();
+}
+
+fn format_of(s: &Session, cell: &str) -> String {
+    let wb = &s.doc().unwrap().wb;
+    wb.styles.get(wb.active().unwrap().style_id(CellRef::parse(cell).unwrap())).num_fmt.as_str().to_string()
+}
+
+/// What `xl()` gives, and what comes back, on a real Python through the real sandbox, in one date
+/// system: a date, a time and a date-time read, a day added, and returned.
+fn dates_round_trip(s: &mut Session, serial: f64) {
+    set(s, "A1", &serial.to_string());
+    format_cell(s, "A1", "m/d/yyyy");
+    set(s, "A2", &format!("{}", serial + 0.5));
+    format_cell(s, "A2", "m/d/yyyy h:mm");
+    set(s, "A3", "0.25");
+    format_cell(s, "A3", "h:mm");
+    py(s, "B1", "type(xl(\"A1\")).__name__");
+    py(s, "B2", "xl(\"A1\").isoformat()");
+    py(s, "B3", "import datetime\nxl(\"A1\") + datetime.timedelta(days=1)");
+    py(s, "B4", "type(xl(\"A2\")).__name__");
+    py(s, "B5", "xl(\"A2\").isoformat()");
+    py(s, "B6", "xl(\"A2\") + datetime.timedelta(days=1)");
+    py(s, "B7", "type(xl(\"A3\")).__name__");
+    py(s, "B8", "xl(\"A3\").isoformat()");
+    py(s, "B9", "xl(\"A3\")");
+    settle(s);
+    assert_eq!(v(s, "B1"), Value::text("date"));
+    assert_eq!(v(s, "B2"), Value::text("2024-01-15"));
+    assert_eq!((v(s, "B3"), format_of(s, "B3")), (num(serial + 1.0), "m/d/yyyy".into()), "read a date, add a day, return it");
+    assert_eq!(v(s, "B4"), Value::text("datetime"));
+    assert_eq!(v(s, "B5"), Value::text("2024-01-15T12:00:00"));
+    assert_eq!((v(s, "B6"), format_of(s, "B6")), (num(serial + 1.5), "m/d/yyyy h:mm".into()));
+    assert_eq!(v(s, "B7"), Value::text("time"));
+    assert_eq!(v(s, "B8"), Value::text("06:00:00"));
+    assert_eq!((v(s, "B9"), format_of(s, "B9")), (num(0.25), "h:mm:ss".into()));
+}
+
+#[test]
+fn dates_round_trip_in_the_1900_system() {
+    let Some(mut s) = session() else { return };
+    dates_round_trip(&mut s, 45306.0);
+}
+
+#[test]
+fn dates_round_trip_in_the_1904_system() {
+    let Some(mut s) = session() else { return };
+    on_1904(&mut s);
+    dates_round_trip(&mut s, 43844.0);
+}
+
+#[test]
+fn the_days_that_never_were_stay_numbers_and_their_neighbours_are_real() {
+    let Some(mut s) = session() else { return };
+    for (cell, input) in [("A1", "60"), ("A2", "0"), ("A3", "0.5"), ("A4", "-1"), ("A5", "59"), ("A6", "61"), ("A7", "1")] {
+        set(&mut s, cell, input);
+    }
+    format_cell(&mut s, "A1:A7", "m/d/yyyy");
+    for (cell, source) in [("B1", "A1"), ("B2", "A2"), ("B3", "A3"), ("B4", "A4")] {
+        py(&mut s, cell, &format!("[[type(xl(\"{source}\")).__name__, xl(\"{source}\")]]"));
+    }
+    py(&mut s, "E1", "xl(\"A5\").isoformat()");
+    py(&mut s, "E2", "xl(\"A6\").isoformat()");
+    py(&mut s, "E3", "xl(\"A7\").isoformat()");
+    // Going over the day that never was, in Python's calendar, which has none.
+    py(&mut s, "E4", "import datetime\nxl(\"A5\") + datetime.timedelta(days=1)");
+    settle(&mut s);
+    assert_eq!(v(&s, "E1"), Value::text("1900-02-28"));
+    assert_eq!(v(&s, "E2"), Value::text("1900-03-01"));
+    assert_eq!(v(&s, "E3"), Value::text("1900-01-01"));
+    assert_eq!(v(&s, "E4"), num(61.0));
+    for (row, type_name, number) in [(1, "int", 60.0), (2, "int", 0.0), (3, "float", 0.5), (4, "int", -1.0)] {
+        assert_eq!(v(&s, &format!("B{row}")), Value::text(type_name), "{row}");
+        assert_eq!(v(&s, &format!("C{row}")), num(number), "{row}: it stays the number");
+    }
+}
+
+#[test]
+fn a_range_reads_its_dates_and_a_spill_shows_them() {
+    let Some(mut s) = session() else { return };
+    s.execute("range.setValues", json!({"range": "A1", "values": [[45306, "x"], [45307, 3]]})).unwrap();
+    format_cell(&mut s, "A1:A2", "m/d/yyyy");
+    py(
+        &mut s,
+        "D1",
+        "import datetime\n[datetime.date(2024, 1, 15), datetime.time(12), datetime.datetime(2024, 1, 15, 6), 'text', 7, datetime.timedelta(hours=36)]",
+    );
+    settle(&mut s);
+    assert_eq!((v(&s, "D1"), format_of(&s, "D1")), (num(45306.0), "m/d/yyyy h:mm".into()), "a column with a time shows it on all its dates");
+    assert_eq!((v(&s, "D2"), format_of(&s, "D2")), (num(0.5), "h:mm:ss".into()));
+    assert_eq!((v(&s, "D3"), format_of(&s, "D3")), (num(45306.25), "m/d/yyyy h:mm".into()));
+    assert_eq!((v(&s, "D4"), format_of(&s, "D4")), (Value::text("text"), "General".into()));
+    assert_eq!((v(&s, "D5"), format_of(&s, "D5")), (num(7.0), "General".into()));
+    assert_eq!((v(&s, "D6"), format_of(&s, "D6")), (num(1.5), "[h]:mm:ss".into()));
+    // Something in the way: nothing is formatted.
+    py(&mut s, "F1", "[xl(\"A1\"), xl(\"A2\")]");
+    set(&mut s, "F2", "5");
+    settle(&mut s);
+    assert_eq!(v(&s, "F1"), Value::Error(CellError::Spill));
+    assert_eq!(format_of(&s, "F2"), "General");
+    set(&mut s, "F2", "");
+    settle(&mut s);
+    assert_eq!((v(&s, "F2"), format_of(&s, "F2")), (num(45307.0), "m/d/yyyy".into()));
+}
+
+#[test]
+fn what_a_serial_can_not_hold_is_num_and_the_worker_stays() {
+    let Some(mut s) = session() else { return };
+    py(&mut s, "A1", "keep = 7\nkeep");
+    py(&mut s, "A2", "import datetime\ndatetime.date(1800, 1, 1)");
+    py(&mut s, "A3", "datetime.datetime.min");
+    py(&mut s, "A4", "datetime.timedelta.max");
+    py(&mut s, "A5", "datetime.date(1899, 12, 31)");
+    py(&mut s, "A6", "datetime.date.max");
+    py(&mut s, "A7", "datetime.datetime.max");
+    py(&mut s, "A8", "keep + 1");
+    settle(&mut s);
+    for cell in ["A2", "A3", "A4", "A5"] {
+        assert_eq!((v(&s, cell), kind(&s, cell)), (Value::Error(CellError::Num), Some("result.date")), "{cell}");
+    }
+    assert_eq!(v(&s, "A6"), num(2_958_465.0));
+    let Value::Number(last) = v(&s, "A7") else { panic!() };
+    assert!((2_958_465.0..2_958_466.0).contains(&last), "{last}: the last moment stays in the last day");
+    assert_eq!(v(&s, "A8"), num(8.0), "the same worker, with its variables");
+    // And it reads back as the date it is.
+    py(&mut s, "B7", "xl(\"A7\").isoformat()");
+    settle(&mut s);
+    assert_eq!(v(&s, "B7"), Value::text("9999-12-31T23:59:59.999000"));
+}
+
+#[test]
+fn a_time_zone_is_only_where_the_wall_clock_is() {
+    let Some(mut s) = session() else { return };
+    py(&mut s, "A1", "import datetime\ndatetime.datetime(2024, 1, 15, 12, tzinfo=datetime.timezone(datetime.timedelta(hours=-5)))");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), num(45306.5));
+}
+
+#[test]
+fn a_cells_own_format_stays_and_a_format_is_no_undo_step() {
+    let Some(mut s) = session() else { return };
+    format_cell(&mut s, "A1", "yyyy-mm-dd");
+    py(&mut s, "A1", "import datetime\ndatetime.date(2024, 1, 15)");
+    py(&mut s, "A2", "datetime.date(2024, 1, 15)");
+    let undo = s.doc().unwrap().undo.len();
+    settle(&mut s);
+    assert_eq!(s.doc().unwrap().undo.len(), undo, "a result and its format are no step");
+    assert_eq!((format_of(&s, "A1"), format_of(&s, "A2")), ("yyyy-mm-dd".into(), "m/d/yyyy".into()));
+}
+
+/// A date column in and out of a DataFrame: what the brief's round trip looks like with pandas.
+fn dataframe_round_trip(s: &mut Session, serial: f64) {
+    s.execute("range.setValues", json!({"range": "A1", "values": [["when", "n"], [serial, 1], [serial + 1.0, 2], [null, 3]]})).unwrap();
+    format_cell(s, "A2:A4", "m/d/yyyy");
+    py(s, "D1", "xl(\"A1:B4\", headers=True).dtypes.iloc[0].kind");
+    py(s, "D2", "str(xl(\"A1:B4\", headers=True)[\"when\"].iloc[2])");
+    py(s, "F1", "d = xl(\"A1:B4\", headers=True)\nd[\"when\"] = d[\"when\"] + pd.Timedelta(days=1)\nd");
+    settle(s);
+    assert_eq!(v(s, "D1"), Value::text("M"), "a datetime column");
+    assert_eq!(v(s, "D2"), Value::text("NaT"), "an empty cell");
+    assert_eq!((v(s, "F1"), v(s, "G1")), (Value::text("when"), Value::text("n")));
+    assert_eq!((v(s, "F2"), format_of(s, "F2")), (num(serial + 1.0), "m/d/yyyy".into()));
+    assert_eq!((v(s, "F3"), format_of(s, "F3")), (num(serial + 2.0), "m/d/yyyy".into()));
+    assert_eq!((v(s, "F4"), format_of(s, "F4")), (Value::Empty, "General".into()), "NaT is an empty cell");
+    assert_eq!((v(s, "G2"), format_of(s, "G2")), (num(1.0), "General".into()));
+    assert_eq!(format_of(s, "F1"), "General", "the header isn't a date");
+}
+
+#[test]
+fn a_dataframe_date_column_round_trips_in_the_1900_system() {
+    let Some(mut s) = pandas_session() else { return };
+    dataframe_round_trip(&mut s, 45306.0);
+}
+
+#[test]
+fn a_dataframe_date_column_round_trips_in_the_1904_system() {
+    let Some(mut s) = pandas_session() else { return };
+    on_1904(&mut s);
+    dataframe_round_trip(&mut s, 43844.0);
+}
+
+#[test]
+fn numpy_and_pandas_dates_and_durations_come_back_as_serials() {
+    let Some(mut s) = pandas_session() else { return };
+    for (cell, code, number, format) in [
+        ("A1", "np.datetime64(\"2024-01-15\")", num(45306.0), "m/d/yyyy"),
+        ("A2", "np.datetime64(\"2024-01-15T12:00\", \"ns\")", num(45306.5), "m/d/yyyy h:mm"),
+        ("A3", "np.timedelta64(36, \"h\")", num(1.5), "[h]:mm:ss"),
+        ("A4", "pd.Timestamp(\"2024-01-15\")", num(45306.0), "m/d/yyyy"),
+        ("A5", "pd.Timestamp(\"2024-01-15 12:00\", tz=\"Asia/Tokyo\")", num(45306.5), "m/d/yyyy h:mm"),
+        ("A6", "pd.Timedelta(days=1, hours=12)", num(1.5), "[h]:mm:ss"),
+        ("A7", "pd.NaT", Value::Empty, "General"),
+        ("A8", "np.datetime64(\"NaT\")", Value::Empty, "General"),
+        ("A9", "np.datetime64(10**15, \"Y\")", Value::Error(CellError::Num), "General"),
+        ("A10", "pd.Timedelta(days=-1)", num(-1.0), "General"),
+    ] {
+        py(&mut s, cell, code);
+        settle(&mut s);
+        assert_eq!((v(&s, cell), format_of(&s, cell)), (number, format.to_string()), "{code}");
+    }
+    // Across a spill, from a Series, the values of a column, and an index of dates.
+    py(&mut s, "C1", "pd.Series(pd.to_datetime([\"2024-01-15\", \"2024-01-16\"]))");
+    py(&mut s, "D1", "pd.Series(pd.to_datetime([\"2024-01-15\", \"2024-01-16\"])).values");
+    py(&mut s, "E1", "pd.date_range(\"2024-01-15\", periods=2)");
+    py(&mut s, "F1", "pd.DataFrame({\"at\": pd.to_datetime([\"2024-01-15 12:00\", \"2024-01-15 00:00\"])})");
+    settle(&mut s);
+    for column in ["C", "D", "E"] {
+        let (top, under) = (format!("{column}1"), format!("{column}2"));
+        assert_eq!((v(&s, &top), v(&s, &under)), (num(45306.0), num(45307.0)), "{column}");
+        assert_eq!(format_of(&s, &under), "m/d/yyyy", "{column}");
+    }
+    assert_eq!((v(&s, "F2"), v(&s, "F3")), (num(45306.5), num(45306.0)));
+    assert_eq!((format_of(&s, "F2"), format_of(&s, "F3")), ("m/d/yyyy h:mm".into(), "m/d/yyyy h:mm".into()), "one format down a column");
+}
