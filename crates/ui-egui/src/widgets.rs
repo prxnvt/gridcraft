@@ -652,12 +652,40 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
 /// buttons), an optional button and a dismiss button. Returns whether each was clicked.
 pub(crate) fn message_bar(ui: &mut Ui, id: &'static str, kind: crate::NoticeKind, text: &str, button: Option<&str>) -> (bool, bool) {
     let t = Tokens::get(ui.ctx());
+    let mut clicked = false;
+    let mut dismiss = false;
+    bar(ui, id, kind, text, |ui| {
+        if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
+            dismiss = true;
+        }
+        if let Some(label) = button
+            && ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked()
+        {
+            clicked = true;
+        }
+    });
+    (clicked, dismiss)
+}
+
+/// A message bar with two buttons and no way to dismiss it, for what stays until it is answered.
+/// Returns whether each was clicked.
+pub(crate) fn choice_bar(ui: &mut Ui, id: &'static str, kind: crate::NoticeKind, text: &str, first: &str, second: &str) -> (bool, bool) {
+    let mut clicked = (false, false);
+    bar(ui, id, kind, text, |ui| {
+        let button = |ui: &mut Ui, label: &str| ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked();
+        clicked.1 = button(ui, second);
+        clicked.0 = button(ui, first);
+    });
+    clicked
+}
+
+/// The bar itself; `buttons` adds its buttons from the right.
+fn bar(ui: &mut Ui, id: &'static str, kind: crate::NoticeKind, text: &str, buttons: impl FnOnce(&mut Ui)) {
+    let t = Tokens::get(ui.ctx());
     let (bg, border) = match kind {
         crate::NoticeKind::Warning => (t.notice_warn_bg, t.notice_warn_border),
         crate::NoticeKind::Info => (t.notice_info_bg, t.notice_info_border),
     };
-    let mut clicked = false;
-    let mut dismiss = false;
     egui::Panel::top(id).frame(egui::Frame::NONE.fill(bg).inner_margin(egui::Margin::symmetric(12, 3))).show(ui, |ui| {
         // Bottom border as a 1px strip spanning the bar.
         let bar = ui.max_rect();
@@ -675,21 +703,13 @@ pub(crate) fn message_bar(ui: &mut Ui, id: &'static str, kind: crate::NoticeKind
             );
             ui.add_space(6.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
-                    dismiss = true;
-                }
-                if let Some(label) = button
-                    && ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked()
-                {
-                    clicked = true;
-                }
+                buttons(ui);
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.add(egui::Label::new(egui::RichText::new(text).font(theme::ui_font(12.5)).color(t.text)).wrap());
                 });
             });
         });
     });
-    (clicked, dismiss)
 }
 
 #[cfg(test)]

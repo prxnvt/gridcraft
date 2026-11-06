@@ -99,6 +99,7 @@ mod python_initialization;
 mod python_mode;
 mod python_pointing;
 mod python_ribbon;
+mod python_save_wait;
 mod python_ui;
 mod ref_edit;
 mod ribbon_layout;

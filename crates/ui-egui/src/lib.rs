@@ -53,6 +53,7 @@ pub mod python_card;
 pub mod python_ui;
 pub mod python_window;
 pub mod ribbon;
+pub mod save_wait;
 pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
@@ -237,6 +238,8 @@ pub struct SheetApp {
     pub py_window: Option<python_window::PyWindow>,
     /// Python: what the session was given, the panes' state (see [`python_ui`]).
     pub python: python_ui::PythonUi,
+    /// Saves waiting for Python cells, and control replies held for them (see [`save_wait`]).
+    pub save_waits: save_wait::SaveWaits,
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,

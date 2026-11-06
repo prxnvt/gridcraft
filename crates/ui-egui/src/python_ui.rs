@@ -42,7 +42,7 @@ pub mod panes;
 
 /// How often the app wakes while Python works, so results appear without input. An idle app stays
 /// idle: nothing asks for a repaint then.
-const BUSY_REPAINT: Duration = Duration::from_millis(100);
+pub(crate) const BUSY_REPAINT: Duration = Duration::from_millis(100);
 
 /// Frames the switches stay refused after the last synthetic input.
 const LOCK_FRAMES: u64 = 2;

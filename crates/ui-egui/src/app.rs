@@ -37,6 +37,7 @@ impl SheetApp {
             text_box_editor: None,
             py_window: None,
             python: Default::default(),
+            save_waits: Default::default(),
             dialog: None,
             backstage: None,
             message: None,
@@ -135,6 +136,8 @@ impl SheetApp {
         control::drain_screenshots(self, ctx);
         control::poll(self, ctx);
         crate::python_ui::tick(self, ctx);
+        // A save that waited, once Python has taken this frame's result.
+        crate::save_wait::poll(self, ctx);
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
@@ -228,10 +231,12 @@ impl SheetApp {
         }
         if self.backstage.is_some() {
             // File tab: the Backstage view replaces everything below the title bar.
+            crate::save_wait::bar(self, ui);
             backstage::show(self, ui);
         } else {
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
+            crate::save_wait::bar(self, ui);
             crate::python_ui::enable_bar(self, ui);
             // Python mode edits only in the formula bar: it shows while a Python edit is open,
             // also when the preference hides it.

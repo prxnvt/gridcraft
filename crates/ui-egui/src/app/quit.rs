@@ -24,7 +24,7 @@ impl SheetApp {
             crate::macro_editor::request_close(self, true);
             return;
         }
-        if !self.session.documents().iter().any(|d| d.is_dirty()) {
+        if !self.session.documents().iter().any(|d| d.is_dirty() || self.save_waits.waiting(d.uid)) {
             return;
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -40,7 +40,7 @@ impl SheetApp {
     /// Asks about the next unsaved workbook before quitting, in its window, or closes the app
     /// once none is left.
     pub(crate) fn continue_quit(&mut self, ctx: &egui::Context) {
-        let dirty = self.session.documents().iter().find(|d| d.is_dirty()).map(|d| d.uid);
+        let dirty = self.session.documents().iter().find(|d| self.must_ask_before_closing(d)).map(|d| d.uid);
         match dirty.and_then(|uid| self.session.doc_window(uid)) {
             Some(window) => {
                 // Its window comes forward (the native window too: see `doc_windows`).
@@ -49,6 +49,8 @@ impl SheetApp {
                 self.open_dialog("saveChanges", json!({"title": title, "quit": true}));
                 self.bring_forward = true;
             }
+            // A workbook still saving closes once it is done, and the quit goes on from there.
+            None if self.save_waits.quit_waits(&self.session) => {}
             None => {
                 self.allow_close = true;
                 ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
@@ -74,7 +76,12 @@ impl SheetApp {
                 if !self.commit_edit(0, 0, false, false) {
                     return false;
                 }
+                let doc = self.session.active().map(|d| d.uid);
                 self.run_or_alert("file.save", json!({}));
+                // A save that waits for Python cells closes the workbook when it is done.
+                if doc.is_some_and(|doc| self.save_waits.close_after(doc, quitting)) {
+                    return true;
+                }
                 if self.session.active().is_some_and(|x| !x.is_dirty()) {
                     self.run_or_alert("file.close", json!({"force": true, "document": true}));
                     if quitting {

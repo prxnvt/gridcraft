@@ -17,6 +17,9 @@ impl SheetApp {
     }
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        // A save only waits where something can hold it (`run_or_alert`, the control channel):
+        // `wait` must not reach the engine, where it would block the frame.
+        let params = if matches!(id, "file.save" | "file.saveAs") { crate::save_wait::without_wait(params) } else { params };
         // Closing the workbook would lose the Python editor's unsaved code. The interface asks
         // first (see `run_or_alert`); a programmatic call is refused.
         if (id == "file.close" && crate::python_window::blocks_close(self, &params))
@@ -115,6 +118,18 @@ impl SheetApp {
         if id == "window.close" && crate::python_window::blocks_window_close(self, &params) {
             return crate::python_window::ask(self, crate::python_window::Pending::CloseWindow(params));
         }
+        // A save waiting for Python cells asks before its workbook closes, as unsaved work does.
+        if matches!(id, "file.close" | "window.close") && self.ask_before_closing_waiting_save(id, &params) {
+            return;
+        }
+        // A save while the workbook's Python cells run waits for them.
+        if matches!(id, "file.save" | "file.saveAs") {
+            match self.person_save_waits(id, &params) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(e) => return self.alert_unless_shown(e),
+            }
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
@@ -141,11 +156,16 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
-        match self.run(id, params) {
-            // A refused cell draft already shows its own message (with the rule's title).
-            Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
-            Err(e) => self.alert(e),
-            Ok(_) => {}
+        if let Err(e) = self.run(id, params) {
+            self.alert_unless_shown(e);
+        }
+    }
+
+    /// Shows a command error, unless it is on the screen already: a refused cell draft shows its own
+    /// message (with the rule's title).
+    fn alert_unless_shown(&mut self, e: String) {
+        if !self.message.as_ref().is_some_and(|(_, m)| *m == e) {
+            self.alert(e);
         }
     }
 
@@ -310,6 +330,7 @@ impl SheetApp {
                 crate::python_ui::pane_of_command(id)
                     .map_or_else(|| Err("unknown pane".to_string()), |pane| crate::python_ui::pane_command(self, pane, p))
             }
+            "ui.saveWait" => crate::save_wait::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
