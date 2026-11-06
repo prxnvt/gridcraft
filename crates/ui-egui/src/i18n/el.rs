@@ -1147,7 +1147,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Στο macOS το όριο μνήμης είναι έλεγχος δύο φορές το δευτερόλεπτο, όχι αυστηρό όριο."
         }
         "Editor" => "Επεξεργαστής",
-        "Initialization code isn't available yet" => "Ο κώδικας αρχικοποίησης δεν είναι ακόμη διαθέσιμος",
         "Initialization" => "Αρχικοποίηση",
         "The code that runs before this workbook's Python cells" => "Ο κώδικας που εκτελείται πριν από τα κελιά Python αυτού του βιβλίου εργασίας",
         "Open Initialization" => "Άνοιγμα αρχικοποίησης",

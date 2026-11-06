@@ -9,8 +9,8 @@
 //! `range` on the grid, as a person picking a range for that box does.
 //!
 //! `--cmd` runs an engine command on the session before the app starts; `--ui` runs a command
-//! through the app (UI commands too, such as `ui.pythonMode`, `ui.pythonCard` or `ui.pythonEditor`)
-//! after it starts.
+//! through the app (UI commands too, such as `ui.pythonMode`, `ui.pythonCard`, `ui.pythonEditor` or
+//! `ui.pythonInitialization`) after it starts.
 //!
 //! `--python` shows Python in that state with a fake worker and a made-up report, so no Python runs:
 //! a cell's code is `ret 1`, `print text`, `fail` (or any code with `raise` in it, failing on its

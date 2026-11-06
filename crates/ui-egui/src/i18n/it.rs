@@ -1151,7 +1151,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Su macOS il limite di memoria viene controllato due volte al secondo; non è un tetto rigido."
         }
         "Editor" => "Editor",
-        "Initialization code isn't available yet" => "Il codice di inizializzazione non è ancora disponibile",
         "Initialization" => "Inizializzazione",
         "The code that runs before this workbook's Python cells" => "Il codice eseguito prima delle celle Python di questa cartella di lavoro",
         "Open Initialization" => "Apri inizializzazione",

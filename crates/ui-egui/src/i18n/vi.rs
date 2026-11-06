@@ -581,7 +581,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Trên macOS, giới hạn bộ nhớ là kiểm tra hai lần mỗi giây, không phải mức trần cứng."
         }
         "Editor" => "Trình soạn thảo",
-        "Initialization code isn't available yet" => "Mã khởi tạo chưa khả dụng",
         "Initialization" => "Khởi tạo",
         "The code that runs before this workbook's Python cells" => "Mã chạy trước các ô Python của sổ làm việc này",
         "Open Initialization" => "Mở khởi tạo",

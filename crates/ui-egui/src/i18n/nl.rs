@@ -692,7 +692,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Op macOS wordt de geheugenlimiet twee keer per seconde gecontroleerd; het is geen harde grens."
         }
         "Editor" => "Editor",
-        "Initialization code isn't available yet" => "Initialisatiecode is nog niet beschikbaar",
         "Initialization" => "Initialisatie",
         "The code that runs before this workbook's Python cells" => "De code die wordt uitgevoerd vóór de Python-cellen van deze werkmap",
         "Open Initialization" => "Initialisatie openen",

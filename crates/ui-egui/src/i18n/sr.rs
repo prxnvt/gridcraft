@@ -609,7 +609,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Na macOS-u se ograničenje memorije proverava dvaput u sekundi i nije tvrda granica."
         }
         "Editor" => "Uređivač",
-        "Initialization code isn't available yet" => "Kod za inicijalizaciju još nije dostupan",
         "Initialization" => "Inicijalizacija",
         "The code that runs before this workbook's Python cells" => "Kod koji se pokreće pre Python ćelija ove radne sveske",
         "Open Initialization" => "Otvori inicijalizaciju",

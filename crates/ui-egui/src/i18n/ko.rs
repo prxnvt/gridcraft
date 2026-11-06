@@ -620,7 +620,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "macOS에서 메모리 제한은 초당 두 번 확인하는 방식이며 엄격한 상한이 아닙니다."
         }
         "Editor" => "편집기",
-        "Initialization code isn't available yet" => "초기화 코드는 아직 사용할 수 없습니다",
         "Initialization" => "초기화",
         "The code that runs before this workbook's Python cells" => "이 통합 문서의 Python 셀보다 먼저 실행되는 코드",
         "Open Initialization" => "초기화 열기",

@@ -608,7 +608,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "On macOS the memory limit is a check twice a second, not a hard cap." => "在 macOS 上，内存限制是每秒检查两次，并非硬性上限。",
         "Editor" => "编辑器",
-        "Initialization code isn't available yet" => "初始化代码暂不可用",
         "Initialization" => "初始化",
         "The code that runs before this workbook's Python cells" => "在此工作簿的 Python 单元格之前运行的代码",
         "Open Initialization" => "打开初始化",

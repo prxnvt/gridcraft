@@ -727,7 +727,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "V macOS je limit paměti kontrola dvakrát za sekundu, ne pevný strop."
         }
         "Editor" => "Editor",
-        "Initialization code isn't available yet" => "Inicializační kód zatím není k dispozici",
         "Initialization" => "Inicializace",
         "The code that runs before this workbook's Python cells" => "Kód, který se spustí před buňkami Pythonu tohoto sešitu",
         "Open Initialization" => "Otevřít inicializaci",

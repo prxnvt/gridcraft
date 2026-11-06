@@ -340,6 +340,11 @@ fn the_card_resets_when_the_kind_asks_for_it() {
     h.get_by_label("Reset").click();
     h.run_steps(3);
     assert!(h.state().message.is_some() || journaled(&h, "python.reset"), "it asked for python.reset");
+    // The kind offers the code it is about, too.
+    card(&mut h, "A1");
+    h.get_by_label("Open Initialization").click();
+    h.run_steps(3);
+    assert!(h.state().py_window.as_ref().is_some_and(|w| w.initialization));
 }
 
 #[test]

@@ -654,7 +654,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Unter macOS ist das Speicherlimit eine Prüfung zweimal pro Sekunde, keine feste Obergrenze."
         }
         "Editor" => "Editor",
-        "Initialization code isn't available yet" => "Initialisierungscode ist noch nicht verfügbar",
         "Initialization" => "Initialisierung",
         "The code that runs before this workbook's Python cells" => "Der Code, der vor den Python-Zellen dieser Arbeitsmappe ausgeführt wird",
         "Open Initialization" => "Initialisierung öffnen",

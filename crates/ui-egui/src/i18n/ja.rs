@@ -594,7 +594,6 @@ pub(super) const CORE: &[(&str, &str)] = &[
         "macOS では、メモリの制限は 1 秒に 2 回の確認であり、厳密な上限ではありません。",
     ),
     ("Editor", "エディター"),
-    ("Initialization code isn't available yet", "初期化コードはまだ利用できません"),
     ("Initialization", "初期化"),
     ("The code that runs before this workbook's Python cells", "このブックの Python セルの前に実行されるコード"),
     ("Open Initialization", "初期化を開く"),

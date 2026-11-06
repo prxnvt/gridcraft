@@ -592,13 +592,11 @@ fn the_buttons_for_a_cell_say_when_there_is_none() {
 }
 
 #[test]
-fn initialization_is_off_and_says_why() {
+fn initialization_opens_its_editor() {
     let (mut h, _) = Setup::new().build();
-    let init = button(&h, "Initialization");
-    assert!(init.accesskit_node().is_disabled());
-    init.hover();
-    h.run_steps(4);
-    assert!(h.query_by_label("Initialization code isn't available yet").is_some());
+    click(&mut h, "Initialization");
+    assert!(h.state().py_window.as_ref().is_some_and(|w| w.initialization));
+    assert!(h.state().message.is_none());
 }
 
 #[test]

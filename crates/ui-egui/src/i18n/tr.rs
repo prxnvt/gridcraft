@@ -583,7 +583,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "macOS'ta bellek sınırı saniyede iki kez yapılan bir denetimdir, kesin bir üst sınır değildir."
         }
         "Editor" => "Düzenleyici",
-        "Initialization code isn't available yet" => "Başlatma kodu henüz kullanılamıyor",
         "Initialization" => "Başlatma",
         "The code that runs before this workbook's Python cells" => "Bu çalışma kitabının Python hücrelerinden önce çalışan kod",
         "Open Initialization" => "Başlatmayı Aç",

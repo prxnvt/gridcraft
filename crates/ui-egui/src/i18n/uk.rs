@@ -1141,7 +1141,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "У macOS обмеження пам’яті перевіряється двічі на секунду і не є жорсткою межею."
         }
         "Editor" => "Редактор",
-        "Initialization code isn't available yet" => "Код ініціалізації поки недоступний",
         "Initialization" => "Ініціалізація",
         "The code that runs before this workbook's Python cells" => "Код, який виконується перед клітинками Python цієї книги",
         "Open Initialization" => "Відкрити ініціалізацію",

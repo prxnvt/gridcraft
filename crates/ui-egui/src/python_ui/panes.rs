@@ -27,8 +27,9 @@ const DETAIL_CHARS: usize = 2000;
 enum ProblemRow {
     /// A kind, with how many entries it has.
     Kind(&'static str, usize),
-    /// An entry: its place, as text and as the sheet and cell to go to.
-    Entry { place: Option<(String, usize, String)>, diagnostic: Diagnostic },
+    /// An entry: its place, as text and as the sheet and cell to go to, or whether it is about the
+    /// initialization code, where a click opens that.
+    Entry { place: Option<(String, usize, String)>, initialization: bool, diagnostic: Diagnostic },
 }
 
 /// The list as it was built, and what it was built from: reading every cell's state each frame would
@@ -254,7 +255,7 @@ fn problem_rows(app: &SheetApp) -> Vec<ProblemRow> {
                 let name = d?.wb.sheet(sheet)?.name.as_str();
                 Some((format!("{}!{}", gridcraft_engine::formula::quote_sheet(name), at.a1()), sheet, at.a1()))
             });
-            rows.push(ProblemRow::Entry { place, diagnostic: e.diagnostic.clone() });
+            rows.push(ProblemRow::Entry { place, initialization: e.initialization, diagnostic: e.diagnostic.clone() });
         }
     }
     rows
@@ -283,6 +284,7 @@ fn problems(app: &mut SheetApp, ui: &mut Ui) {
     }
     let mut go: Option<(usize, String)> = None;
     let mut copy: Option<Vec<String>> = None;
+    let mut open_init = false;
     let mut drawn = 0;
     ScrollArea::vertical().id_salt("python_problems").auto_shrink([false, false]).show_rows(ui, PROBLEM_ROW, rows.len(), |ui, range| {
         for row in range {
@@ -297,13 +299,16 @@ fn problems(app: &mut SheetApp, ui: &mut Ui) {
                     ui.add_space(12.0);
                     ui.add(egui::Label::new(RichText::new(format!("{kind} ({count})")).font(theme::ui_bold(12.5))).truncate());
                 }
-                ProblemRow::Entry { place, diagnostic } => {
+                ProblemRow::Entry { place, initialization, diagnostic } => {
                     ui.horizontal(|ui| {
                         match place {
                             Some((label, sheet, cell)) => {
                                 if ui.link(label).clicked() {
                                     go = Some((*sheet, cell.clone()));
                                 }
+                            }
+                            None if *initialization => {
+                                open_init |= ui.link(lang.tr(crate::python_window::INITIALIZATION)).clicked();
                             }
                             None => {
                                 ui.label(RichText::new(lang.tr("This workbook")).color(t.text_dim));
@@ -315,6 +320,10 @@ fn problems(app: &mut SheetApp, ui: &mut Ui) {
                         let packages = super::packages_for(diagnostic);
                         if !packages.is_empty() && ui.small_button(lang.tr("Copy Install Command")).clicked() {
                             copy = Some(packages);
+                        }
+                        if let Some(line) = diagnostic.line.filter(|_| *initialization) {
+                            let text = lang.tr("Line {line}").replace("{line}", &line.to_string());
+                            ui.add(egui::Label::new(RichText::new(text).font(theme::ui_font(11.5)).color(t.text_dim)));
                         }
                         if !diagnostic.detail.is_empty() {
                             let line = first_line(&diagnostic.detail);
@@ -333,6 +342,9 @@ fn problems(app: &mut SheetApp, ui: &mut Ui) {
     }
     if let Some((sheet, cell)) = go {
         go_to(app, sheet, &cell);
+    }
+    if open_init {
+        crate::python_window::open_initialization(app);
     }
 }
 
@@ -359,9 +371,17 @@ fn run_log(app: &mut SheetApp, ui: &mut Ui) {
         return;
     }
     let key_of = |r: &gridcraft_engine::PythonRun| (r.sheet.clone(), r.cell.a1(), r.duration);
+    let place_of = |r: &gridcraft_engine::PythonRun| {
+        if r.initialization {
+            lang.tr(crate::python_window::INITIALIZATION).to_string()
+        } else {
+            format!("{}!{}", gridcraft_engine::formula::quote_sheet(&r.sheet), r.cell.a1())
+        }
+    };
     let count = runs.len();
     let mut pick = None;
     let mut go = None;
+    let mut open_init = false;
     let mut drawn = 0;
     let detail = selected.as_ref().and_then(|s| runs.iter().find(|r| key_of(r) == *s));
     let list_height = if detail.is_some() { (ui.available_height() * 0.5).max(RUN_ROW * 3.0) } else { f32::INFINITY };
@@ -375,7 +395,7 @@ fn run_log(app: &mut SheetApp, ui: &mut Ui) {
                 let Some(run) = count.checked_sub(row + 1).and_then(|i| runs.get(i)) else { continue };
                 drawn += 1;
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), RUN_ROW), Sense::click());
-                let place = format!("{}!{}", gridcraft_engine::formula::quote_sheet(&run.sheet), run.cell.a1());
+                let place = place_of(run);
                 let is_selected = selected.as_ref().is_some_and(|s| *s == key_of(run));
                 resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, is_selected, &place));
                 if is_selected {
@@ -399,7 +419,9 @@ fn run_log(app: &mut SheetApp, ui: &mut Ui) {
     );
     if let Some(run) = detail {
         ui.separator();
-        if ui.button(lang.tr("Go To Cell")).clicked() {
+        if run.initialization {
+            open_init = ui.button(lang.tr("Open Initialization")).clicked();
+        } else if ui.button(lang.tr("Go To Cell")).clicked() {
             go = Some((run.sheet.clone(), run.cell.a1()));
         }
         ScrollArea::vertical().id_salt("python_run_output").auto_shrink([false, false]).show(ui, |ui| {
@@ -419,6 +441,9 @@ fn run_log(app: &mut SheetApp, ui: &mut Ui) {
     }
     if let Some((sheet, cell)) = go {
         go_to(app, sheet, &cell);
+    }
+    if open_init {
+        crate::python_window::open_initialization(app);
     }
 }
 

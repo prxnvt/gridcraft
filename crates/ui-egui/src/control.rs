@@ -285,6 +285,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     "Python Editor",
                     "{on?: bool (toggles without it), cell?: \"A1\" | \"Sheet2!B3\" (default: the active cell), force?: bool (discards unsaved code instead of refusing)} → {open, sheet?, cell?, text? (null while the code is hidden), hidden?, dirty?, pending?, notice?, rect?}",
                 ),
+                (
+                    "ui.pythonInitialization",
+                    "Initialization",
+                    "{on?: bool (toggles without it), force?: bool (discards unsaved code instead of refusing)} → the state ui.pythonEditor gives, with initialization: true while the window has the workbook's initialization code",
+                ),
                 ("ui.pythonEnvironment", "Python Environment", "{on?: bool} (toggles without it) → {open}"),
                 ("ui.pythonPackages", "Python Packages", "{on?: bool} (toggles without it) → {open}"),
                 ("ui.pythonProblems", "Python Problems", "{on?: bool} (toggles without it) → {open}"),

@@ -33,9 +33,18 @@ pub(super) fn python(app: &mut SheetApp, ui: &mut Ui) {
     diagnostics(app, ui);
 }
 
+/// Initialization: opens the editor on the workbook's initialization code, asking first about unsaved
+/// code in it. The Python tab and Formulas › Python have one each.
+fn initialization_button(app: &mut SheetApp, ui: &mut Ui, label: &str, tip: &str) {
+    let r = small_button(ui, Icon::PythonInit, label, tip, false);
+    control_keytip(app, ui, &r, "python.initializationEditor");
+    if r.clicked() | invoke(app, "python.initializationEditor") {
+        crate::python_window::open_initialization(app);
+    }
+}
+
 /// Code: Insert Python, Editor, Initialization, Output As.
 fn code(app: &mut SheetApp, ui: &mut Ui) {
-    let lang = app.ui.language;
     let insert = big_button(ui, Icon::Python, "Insert\nPython", "Insert Python (Ctrl+Alt+Shift+P)", false);
     control_keytip(app, ui, &insert, "python.insert");
     if insert.clicked() | invoke(app, "python.insert") {
@@ -47,9 +56,7 @@ fn code(app: &mut SheetApp, ui: &mut Ui) {
         if editor.clicked() | invoke(app, "python.editor") {
             act(app, "ui.pythonEditor", json!({"on": true}));
         }
-        // The engine has no initialization code yet, so this leads nowhere, and says so.
-        let why = lang.tr("Initialization code isn't available yet");
-        gated(ui, Some(why), |ui| small_button(ui, Icon::PythonInit, "Initialization", "Initialization", false));
+        initialization_button(app, ui, crate::python_window::INITIALIZATION, crate::python_window::INITIALIZATION_TIP);
         output_as(app, ui);
     });
 }
@@ -214,11 +221,12 @@ fn problems_button(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-/// The window width from which Formulas' groups all fit with Reset's and Diagnostics' labels.
+/// The window width from which Formulas' groups all fit with the labels of Reset, Initialization and
+/// Diagnostics.
 const FORMULAS_LABELS_FROM: f32 = 1530.0;
 
-/// Formulas › Python's Reset and Diagnostics, beside Insert Python, as in Excel. In a window too
-/// narrow for their labels they show only their icons, as Excel's groups do, so that the tab's other
+/// Formulas › Python's Reset, Initialization and Diagnostics, beside Insert Python, as in Excel. In a
+/// window too narrow for their labels they show only their icons, as Excel's groups do, so that the tab's other
 /// groups stay in view in the window the app opens with. Returns whether they show their labels, and
 /// so whether the group takes its separator too.
 pub(super) fn formulas_group(app: &mut SheetApp, ui: &mut Ui) -> bool {
@@ -231,6 +239,7 @@ pub(super) fn formulas_group(app: &mut SheetApp, ui: &mut Ui) -> bool {
         if r.clicked() {
             act(app, "python.reset", json!({}));
         }
+        initialization_button(app, ui, label(crate::python_window::INITIALIZATION), crate::python_window::INITIALIZATION);
         let r = small_button(ui, Icon::PythonProblems, label("Diagnostics"), "Diagnostics", false);
         control_keytip(app, ui, &r, "python.problems");
         if r.clicked() | invoke(app, "python.problems") {
