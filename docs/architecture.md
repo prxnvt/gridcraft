@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (dates in Python cells: `engine::python::dates`, `protocol::Stamp`, `PyCode::dates`; earlier: the indicators: `python_card::tag_state`, `python_ui::checks`, `engine::python::packages`; earlier: the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (a save waits for Python cells: `engine::python::wait`, `ui_egui::save_wait`; earlier: dates in Python cells: `engine::python::dates`, `protocol::Stamp`, `PyCode::dates`; earlier: the indicators: `python_card::tag_state`, `python_ui::checks`, `engine::python::packages`; earlier: the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -271,7 +271,8 @@ in view. What the interface asks every frame is cheap: `python_state` copies not
 reads the request in flight, and `python_has_cells` is kept from what each change touched, so a
 workbook without Python cells is scanned once.
 
-Nothing blocks the caller. A command only marks what is due, at the end of the outermost `execute`;
+Nothing blocks the caller, but for `file.save` with `wait` (below), which the interface never lets
+through. A command only marks what is due, at the end of the outermost `execute`;
 `Session::python_poll`, called each frame, takes at most one finished result, writes it through the
 normal commit path with no undo step, recalculates and submits the next cell. Each open workbook has
 one `Client`, made when first needed and dropped with the workbook, which stops its worker.
@@ -341,6 +342,17 @@ one `Client`, made when first needed and dropped with the workbook, which stops 
   imports `excel`, in which case only that module gets those rules. The static check of packages reads
   a person's code; other code is reported from what it actually lacked. The run log has a
   row for each run with `PythonRun::initialization`.
+- **Waiting for a save** (`python/wait.rs`). `python_workbook_busy` says a workbook has a request out or
+  cells queued; a cell stale under manual calculation is neither. A `PythonWait` is that question with a
+  cap: `start_timeout` + `timeout` for each cell left + 1 s, at most `MAX_WAIT`, 120 s. Cells left are those
+  queued or running, those before them that a fresh worker must run again, and initialization code that
+  hasn't run; more of them during the wait add to the cap, and a chosen `waitSeconds` doesn't move. It
+  blocks nothing, and takes no results: `python_poll` does that. It remembers the cells it saw queued, by
+  sheet identity, because `turn_off` forgets their entries: `python_wait_unfinished` names those that are
+  still Python cells and aren't `Clean`, or are unsettled or stopped. `file.save` and `file.saveAs` take
+  `wait` and `waitSeconds` for a caller with no frames to keep going: `python_settle_for_save` polls in a
+  bounded loop, inside the command, which has no undo step to confuse. A command inside another doesn't
+  block, and the interface takes `wait` off before it runs a save (`SheetApp::run_command`).
 - **What is said.** `Session::python_diagnostic` gives one diagnostic per cell, from the catalog in
   `gridcraft_python::diagnostics`; `python.diagnostics` lists them. Each workbook keeps its last 200
   runs (`python.runLog`), with printed output cut to 64 KiB.
@@ -349,6 +361,26 @@ one `Client`, made when first needed and dropped with the workbook, which stops 
   thread of its own; `python_poll` picks up the answer, and it runs again when the capability changes
   and on `python.refreshEnvironment`. While it is out, due cells wait showing `#BUSY!`. On the web and
   on systems without a sandbox the answer, `blocked.platform`, is there at once.
+
+**A save that waits** (`ui_egui::save_wait`). `SheetApp::run_or_alert`, the way a person's commands
+arrive, sends `file.save` and `file.saveAs` through `person_save_waits`, which enters the draft and then
+starts a `SaveWait` if `python_wait_begin` finds something to wait for. A workbook has at most one: a
+later save joins it, one entry per file, without touching its cap. `poll`, from `SheetApp::logic` after
+`python_ui::tick`, ends the waits that are over, and a frame never blocks. The saves run in the workbook's
+window through `SheetApp::show_window` and `Session::run`, with no `settle_drafts`, so a draft begun during
+the wait stays one. `show_window` doesn't stamp the window as active, so a save behind the person can't
+change the order `activate_recent` follows: a close after the save comes back to where they came from,
+or leaves them where they are. Save Changes' Save sets `close_after`, and nothing closes unless the save
+worked, left the workbook clean and no draft is open, and left no cell unfinished unless Save Now said so:
+the message about those cells would go with the window, and their results with the worker. `must_ask_before_closing` makes `continue_quit` ask
+about a workbook with a wait, except one whose save has been answered for, which carries the quit on when
+it is done (`quit_waits`). `ask_before_closing_waiting_save` does the same for a clean workbook's close,
+which the command itself wouldn't ask about. A wait is keyed by the workbook's `uid`, and one whose
+workbook has gone answers its replies and ends without a save. The control channel runs through
+`control::save_request`: `control_save` refuses what would need a dialog, and `Outcome::Hold` gives `hold`
+the request's reply to send when the save has happened. AutoSave reads `python_workbook_busy` and
+`SaveWaits::waiting` and doesn't start. The app's control server and `gridcraft_mcp::Remote` read
+`reply_may_be_held`, so a client that gave up couldn't report a save still coming as a failure, or retry it.
 
 The Python editor window also edits the initialization code (`python_window::Target::initialization`,
 `PyWindow::initialization`), so the code, its checks, its questions and how it follows its workbook are
@@ -432,6 +464,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | A save waits for Python cells: `engine::python::wait`, `ui_egui::save_wait`, `Outcome::Hold`, `control::reply_timeout` |
 | 2026-11-05 | minor | Dates in Python cells: `engine::python::dates`, `protocol::Stamp`, `PyCode::dates` |
 | 2026-11-05 | minor | Initialization code: `model::PyEnvironment`, `engine::python::initialization`, `protocol::Init` and the worker's `initialize`, the Python part's `environmentDefinition`, and the editor window's second subject |
 | 2026-11-05 | minor | The engine runs Python cells: `engine::python`, `PythonCapability`, `python_poll` and the commands that run and report; `PyCode::busy`; `calc::evaluate_reference`. The app doesn't turn it on yet |

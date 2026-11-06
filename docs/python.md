@@ -1,6 +1,6 @@
 # Python in cells
 
-> **Last updated:** 2026-11-05 · **Change:** minor (dates and times, in and out of Python; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
+> **Last updated:** 2026-11-05 · **Change:** minor (saving while cells run; earlier: dates and times, in and out of Python; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
 
 A Python cell runs code you write, in your own Python, on your computer. GridCraft never downloads
 Python and never installs packages. It finds the Python you have, and it runs your code in a sandbox
@@ -169,6 +169,32 @@ workbook whose code you changed in Excel still runs.
 65,536 characters. A file's code past that is cut with a warning, doesn't run, and is written back cut
 by a save; you can shorten it in the editor.
 
+## Saving while cells run
+
+Save waits for the workbook's cells, so the file has their results. While it waits, a bar says
+"Waiting for Python cells to finish before saving...", with **Save Now** and **Cancel**, and you can
+keep working, in this workbook or another. The save happens as soon as the cells finish.
+
+It waits as long as the cells may take: the time Python may need to start, plus the time limit for each
+cell left, plus a second, and never more than two minutes. With the default limits that is 41 seconds
+for one cell and two minutes from four cells on. Then it saves what is there and tells you which cells
+weren't finished. So does Save Now, and so does a save after **Stop**, after turning Python off, or
+after a worker kept going away.
+
+A cell that wasn't finished stores its last result, or none if it never had one, and it runs again the
+next time the file is opened with Python on. Its code is always saved. A cell that is stale under manual
+calculation doesn't make a save wait.
+
+- **AutoSave** doesn't start a save while cells run. It saves at the next idle moment, and shows no bar.
+- **Save As** during a wait doesn't start another one: when the wait ends both files are written, in the
+  order you asked for them, and the workbook's file is the last.
+- **Close and Quit** during a wait ask as they do for unsaved work. **Save** closes the workbook once it
+  has saved, and the workbook you were on before comes back, unless you have gone elsewhere meanwhile.
+  **Cancel** returns to the workbook, and the save still comes. If the save fails, or cells weren't
+  finished and you didn't press Save Now, the workbook stays open with the reason shown and nothing lost,
+  and the quit stops.
+- A workbook that closes during its wait isn't saved.
+
 ## Limits
 
 - **Time:** 30 seconds per cell by default, from 1 second to 1 hour, plus 10 seconds for the first
@@ -243,5 +269,6 @@ ranges come back as lists of rows.
 
 Agents can read all of this and run cells, once a person has turned Python on: `python.environment`,
 `python.diagnostics`, `python.runLog`, `python.run`, `python.runAll`, `python.initialization`,
-`ui.pythonInitialization`, `ui.inspect`. See
-[control-protocol.md](control-protocol.md).
+`ui.pythonInitialization`, `ui.inspect`. `file.save` with `wait` holds its reply until the save has
+happened, and the reply says which cells weren't finished; `engine.execute` with `wait` holds it until
+Python is idle. See [control-protocol.md](control-protocol.md#saving-and-waiting-for-python-cells).

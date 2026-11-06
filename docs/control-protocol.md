@@ -51,14 +51,14 @@ connection; nothing sent after it runs. Blank lines are skipped.
 
 | Method | Params | What it does |
 |---|---|---|
-| `engine.execute` | `{command, params, window?, doc?}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`) in the active window, or in the window named by `window` (a window id) or `doc` (a workbook id: its most recent window). The active window stays in front afterwards unless the command itself switches windows. `edit.goTo`, `edit.goToSpecial`, `selection.set` and `selection.move` scroll the active cell into view, as Go To does in the window |
+| `engine.execute` | `{command, params, window?, doc?, wait?, waitSeconds?}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`) in the active window, or in the window named by `window` (a window id) or `doc` (a workbook id: its most recent window). The active window stays in front afterwards unless the command itself switches windows. `edit.goTo`, `edit.goToSpecial`, `selection.set` and `selection.move` scroll the active cell into view, as Go To does in the window. `wait` and `waitSeconds` hold the reply until the workbook's Python is idle: see [Saving and waiting for Python cells](#saving-and-waiting-for-python-cells) |
 | `window.list` | | The open windows: `[{window, doc, index, title, dirty, active, hidden}]`. `title` is the workbook name, or "Book1:1", "Book1:2"… when a workbook has several windows; `index` is the workbook's position among the open workbooks |
 | `engine.commands` | `{search?}` | Every command: id, label, ribbon path, shortcut, params doc, enabled; `search` keeps those whose id, label or ribbon path contains it (case-insensitive) |
 | `engine.journal` | | Commands run so far (replayable). Passwords (`password`, `…Password` params) are left out, so a replayed Protect Sheet has no password. Capped at 10,000 entries and 64 MB (serialized); past either cap the oldest entries go |
 | `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |
 | `sheet.read` | `{range?, sheet?, formulas?, formatted?}` | Values (or formulas / displayed text) of a range |
 | `cell.get` | `{cell?}` | One cell: value, formula, displayed text, style, merge, comment, link |
-| `ui.inspect` | | UI state: ribbon tab, editor (`python` is true in Python mode; a draft in Python mode or of a Python cell's code has `text` null (a draft typed over a Python cell holds only what was typed and is shown) and `hidden` true while that cell's code is hidden on a protected sheet, or once the draft's sheet is gone; the sheet is found by its identity, whatever was inserted, deleted or moved before it), the Python editor window (`pythonEditor`: open, cell, text, dirty, pending question; `text` is null and `hidden` true while the cell's code is hidden on a protected sheet, even before the next frame closes the window), open dialog, Backstage page, message, selected object, grid rect, scroll, perf, `windows` (as `window.list`) and `activeWindow` |
+| `ui.inspect` | | UI state: the saves waiting for Python cells (`saveWaits`: see [Saving and waiting for Python cells](#saving-and-waiting-for-python-cells)), ribbon tab, editor (`python` is true in Python mode; a draft in Python mode or of a Python cell's code has `text` null (a draft typed over a Python cell holds only what was typed and is shown) and `hidden` true while that cell's code is hidden on a protected sheet, or once the draft's sheet is gone; the sheet is found by its identity, whatever was inserted, deleted or moved before it), the Python editor window (`pythonEditor`: open, cell, text, dirty, pending question; `text` is null and `hidden` true while the cell's code is hidden on a protected sheet, even before the next frame closes the window), open dialog, Backstage page, message, selected object, grid rect, scroll, perf, `windows` (as `window.list`) and `activeWindow` |
 | `ui.object.select` | `{id?, kind?}` | Selects a floating object on the active sheet and replies `{selected, rect}`, the rect in window points; with no `id` it clears the selection and replies `null` |
 | `ui.click` / `ui.drag` / `ui.move` | `{x, y, toX?, toY?, button?, count?, shift?, cmd?, alt?}` | Real pointer input in window points; refused with an error if it would leave more than 10,000 synthetic events or 8 MiB of synthetic input queued (pointer, key, text and move events share this budget) |
 | `ui.cell.click` / `ui.cell.drag` | `{cell}` / `{from, to}` | Pointer input at a cell's centre (works in point mode while editing); same shared queue limits |
@@ -70,12 +70,13 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `ui.pythonEditor` (via `engine.execute`) | `{on?, cell?, force?}` | Open the Python editor window on `cell` (`A1` or `Sheet2!B3`; default: the active cell; a cell inside a Python cell's spill opens its Python cell), or close it with `on: false`; without `on` it opens or closes. Opens no dialog and never asks: with unsaved code in the window it refuses to close it or open it on another cell, unless `force: true` discards the code. Refused on a Hidden cell of a protected sheet, whose code stays out of view. Replies with the window's state. `file.close`, and `window.close` on the workbook's last window, are refused while the window has unsaved code for the workbook; `app.quit` is refused while it has unsaved code |
 | `ui.pythonInitialization` (via `engine.execute`) | `{on?, force?}` | Open the Python editor window on the workbook's initialization code, or close it with `on: false`; without `on` it opens or closes. Opens no dialog and never asks, as `ui.pythonEditor`. Replies with the window's state, with `initialization: true` and no `sheet` or `cell` |
 | `ui.pythonCard` (via `engine.execute`) | `{on?}` | Open the card of the active cell's Python cell (its cached result's type and preview), or close it with `on: false`. Opening it is an error when the active cell isn't a Python cell, or while a cell is being edited; closing it always succeeds |
+| `ui.saveWait` (via `engine.execute`) | `{action?: saveNow\|cancel}` | The active workbook's save waiting for Python cells: `saveNow` saves without waiting any longer, `cancel` ends the wait with no save. Replies as `saveWaits` in `ui.inspect` has it, or `{waiting: false}`. See [Saving and waiting for Python cells](#saving-and-waiting-for-python-cells) |
 | `ui.pythonEnvironment`, `ui.pythonPackages`, `ui.pythonProblems`, `ui.pythonRunLog`, `ui.pythonPermissions` (via `engine.execute`) | `{on?}` | Open or close a Python pane, in place of any other pane; without `on` it switches. Replies `{open}`; `ui.inspect` reports them. Opening a pane is safe from any caller: none of them turns Python on |
 | `ui.backstage` (via `engine.execute`) | `{page?: home\|new\|open\|info\|saveAs\|print\|export\|options\|account\|close, section?: general\|python}` | `section` picks File › Options' page. Open the File tab's Backstage view on a page, or close it (`ui.inspect` reports the open page as `backstage`) |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state. On the native app it works while hidden or occluded when the platform still reports the current content size (the request asks for a hidden paint); a minimized window has no capturable size, so its request stays queued until the window is restored and otherwise reports the 8 s timeout. In a **hidden browser tab** the web runner does not implement that paint request, so the capture waits until the tab is shown again or reports the 8 s timeout. Up to 4 outstanding requests; retained images are limited to 128 MiB each and 256 MiB in total (each request reserves the largest image the ±1-pixel rounding rule can retain), one capture's transient encoding working set to 256 MiB, a base64 reply to 64 MiB, and retained images plus one capture's encoding working set to 512 MiB; a request that would exceed a budget is refused without evicting earlier ones. See [Screenshot budgets](#screenshot-budgets). A resize/DPI/zoom/visibility/occlusion change during capture is retried within the bounded retry budget or reported instead of saving stale pixels; the identity intentionally includes zoom and occlusion even though the expected physical size may be unchanged, so a capture never crosses layout generations. Every reply — success, refusal or timeout — carries the request `token` as `request` |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
-| `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog). `app.quit` doesn't ask about unsaved workbooks; it is refused while the Python editor window has unsaved code |
+| `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?, wait?, waitSeconds?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog). `app.save` is `file.save`. `app.quit` doesn't ask about unsaved workbooks; it is refused while the Python editor window has unsaved code, and while a save is waiting for Python cells |
 
 ### Screenshot budgets
 
@@ -196,10 +197,12 @@ or `cell`, and never asks: with unsaved code it refuses, unless `force` discards
 reports the same state as `pythonEditor`.
 
 `ui.inspect` reports `python`: `{state: off|notSetUp|ready|running|blocked, reason?, enabled,
-workbookEnabled, hasCells, enableBar, calculation, interpreter?, running? {sheet, cell, ms} or
+workbookEnabled, hasCells, enableBar, calculation, interpreter?, busy, unfinished, running? {sheet, cell, ms} or
 {initialization: true, ms}, initialization? {userModified, fits, chars, failed? {detail, line}, skipped},
 findings: {formulaBar, editor}, optionsPage, panes: {environment, packages, problems, runLog, permissions}}`. `state` is what the
 Python tab's button shows; `reason` is a diagnostic's id from `python.diagnostics`' vocabulary.
+`busy` says Python is working on any workbook, or the check of Python hasn't answered; `unfinished`
+names the active workbook's cells that are running or queued, as `Sheet1!B2`.
 `findings` lists what the checks found in the code being edited in the formula bar's Python mode and
 in the editor window: `{kind, severity, message, detail, line?, start?, end?}`, the last run's
 diagnostic first when there is one, then the static checks in order of position, with `start` and
@@ -213,3 +216,56 @@ imports it as `cell` and the name to install as `install`, and `packages.noPanda
 The Python tab is contextual: `ui.ribbon {tab: "Python"}` shows it only while the active cell is a
 Python cell or Python code is being edited, and otherwise the ribbon goes back to Home. Its panes open
 by their commands either way.
+
+### Saving and waiting for Python cells
+
+`file.save` and `file.saveAs` through the control channel, also as `app.save` or called by their
+ids, never show a dialog: a workbook with no file and no `path`, and `file.saveAs` with no `path`,
+is the error `missing `path`: programmatic calls never open dialogs`.
+
+Without `wait` a save happens at once, whatever is running. A cell still running or queued stores
+its last result; one that never had a result stores none, and its cached value in the file is
+`#VALUE!`, as the format has no code for `#BUSY!`. The code is always kept. The reply lists those
+cells as `unfinished` when there are any.
+
+`wait: true` holds the reply until the workbook's running and queued cells have finished, then
+saves. A cell stale under manual calculation isn't one of them. The wait ends by itself after the
+time Python may need to start, plus the time limit for each cell left, plus one second, and never
+after 120 seconds. `waitSeconds: n` makes the bound `n` seconds, cut to 120; `wait: false` means no
+wait whatever `waitSeconds` says. Anything else in these two fields is an error, and nothing is saved.
+They go in the save's own `params`, or beside `command` in `engine.execute`.
+
+```json
+{"id": 2, "method": "engine.execute", "params": {"command": "file.save", "params": {"path": "/tmp/book.xlsx", "wait": true}}}
+{"id": 2, "ok": true, "result": {"path": "/tmp/book.xlsx", "bytes": 5120, "unfinished": [], "unfinishedCount": 0}}
+```
+
+`unfinished` names the cells that have no result of their own at the moment of the save, in run
+order, at most 1,000 of them, and `unfinishedCount` says how many there are. They were still running
+when the bound came, or `python.stop` or Python being turned off left them, or a worker kept going
+away. The save happens either way, unless it fails, which is an `ok: false` reply with the workbook
+as it was.
+
+While a reply is held the window keeps working and other requests go on, on other connections: a
+connection answers its requests in order. Nothing shows in the window for a programmatic wait. A
+second save of the workbook joins the wait that is there and doesn't start it over, and a shorter
+`waitSeconds` of its own still holds. Each file is written once, in the order asked for, and a reply
+comes for each request. If the workbook closes first, or someone cancels the wait, the reply is an
+error saying so, and nothing is written. `app.quit` is refused meanwhile.
+
+`engine.execute` of any other command takes `wait` and `waitSeconds` beside `command`: the command
+runs, then the reply holds until Python is idle in the workbook it ran in, with the same bound, and
+the result has `unfinished` and `unfinishedCount`. `value`, in a result that has `cell` and `value`,
+is what the cell holds at that moment. A command that fails answers at once. When the workbook was
+closed meanwhile the result has `workbookClosed: true`.
+
+`ui.inspect` reports `saveWaits`: `[{waiting, doc, ms, capMs, prompt, saves, closeAfter, quitting,
+unfinished, unfinishedCount}]`, one for each workbook with a save waiting. `prompt` says a person asked,
+so the bar shows; `saves` lists the files it will write; `closeAfter` says the workbook closes after
+(the Save of Save Changes), and `quitting` that the quit goes on from there. `ui.saveWait` ends a wait
+from a script, as the bar's Save Now and Cancel do.
+
+A client must wait for a held reply: the app's control server, `gridcraft-cli send` and
+`gridcraft_mcp::Remote` allow the 120 seconds on top of their usual timeouts for a request that asks
+to wait (`control::reply_timeout`, `python::reply_may_be_held`). The CLI and MCP without an app never
+run Python, so `wait` changes nothing there but adding an empty `unfinished` to the reply.
