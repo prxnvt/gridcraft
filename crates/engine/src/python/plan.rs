@@ -15,6 +15,7 @@ use gridcraft_model::{Cell, LineInfo, PyCode, Sheet, StyleId, Workbook};
 use gridcraft_python::Client;
 use gridcraft_python::diagnostics::Diagnostic;
 
+use super::dates::{laid_out, sync_formats};
 use super::inputs::{Lit, Reader, Target, code_hash, is_volatile, literals, text_hash};
 use super::runner::Inflight;
 use super::{PythonCalculation, PythonRun, PythonStats, python_order_of_sheet};
@@ -387,6 +388,17 @@ impl DocRun {
         if !diff.any() && !diff.structure {
             return false;
         }
+        // A spill a cell gets in the way of, or that one no longer blocks, takes its formats with it.
+        // What reads those cells goes by the formats, so the look at what changed comes after.
+        let formatted = sync_changed_formats(d, &old, &diff);
+        let (new, diff) = if formatted {
+            let new = d.wb.clone();
+            self.seen = Some(new.clone());
+            let diff = Diff::between(&old, &new);
+            (new, diff)
+        } else {
+            (new, diff)
+        };
         let (seq_first, touched) = {
             let mut reader = Reader::new(&new, stats);
             let (seq_first, moved) = self.absorb(&old, &new, &diff, &mut reader);
@@ -394,9 +406,9 @@ impl DocRun {
             (seq_first, moved || refreshed)
         };
         if !touched {
-            return false;
+            return formatted;
         }
-        self.derive(d, cx, source, seq_first)
+        self.derive(d, cx, source, seq_first) | formatted
     }
 
     /// Everything Python on this workbook is due: nothing has run here yet.
@@ -723,6 +735,24 @@ impl DocRun {
             self.holds_code = true;
         }
     }
+}
+
+/// Brings the formats of the Python cells whose results came onto the sheet or left it in line with
+/// them. A format the person changed on a cell doesn't count: that is theirs. Returns whether it
+/// wrote to the workbook.
+fn sync_changed_formats(d: &mut DocState, old: &Workbook, diff: &Diff) -> bool {
+    let shown = |sh: &Sheet, c: CellRef| sh.cell(c).zip(python_of(sh.cell(c))).is_some_and(|(cell, py)| laid_out(sh, c, cell, py));
+    let new = d.wb.clone();
+    let mut wrote = false;
+    for (i, sh) in new.sheets.iter().enumerate() {
+        let (cells, before) = diff.changed_cells(old, i);
+        for c in cells {
+            if python_of(sh.cell(*c)).is_some_and(|py| !py.dates.is_empty()) && shown(sh, *c) != before.is_some_and(|b| shown(b, *c)) {
+                wrote |= sync_formats(d, i, *c);
+            }
+        }
+    }
+    wrote
 }
 
 /// Whether any cell of the workbook holds Python code.

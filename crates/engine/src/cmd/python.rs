@@ -205,10 +205,15 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
     // Unchanged code with the same return type keeps its result (and its value); new code, or a
     // new return type, has none until it runs: a result of the other type would show a value and
     // preview that don't belong to the cell.
+    // The formats its results wrote stay its to take back, whatever the new code gives.
+    if let Some(o) = &old {
+        py.dates.written = o.dates.written.clone();
+    }
     let keep = old.filter(|o| o.code == py.code && o.object == py.object);
     let value = match &keep {
         Some(o) => {
             py.output = o.output.clone();
+            py.dates.result = o.dates.result.clone();
             py.stale = o.stale;
             py.failed = o.failed;
             None

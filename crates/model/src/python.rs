@@ -2,6 +2,8 @@
 //! `PY("…",0|1)` formula of the function's syntax, and the `xl("…")` references inside it). An
 //! xlsx file keeps the code in its Python part instead (see the xlsx crate).
 
+use std::sync::Arc;
+
 use gridcraft_core::{CellError, Value};
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +42,48 @@ pub struct PyCode {
     /// again, while it waits for another run. A state of this session, never saved.
     #[serde(skip)]
     pub failed: Option<CellError>,
+    /// The dates in its result, and the formats it wrote for them. A state of this session, never
+    /// saved: in a file the formats are just the cells' formats.
+    #[serde(skip)]
+    pub dates: PyDates,
+}
+
+/// What a number in a Python result stands for, which decides the format it shows with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PyDateKind {
+    Date,
+    DateTime,
+    Time,
+    Duration,
+}
+
+impl PyDateKind {
+    /// The format a cell with no format of its own takes: Excel's built-in formats 14, 22, 21 and 46.
+    pub fn format_code(self) -> &'static str {
+        match self {
+            PyDateKind::Date => "m/d/yyyy",
+            PyDateKind::DateTime => "m/d/yyyy h:mm",
+            PyDateKind::Time => "h:mm:ss",
+            PyDateKind::Duration => "[h]:mm:ss",
+        }
+    }
+}
+
+/// The date formats of a Python cell's result. These are shared, as a cell is copied each time a
+/// flag on it changes, and a result can hold a million dates.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PyDates {
+    /// The numbers of the result that are dates, by their place in row order, in ascending order.
+    pub result: Arc<[(u32, PyDateKind)]>,
+    /// The cells whose format came from a result, by (rows, columns) from this cell, in ascending
+    /// order: a format the person gave a cell is its own, and one written here is not.
+    pub written: Arc<[(u32, u32, PyDateKind)]>,
+}
+
+impl PyDates {
+    pub fn is_empty(&self) -> bool {
+        self.result.is_empty() && self.written.is_empty()
+    }
 }
 
 /// A Python result kept on the cell.

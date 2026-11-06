@@ -14,6 +14,7 @@ use gridcraft_python::protocol::OUTPUT_CUT;
 use gridcraft_python::{Client, Input, Outcome, Output, RunResult, Transport};
 use web_time::Instant;
 
+use super::dates::{ResultDates, converted, is_date_type, sync_formats};
 use super::inputs::{Problem, Reader, code_hash, literals};
 use super::plan::{CellState, Cx, DocRun, Source};
 use super::{PythonCapability, PythonRun, PythonStats};
@@ -100,7 +101,7 @@ pub(super) struct Finish {
 
 /// What to write to a cell.
 pub(super) enum Write {
-    Result(PyOutput),
+    Result(PyOutput, ResultDates),
     Error(CellError),
 }
 
@@ -129,18 +130,27 @@ fn preview(v: &Value) -> String {
 
 /// A result as a cell keeps it. A Python object shows its type's name, and its preview stays for
 /// the card.
-fn kept(output: Output, sys: DateSystem) -> PyOutput {
+fn kept(output: Output, sys: DateSystem) -> Write {
     match output {
-        Output::Value(value) => PyOutput { type_name: type_name(&value).into(), preview: preview(&value), value, convertible: true },
-        Output::Dated(dated) => super::dates::converted(dated, sys),
-        Output::Object { type_name, preview } => PyOutput { value: Value::text(type_name.as_str()), type_name, preview, convertible: false },
+        Output::Value(value) => Write::Result(
+            PyOutput { type_name: type_name(&value).into(), preview: preview(&value), value, convertible: true },
+            ResultDates::default(),
+        ),
+        Output::Dated(dated) => {
+            let (output, dates) = converted(dated, sys);
+            Write::Result(output, dates)
+        }
+        Output::Object { type_name, preview } => {
+            Write::Result(PyOutput { value: Value::text(type_name.as_str()), type_name, preview, convertible: false }, ResultDates::default())
+        }
     }
 }
 
 /// The diagnostic for a result that holds an error the person should hear about.
-fn result_diagnostic(value: &Value) -> Option<Diagnostic> {
-    match value {
+fn result_diagnostic(output: &PyOutput) -> Option<Diagnostic> {
+    match output.value {
         Value::Error(CellError::Calc) => Some(Diagnostic::new("result.empty", "", None)),
+        Value::Error(CellError::Num) if is_date_type(&output.type_name) => Some(Diagnostic::new("result.date", output.preview.as_str(), None)),
         Value::Error(CellError::Num) => Some(Diagnostic::new("result.number", "", None)),
         _ => None,
     }
@@ -222,11 +232,9 @@ fn after_string(bytes: &[u8], at: usize) -> usize {
 /// Writes a result or an error to a cell, through the same path as any edit: calculation lays out
 /// the spill and recalculates what reads it. It makes no undo step. Returns whether anything changed.
 pub(super) fn write_cell(d: &mut DocState, sheet: usize, at: CellRef, write: Write) -> bool {
-    let unchanged =
-        d.wb.sheet(sheet)
-            .and_then(|s| s.cell(at))
-            .and_then(|c| c.py.as_deref())
-            .is_some_and(|py| !py.busy && !py.stale && matches!(&write, Write::Result(out) if py.output.as_ref() == Some(out)));
+    let unchanged = d.wb.sheet(sheet).and_then(|s| s.cell(at)).and_then(|c| c.py.as_deref()).is_some_and(|py| {
+        !py.busy && !py.stale && matches!(&write, Write::Result(out, dates) if py.output.as_ref() == Some(out) && py.dates.result == *dates)
+    });
     if unchanged {
         return false;
     }
@@ -237,12 +245,14 @@ pub(super) fn write_cell(d: &mut DocState, sheet: usize, at: CellRef, write: Wri
         py.busy = false;
         py.stale = false;
         match write {
-            Write::Result(out) => {
+            Write::Result(out, dates) => {
                 py.output = Some(out);
+                py.dates.result = dates;
                 py.failed = None;
             }
             Write::Error(e) => {
                 py.output = None;
+                py.dates.result = ResultDates::default();
                 py.failed = Some(e);
                 cell.value = Value::Error(e);
             }
@@ -254,6 +264,7 @@ pub(super) fn write_cell(d: &mut DocState, sheet: usize, at: CellRef, write: Wri
         log::warn!("Python cells: {e}");
     }
     d.revision = d.revision.saturating_add(1);
+    sync_formats(d, sheet, at);
     true
 }
 
@@ -467,13 +478,13 @@ impl DocRun {
         }
         let name_order = undefined_name(&outcome).and_then(|name| self.defined_later(&d.wb, name, flight.index, diag.as_ref()));
         let (write, stdout) = match outcome {
-            Outcome::Ok { output, stdout } => (Write::Result(kept(output, d.wb.date_system)), stdout),
+            Outcome::Ok { output, stdout } => (kept(output, d.wb.date_system), stdout),
             Outcome::PythonError { stdout, .. } => (Write::Error(error.unwrap_or(CellError::Python)), stdout),
             _ => (Write::Error(error.unwrap_or(CellError::Python)), String::new()),
         };
         let (stdout, cut) = cut_output(stdout);
         let cell_diag = name_order.or(diag).or_else(|| match &write {
-            Write::Result(o) => result_diagnostic(&o.value),
+            Write::Result(o, _) => result_diagnostic(o),
             Write::Error(_) => None,
         });
         let cell_diag = cell_diag.or_else(|| cut.then(|| Diagnostic::new("limit.output", "", None)));

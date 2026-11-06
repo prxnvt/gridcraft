@@ -159,6 +159,7 @@ pub const CATALOG: &[Kind] = &[
     k("result.empty", Error, Cell, "The result is empty.", A::None),
     k("result.spill", Error, Cell, "The result needs cells that aren't empty.", A::GoToCell),
     k("result.number", Error, Cell, "The result isn't a number a cell can hold.", A::None),
+    k("result.date", Error, Cell, "This date or length of time is outside what a cell can hold.", A::None),
     k("state.busy", Info, Cell, "This cell is running.", A::None),
     k("state.stale", Info, Cell, "What this cell reads has changed since it last ran.", A::RunAgain),
     k("state.stopped", Info, Cell, "This cell was stopped before it finished.", A::RunAgain),
