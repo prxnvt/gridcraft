@@ -190,7 +190,8 @@ fn save_image_asks_where_and_cancelling_does_nothing() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("saved.png");
     let answer_with: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let (pick, asked): (Rc<RefCell<Option<String>>>, Rc<RefCell<Vec<String>>>) = (answer_with.clone(), Rc::default());
+    let pick = answer_with.clone();
+    let asked: Rc<RefCell<Vec<String>>> = Rc::default();
     let names = asked.clone();
     let services = Services {
         pick_save: Some(Box::new(move |name: &str| {
