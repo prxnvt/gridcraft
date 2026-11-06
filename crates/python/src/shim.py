@@ -342,9 +342,12 @@ def _gridcraft_worker():
             name = type(outer.f_locals.get("self")).__name__
         for key, default in SEABORN_SIZES.get(name, {}).items():
             value = outer.f_locals.get(key, default)
-            if value is not None and value != default:
+            if value is not None and tuple(numbers(value)) != tuple(numbers(default)):
                 return True
         return False
+
+    def numbers(value):
+        return (float(x) for x in (value if isinstance(value, (list, tuple)) else (value,)))
 
     def watch_sizes(module):
         functools = importlib.import_module("functools")
@@ -352,23 +355,30 @@ def _gridcraft_worker():
         init = figure.__init__
         set_size = figure.set_size_inches
 
+        # Watching never gets in the way of a plot: anything it can't work out counts as a choice.
         @functools.wraps(init)
         def watched_init(self, *args, **kwargs):
-            chosen = seaborn_size_chosen(sys._getframe(1))
+            try:
+                chosen = seaborn_size_chosen(sys._getframe(1))
+            except Exception:
+                chosen = True
             if chosen is True or (chosen is None and kwargs.get("figsize", args[0] if args else None) is not None):
                 self._gridcraft_fixed = True
             init(self, *args, **kwargs)
 
         @functools.wraps(set_size)
         def watched_set_size(self, w, h=None, forward=True):
-            before = self.get_size_inches()
-            after = (w, h) if h is not None else tuple(w)
-            if not state.get("drawing") and (float(after[0]), float(after[1])) != (float(before[0]), float(before[1])):
-                frame = sys._getframe(1)
-                while frame is not None and in_folder(frame, "matplotlib"):
-                    frame = frame.f_back
-                if frame is not None and not in_folder(frame, "seaborn"):
-                    self._gridcraft_fixed = True
+            try:
+                before = self.get_size_inches()
+                after = (w, h) if h is not None else tuple(w)
+                if not state.get("drawing") and (float(after[0]), float(after[1])) != (float(before[0]), float(before[1])):
+                    frame = sys._getframe(1)
+                    while frame is not None and in_folder(frame, "matplotlib"):
+                        frame = frame.f_back
+                    if frame is not None and not in_folder(frame, "seaborn"):
+                        self._gridcraft_fixed = True
+            except Exception:
+                self._gridcraft_fixed = True
             return set_size(self, w, h, forward=forward)
 
         figure.__init__ = watched_init
@@ -1036,7 +1046,7 @@ def _gridcraft_worker():
         """A cell's result as a picture, or None for any other result. A value that can give a
         picture does; with no value, a figure this cell changed does; a number or a table takes
         priority over an open figure."""
-        fig = figure_of(v)
+        fig = unless_it_fails(figure_of, v)
         if fig is None and v is not None:
             data = unless_it_fails(displayed, v)
             return picture_on_wire(data, 1) if data is not None else None

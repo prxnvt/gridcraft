@@ -581,7 +581,7 @@ impl Session {
                 r.stay_off(d)
             };
             r.check_packages(&d.wb, env.generation, &env.report.packages, stats);
-            r.note_render_due(d);
+            r.note_render_due(d, gate == Gate::Go);
         }
         changed
     }

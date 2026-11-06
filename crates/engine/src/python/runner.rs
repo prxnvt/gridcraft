@@ -371,8 +371,8 @@ impl DocRun {
     }
 
     /// Notes whether a figure waits to be drawn again, which keeps the interface polling.
-    pub fn note_render_due(&mut self, d: &DocState) {
-        self.render_waiting = self.render_due(d).is_some();
+    pub fn note_render_due(&mut self, d: &DocState, can_run: bool) {
+        self.render_waiting = can_run && self.render_due(d).is_some();
     }
 
     fn back_to_first_queued(&mut self) {

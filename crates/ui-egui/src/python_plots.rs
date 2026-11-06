@@ -152,7 +152,7 @@ pub fn display_over_cells(app: &mut SheetApp) {
 /// selected one.
 pub fn picture_chrome(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
-    if sh.images.iter().all(|o| o.python_source.is_none()) {
+    if sh.images.iter().all(|o| o.python_source.is_none()) || crate::chartview::objects_hidden(&d.wb) {
         return;
     }
     let lang = app.ui.language;
