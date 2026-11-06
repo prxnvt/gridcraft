@@ -4,7 +4,8 @@
 //! command, a file or the control channel can reach) and, per open workbook, one worker and the state
 //! of its cells. Nothing here blocks: a command only marks what is due; [`Session::python_poll`],
 //! which the interface calls every frame, takes one finished result, writes it, and sends the next
-//! cell. Results make no undo step, and stay out of the journal.
+//! cell. Results make no undo step, and stay out of the journal. The one exception is `file.save` with
+//! `wait`, for a caller with no frames to keep going: the interface takes `wait` off.
 //!
 //! - `inputs` resolves a cell's `xl("…")` references and fingerprints what they read.
 //! - `dates` turns serial numbers into dates by their cells' formats, and dates in results back into
@@ -13,6 +14,7 @@
 //! - `runner` submits cells and writes results.
 //! - `initialization` runs the workbook's initialization code before the cells.
 //! - `environment` works out on a thread of its own whether Python can run here.
+//! - `wait` waits for a workbook's cells, so that a save gets their results.
 //!
 //! A due cell, with its kept result, shows `#BUSY!` until the new one arrives; what the result
 //! spilled stays in place until then ([`gridcraft_model::PyCode::busy`]).
@@ -24,6 +26,7 @@ mod inputs;
 mod packages;
 mod plan;
 mod runner;
+mod wait;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -48,6 +51,7 @@ use environment::Environment;
 pub use environment::{PythonEnvironment, PythonState};
 use plan::{CellState, Cx, DocRun, Gate, Source};
 use runner::{Finish, Starter};
+pub use wait::{MAX_WAIT, PythonWait, WaitBound, WaitState, note_unfinished, reply_may_be_held, wait_asked};
 
 use crate::{DocState, Result, Session};
 

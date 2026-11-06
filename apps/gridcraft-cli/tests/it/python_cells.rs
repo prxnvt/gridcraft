@@ -687,3 +687,44 @@ fn a_persons_code_can_keep_excels_own_module() {
     settle(&mut s);
     assert_eq!(kind(&s, "A1"), Some("init.failed"));
 }
+
+/// A session without Python that has opened the file: what the file holds.
+fn opened(path: &std::path::Path) -> Session {
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    s
+}
+
+#[test]
+fn a_save_with_wait_has_the_result_in_the_file() {
+    let Some(mut s) = session() else { return };
+    let path = std::env::temp_dir().join(format!("gridcraft-python-cells-wait-{}.xlsx", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    set(&mut s, "A1", "20");
+    py(&mut s, "B1", "import time\ntime.sleep(0.3)\nxl(\"A1\") + 22");
+    assert!(s.python_busy(), "the cell is still to run");
+    let r = s.execute("file.save", json!({"path": path, "wait": true})).unwrap();
+    assert_eq!(r["unfinished"], json!([]), "{r}");
+    assert_eq!(v(&opened(&path), "B1"), num(42.0), "the file has the result");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_save_at_the_bound_says_the_cell_was_not_finished_and_keeps_its_code() {
+    let Some(mut s) = session() else { return };
+    let path = std::env::temp_dir().join(format!("gridcraft-python-cells-bound-{}.xlsx", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    py(&mut s, "A1", "20 + 22");
+    settle(&mut s);
+    // It runs before A2's result: A2 keeps its last one while it waits for this.
+    py(&mut s, "A2", "7");
+    settle(&mut s);
+    let code = "import time\ntime.sleep(60)\n1";
+    py(&mut s, "A1", code);
+    let r = s.execute("file.save", json!({"path": path, "waitSeconds": 0.5})).unwrap();
+    assert_eq!(r["unfinished"], json!(["Sheet1!A1", "Sheet1!A2"]), "{r}");
+    let mut o = opened(&path);
+    assert_eq!(v(&o, "A2"), num(7.0), "the last result");
+    assert_eq!(o.execute("cell.get", json!({"cell": "A1"})).unwrap()["python"]["code"], json!(code));
+    let _ = std::fs::remove_file(&path);
+}
