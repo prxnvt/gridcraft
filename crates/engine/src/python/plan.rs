@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
-use gridcraft_model::{Cell, PyCode, Sheet, Workbook};
+use gridcraft_model::{Cell, LineInfo, PyCode, Sheet, StyleId, Workbook};
 use gridcraft_python::Client;
 use gridcraft_python::diagnostics::Diagnostic;
 
@@ -180,6 +180,9 @@ pub(super) struct SheetChange {
     spills: Vec<CellRef>,
     /// The sheet is new here: all of it counts as changed.
     whole: bool,
+    /// A row or column format changed under a spill, whose values have no cells to show it. What
+    /// reads them reads a date or a number by that format.
+    lines: bool,
     /// The box around `cells` and `spills`.
     bounds: Option<RangeRef>,
 }
@@ -188,7 +191,8 @@ impl SheetChange {
     fn between(old: &Sheet, new: &Sheet) -> Option<SheetChange> {
         let mut cells = old.cells.diff(&new.cells);
         let spills = spill_changes(&old.spill, &new.spill);
-        if cells.is_empty() && spills.is_empty() {
+        let lines = !new.spill.is_empty() && (line_styles(&old.rows).ne(line_styles(&new.rows)) || line_styles(&old.cols).ne(line_styles(&new.cols)));
+        if cells.is_empty() && spills.is_empty() && !lines {
             return None;
         }
         cells.sort_unstable();
@@ -196,11 +200,11 @@ impl SheetChange {
             let one = RangeRef::cell(*c);
             Some(b.map_or(one, |x| x.union(&one)))
         });
-        Some(SheetChange { cells, spills, whole: false, bounds })
+        Some(SheetChange { cells, spills, whole: false, lines, bounds })
     }
 
     fn hits(&self, r: RangeRef) -> bool {
-        if self.whole {
+        if self.whole || self.lines {
             return true;
         }
         if !self.bounds.is_some_and(|b| b.intersects(&r)) {
@@ -212,6 +216,11 @@ impl SheetChange {
     fn has(&self, c: CellRef) -> bool {
         self.whole || self.cells.binary_search(&c).is_ok()
     }
+}
+
+/// The rows or columns that have a format of their own, with it.
+fn line_styles(lines: &BTreeMap<u32, LineInfo>) -> impl Iterator<Item = (u32, StyleId)> {
+    lines.iter().filter_map(|(line, info)| info.style.map(|style| (*line, style)))
 }
 
 /// The positions of spilled values that differ between two sheets. The maps are in order, so the
@@ -278,7 +287,7 @@ impl Diff {
             let at = if same_layout { Some(i) } else { by_uid.get(&sh.uid.get()).copied() };
             old_index.push(at);
             sheets.push(match at.and_then(|j| old.sheets.get(j)) {
-                None => Some(SheetChange { cells: Vec::new(), spills: Vec::new(), whole: true, bounds: None }),
+                None => Some(SheetChange { cells: Vec::new(), spills: Vec::new(), whole: true, lines: false, bounds: None }),
                 Some(o) if Arc::ptr_eq(o, sh) => None,
                 Some(o) => {
                     structure = true;

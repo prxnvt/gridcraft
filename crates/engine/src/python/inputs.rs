@@ -5,7 +5,9 @@
 //! columns or rows, a formula's spill (`A1#`), on any sheet, a defined name or a table. A range running to the sheet's edge
 //! (`A:A`, `A5:A1048576`) stops at the sheet's used range, as formulas read it. A cell waiting for a
 //! new result reads as the result it keeps, so a cell that reads one further down settles instead of
-//! seeing `#BUSY!` each time it runs.
+//! seeing `#BUSY!` each time it runs. A number whose format is a date or a time goes as that date or
+//! time, in the workbook's date system, and the fingerprint counts which it is, so a new format runs
+//! what reads the cell.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap};
@@ -15,11 +17,12 @@ use gridcraft_calc::eval::Ev;
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::{BinOp, Expr, UnOp};
 use gridcraft_model::python::xl_calls;
-use gridcraft_model::{Cell, Sheet, Workbook};
+use gridcraft_model::{Cell, Sheet, StyleId, Workbook};
 use gridcraft_python::Input;
 use gridcraft_python::protocol::MAX_ARRAY_CELLS;
 
 use super::PythonStats;
+use super::dates::DateFormats;
 
 /// One literal `xl("…")` of a cell's code.
 #[derive(Clone, Debug, PartialEq)]
@@ -184,20 +187,20 @@ fn shows_own_value(cell: &Cell) -> bool {
     !cell.value.is_empty() || cell.formula.is_some()
 }
 
-/// The values in `r` that aren't empty, with their positions: stored cells first, then spilled values
-/// no cell hides. The work follows what is stored, not the size of `r`.
-fn for_each_value(sh: &Sheet, r: RangeRef, f: &mut dyn FnMut(CellRef, Value)) {
+/// The values in `r` that aren't empty, with their positions and styles: stored cells first, then
+/// spilled values no cell hides. The work follows what is stored, not the size of `r`.
+fn for_each_value(sh: &Sheet, r: RangeRef, f: &mut dyn FnMut(CellRef, Value, StyleId)) {
     for (c, cell) in sh.cells.iter_range(r) {
         if shows_own_value(cell) {
             let v = input_value(sh, c, cell);
             if !v.is_empty() {
-                f(c, v);
+                f(c, v, cell.style);
             }
         }
     }
     for (c, v) in sh.spill.range(r.start..=r.end) {
         if r.contains(*c) && !v.is_empty() && sh.cell(*c).is_none_or(|cell| !shows_own_value(cell)) {
-            f(*c, v.clone());
+            f(*c, v.clone(), sh.style_id(*c));
         }
     }
 }
@@ -208,12 +211,13 @@ pub(super) struct Reader<'a> {
     wb: &'a Workbook,
     used: HashMap<usize, Option<RangeRef>>,
     hashes: HashMap<(usize, RangeRef), u64>,
+    formats: DateFormats,
     stats: &'a mut PythonStats,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(wb: &'a Workbook, stats: &'a mut PythonStats) -> Reader<'a> {
-        Reader { wb, used: HashMap::new(), hashes: HashMap::new(), stats }
+        Reader { wb, used: HashMap::new(), hashes: HashMap::new(), formats: DateFormats::default(), stats }
     }
 
     /// `r`, stopped at the sheet's used range where it runs to the sheet's edge.
@@ -244,10 +248,16 @@ impl<'a> Reader<'a> {
         // The shape and the values, not where they are: cells that moved read the same.
         let mut h = DefaultHasher::new();
         (r.height(), r.width()).hash(&mut h);
-        if let Some(sh) = self.wb.sheet(sheet) {
-            for_each_value(sh, r, &mut |c, v| {
+        let (wb, formats) = (self.wb, &mut self.formats);
+        if let Some(sh) = wb.sheet(sheet) {
+            for_each_value(sh, r, &mut |c, v, style| {
                 (c.row - r.start.row, c.col - r.start.col).hash(&mut h);
                 hash_value(&v, &mut h);
+                if let Value::Number(n) = v
+                    && let Some(stamp) = formats.stamp(wb, style, n)
+                {
+                    stamp.type_name().hash(&mut h);
+                }
             });
         }
         let out = h.finish();
@@ -284,37 +294,58 @@ impl<'a> Reader<'a> {
         if cells > MAX_ARRAY_CELLS as u64 {
             return Err(Problem::TooLarge { cells });
         }
-        Ok(lits.iter().map(|lit| (lit.text.clone(), Input::new(self.read(lit)))).collect())
+        Ok(lits.iter().map(|lit| (lit.text.clone(), self.read(lit))).collect())
     }
 
-    fn read(&mut self, lit: &Lit) -> Value {
+    fn read(&mut self, lit: &Lit) -> Input {
         match &lit.target {
-            Target::Constant(v) => v.clone(),
-            Target::Bad(_) => Value::Error(CellError::Ref),
+            Target::Constant(v) => Input::new(v.clone()),
+            Target::Bad(_) => Input::new(Value::Error(CellError::Ref)),
             Target::Area { sheet, range } => {
                 let r = self.capped(*sheet, *range);
-                let Some(sh) = self.wb.sheet(*sheet) else { return Value::Error(CellError::Ref) };
-                if r.is_single() && !lit.text.contains(':') { read_one(sh, r.start) } else { read_block(sh, r) }
+                let wb = self.wb;
+                let Some(sh) = wb.sheet(*sheet) else { return Input::new(Value::Error(CellError::Ref)) };
+                if r.is_single() && !lit.text.contains(':') {
+                    read_one(wb, sh, r.start, &mut self.formats)
+                } else {
+                    read_block(wb, sh, r, &mut self.formats)
+                }
             }
         }
     }
 }
 
-fn read_one(sh: &Sheet, c: CellRef) -> Value {
-    match sh.cell(c).filter(|cell| shows_own_value(cell)) {
-        Some(cell) => input_value(sh, c, cell),
-        None => sh.spill.get(&c).cloned().unwrap_or_default(),
+fn read_one(wb: &Workbook, sh: &Sheet, c: CellRef, formats: &mut DateFormats) -> Input {
+    let (value, style) = match sh.cell(c).filter(|cell| shows_own_value(cell)) {
+        Some(cell) => (input_value(sh, c, cell), cell.style),
+        None => (sh.spill.get(&c).cloned().unwrap_or_default(), sh.style_id(c)),
+    };
+    if let Value::Number(n) = value
+        && let Some(stamp) = formats.stamp(wb, style, n)
+    {
+        return Input { stamps: vec![(0, stamp)], ..Input::new(Value::Empty) };
     }
+    Input::new(value)
 }
 
-fn read_block(sh: &Sheet, r: RangeRef) -> Value {
+fn read_block(wb: &Workbook, sh: &Sheet, r: RangeRef, formats: &mut DateFormats) -> Input {
     let (rows, cols) = (r.height() as usize, r.width() as usize);
     let mut data = vec![Value::Empty; rows.saturating_mul(cols)];
-    for_each_value(sh, r, &mut |c, v| {
+    let mut stamps = Vec::new();
+    for_each_value(sh, r, &mut |c, v, style| {
         let at = (c.row - r.start.row) as usize * cols + (c.col - r.start.col) as usize;
-        if let Some(slot) = data.get_mut(at) {
-            *slot = v;
+        let stamp = if let Value::Number(n) = v { formats.stamp(wb, style, n) } else { None };
+        // A request holds at most MAX_ARRAY_CELLS cells, so a place fits.
+        match stamp.zip(u32::try_from(at).ok()) {
+            Some((stamp, place)) => stamps.push((place, stamp)),
+            None => {
+                if let Some(slot) = data.get_mut(at) {
+                    *slot = v;
+                }
+            }
         }
     });
-    Array::new(rows, cols, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+    stamps.sort_unstable_by_key(|(place, _)| *place);
+    let value = Array::new(rows, cols, data).map(Value::from).unwrap_or(Value::Error(CellError::Value));
+    Input { stamps, ..Input::new(value) }
 }

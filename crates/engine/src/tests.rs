@@ -5435,6 +5435,7 @@ mod macros;
 mod objects;
 mod python_cells;
 mod python_commands;
+mod python_dates;
 mod python_files;
 mod python_run;
 mod seams;

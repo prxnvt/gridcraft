@@ -7,7 +7,8 @@
 //! cell. Results make no undo step, and stay out of the journal.
 //!
 //! - `inputs` resolves a cell's `xl("…")` references and fingerprints what they read.
-//! - `dates` turns dates in results into serial numbers, in the workbook's date system.
+//! - `dates` turns serial numbers into dates by their cells' formats, and dates in results back into
+//!   serial numbers, in the workbook's date system.
 //! - `plan` keeps the list of Python cells up to date and decides what is due.
 //! - `runner` submits cells and writes results.
 //! - `environment` works out on a thread of its own whether Python can run here.
