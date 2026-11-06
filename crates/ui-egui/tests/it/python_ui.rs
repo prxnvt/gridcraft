@@ -360,10 +360,10 @@ fn the_page_says_what_automatic_found_or_how_to_set_python_up_with_uv() {
     h.run_steps(2);
     assert!(h.state().toast.is_some());
     // pip stays behind a secondary choice.
-    assert!(h.query_by_label("python3 -m pip install numpy pandas statsmodels").is_none());
+    assert!(h.query_by_label("python3 -m pip install numpy pandas matplotlib seaborn statsmodels").is_none());
     h.get_by_label("Other package managers").click();
     h.run_steps(3);
-    assert!(h.query_by_label("python3 -m pip install numpy pandas statsmodels").is_some());
+    assert!(h.query_by_label("python3 -m pip install numpy pandas matplotlib seaborn statsmodels").is_some());
 }
 
 #[test]
@@ -1523,7 +1523,8 @@ fn on_a_python_cell_py_replaces_fx_with_run_cell_below_it() {
     let on_python = bar(&h);
     assert!(on_python.fx.is_none(), "PY replaces fx");
     let run = on_python.run_cell.expect("Run Cell on a Python cell");
-    assert!((run.left() - fx.left()).abs() < 4.0, "in fx's place: {run:?} and {fx:?}");
+    // The Python Output menu comes first, between the Enter button and PY.
+    assert!((run.left() - fx.left()).abs() < 44.0, "beside fx's place: {run:?} and {fx:?}");
     assert!(run.top() > fx.top() + 10.0, "a line below the badge: {run:?}");
     assert_eq!(on_python.lines, 1, "one line of code, and the bar still has Run Cell's line");
     assert!(run.bottom() <= on_python.height + on_python.name_box.top() + 3.0, "it fits: {run:?} in {}", on_python.height);
