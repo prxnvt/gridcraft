@@ -2106,7 +2106,9 @@ mod tests {
             assert_eq!(spans(code), [(span, text.to_string())], "{code}");
             assert_eq!(ids(code), ["lint.savefig"], "{code}");
         }
-        for code in ["def savefig(a): pass", "x = fig.savefig", "my_savefig('a')", "fig.savefig(buffer, format='png')", "fig.savefig()", "savefig(path)"] {
+        for code in
+            ["def savefig(a): pass", "x = fig.savefig", "my_savefig('a')", "fig.savefig(buffer, format='png')", "fig.savefig()", "savefig(path)"]
+        {
             assert_eq!(ids(code), Vec::<&str>::new(), "{code}");
         }
     }
@@ -2133,8 +2135,16 @@ mod tests {
         let code = "xl(a)\nimport socket\nimport zzz\nopen('a')\nplt.savefig('b')\nimport plotly\ninput()\nos.environ";
         let found = lint(code, Some(&[]));
         let ids: Vec<&str> = found.iter().map(|f| f.kind.id).collect();
-        let expected =
-            ["lint.xlNotLiteral", "lint.importBlocked", "lint.importMissing", "lint.fileAccess", "lint.savefig", "lint.browserPlots", "lint.window", "lint.environ"];
+        let expected = [
+            "lint.xlNotLiteral",
+            "lint.importBlocked",
+            "lint.importMissing",
+            "lint.fileAccess",
+            "lint.savefig",
+            "lint.browserPlots",
+            "lint.window",
+            "lint.environ",
+        ];
         assert_eq!(ids, expected);
         assert_eq!(found.iter().map(|f| f.line).collect::<Vec<_>>(), [1, 2, 3, 4, 5, 6, 7, 8]);
         assert!(found.iter().all(|f| f.kind.scope == crate::diagnostics::Scope::Line));

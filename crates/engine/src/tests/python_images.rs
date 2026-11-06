@@ -140,7 +140,10 @@ fn python_image_and_save_image_give_the_bytes() {
     py(&mut s, "A2", "ret 1");
     settle(&mut s);
     let r = s.execute("python.image", json!({"cell": "A1"})).unwrap();
-    assert_eq!((&r["cell"], &r["mime"], &r["width"], &r["height"], &r["density"]), (&json!("A1"), &json!("image/png"), &json!(20), &json!(15), &json!(2)));
+    assert_eq!(
+        (&r["cell"], &r["mime"], &r["width"], &r["height"], &r["density"]),
+        (&json!("A1"), &json!("image/png"), &json!(20), &json!(15), &json!(2))
+    );
     let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
     assert_eq!(bytes, picture_bytes(40, 30));
     assert!(s.execute("python.image", json!({"cell": "A2"})).unwrap_err().to_string().contains("no picture"));

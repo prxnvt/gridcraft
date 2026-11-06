@@ -18,7 +18,6 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
-pub mod python_plots;
 pub mod chartview;
 pub mod code_editor;
 pub mod control;
@@ -52,6 +51,7 @@ pub mod pivot_pane;
 pub mod printing;
 pub mod published_picture;
 pub mod python_card;
+pub mod python_plots;
 pub mod python_ui;
 pub mod python_window;
 pub mod ribbon;

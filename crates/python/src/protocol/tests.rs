@@ -38,19 +38,27 @@ fn requests_and_replies_round_trip() {
     for reply in [
         Reply::Ready { self_test: SelfTest::NotChecked },
         Reply::Ready { self_test: SelfTest::Failed("socket opened".into()) },
-        Reply::Done { id: 3, result: Ok(Output::Value(array(1, 2, vec![Value::Number(1.0), Value::text("b")]))), stdout: "hi\n".into(), peak: None, touched: None },
+        Reply::Done {
+            id: 3,
+            result: Ok(Output::Value(array(1, 2, vec![Value::Number(1.0), Value::text("b")]))),
+            stdout: "hi\n".into(),
+            peak: None,
+            touched: None,
+        },
         Reply::Done { id: 4, result: Ok(Output::object("dict", "{'a': 1}")), stdout: String::new(), peak: Some(123), touched: None },
         Reply::Done {
             id: 5,
             result: Err(PyError { message: "NameError: name 'y' is not defined".into(), line: Some(2), ..PyError::default() }),
             stdout: String::new(),
-            peak: Some(456), touched: None,
+            peak: Some(456),
+            touched: None,
         },
         Reply::Done {
             id: 6,
             result: Err(PyError { message: "SyntaxError".into(), line: None, ..PyError::default() }),
             stdout: String::new(),
-            peak: None, touched: None,
+            peak: None,
+            touched: None,
         },
         Reply::Done { id: 9, result: Ok(Output::Value(Value::Empty)), stdout: String::new(), peak: None, touched: None },
     ] {
@@ -635,9 +643,16 @@ fn objects_with_a_size_and_a_table_round_trip() {
     for table in [table, empty, Table::default()] {
         let reply = Reply::Done {
             id: 1,
-            result: Ok(Output::Object { type_name: "DataFrame".into(), preview: "p".into(), size: vec![1000, 50], table: Some(table), picture: None }),
+            result: Ok(Output::Object {
+                type_name: "DataFrame".into(),
+                preview: "p".into(),
+                size: vec![1000, 50],
+                table: Some(table),
+                picture: None,
+            }),
             stdout: String::new(),
-            peak: None, touched: None,
+            peak: None,
+            touched: None,
         };
         assert_eq!(Reply::parse(reply.to_line().trim_ascii_end()).unwrap(), reply);
     }
@@ -751,7 +766,8 @@ fn a_picture_goes_there_and_back() {
         for bytes in [png(40, 30), png(1, 1), png(8192, 1953)] {
             let picture = Picture::from_bytes(bytes.clone(), density).unwrap();
             assert_eq!(picture.bytes, bytes);
-            let reply = Reply::Done { id: 2, result: Ok(Output::picture(picture.clone())), stdout: String::new(), peak: None, touched: Some([1, 2, 3]) };
+            let reply =
+                Reply::Done { id: 2, result: Ok(Output::picture(picture.clone())), stdout: String::new(), peak: None, touched: Some([1, 2, 3]) };
             assert_eq!(Reply::parse(reply.to_line().trim_ascii_end()), Ok(reply));
         }
     }
@@ -805,7 +821,13 @@ fn a_forged_picture_is_refused() {
     assert!(Picture::from_bytes(big.clone(), 1).is_err());
     assert!(Reply::parse(&picture_line("image/png", &to_base64(&big), None, [40, 30])).is_err());
     // A JPEG whose lengths lead nowhere ends, without reading past its end.
-    for bytes in [vec![0xFF, 0xD8], vec![0xFF, 0xD8, 0xFF], vec![0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xFF], vec![0xFF, 0xD8, 0, 0], vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 8]] {
+    for bytes in [
+        vec![0xFF, 0xD8],
+        vec![0xFF, 0xD8, 0xFF],
+        vec![0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xFF],
+        vec![0xFF, 0xD8, 0, 0],
+        vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 8],
+    ] {
         assert!(Picture::from_bytes(bytes.clone(), 1).is_err(), "{bytes:?}");
     }
 }

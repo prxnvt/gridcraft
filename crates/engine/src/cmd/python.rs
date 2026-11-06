@@ -383,7 +383,10 @@ fn kept_image(s: &Session, sheet: usize, at: CellRef) -> Result<gridcraft_model:
         return Err(EngineError::Other(format!("{} isn't a Python cell, so it has no picture", at.a1())));
     };
     py.image().cloned().ok_or_else(|| {
-        EngineError::Other(format!("{} has no picture: only a Python cell whose last run gave one has it. A file keeps it, and a cell waiting to run has none.", at.a1()))
+        EngineError::Other(format!(
+            "{} has no picture: only a Python cell whose last run gave one has it. A file keeps it, and a cell waiting to run has none.",
+            at.a1()
+        ))
     })
 }
 

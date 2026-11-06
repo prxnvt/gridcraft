@@ -134,7 +134,16 @@ fn fake_worker() -> FakeTransport {
             } else if code == "wide" {
                 w.done(id, Ok(demo_wide()))
             } else if code == "dict" {
-                w.done(id, Ok(Output::Object { type_name: "dict".into(), preview: "{'a': 1, 'b': 2, 'c': 3}".into(), size: vec![3], table: None, picture: None }))
+                w.done(
+                    id,
+                    Ok(Output::Object {
+                        type_name: "dict".into(),
+                        preview: "{'a': 1, 'b': 2, 'c': 3}".into(),
+                        size: vec![3],
+                        table: None,
+                        picture: None,
+                    }),
+                )
             } else if code == "lines" {
                 w.done(id, Ok(Output::Value(gridcraft_engine::core::Value::text("First line\nSecond line\nThird line"))))
             } else if code == "fail" || code.contains("raise") {
@@ -419,10 +428,8 @@ fn main() {
         }
         harness.run_steps(4);
         for c in &settled_cmds {
-            let (id, p) = c
-                .split_once('=')
-                .map(|(a, b)| (a.to_string(), serde_json::from_str(b).unwrap_or(json!({}))))
-                .unwrap_or((c.clone(), json!({})));
+            let (id, p) =
+                c.split_once('=').map(|(a, b)| (a.to_string(), serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((c.clone(), json!({})));
             if let Err(e) = harness.state_mut().run(&id, p) {
                 eprintln!("{id}: {e}");
             }

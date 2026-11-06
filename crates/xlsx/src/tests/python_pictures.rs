@@ -36,7 +36,7 @@ pub(super) fn python_cell(sheet: &mut Sheet, cell: &str, py: PyCode, value: Valu
 
 fn linked_picture(id: u32, source: &str, alt: &str, data: &[u8]) -> Image {
     let anchor = Anchor { cell: at("B2"), width: 40.0, height: 30.0, ..Default::default() };
-    Image { id, anchor, data: data.to_vec().into(), mime: "image/png".into(), alt: alt.into(), python_source: Some(source.into()) , rendered: None}
+    Image { id, anchor, data: data.to_vec().into(), mime: "image/png".into(), alt: alt.into(), python_source: Some(source.into()), rendered: None }
 }
 
 pub(super) fn book(sheets: Vec<Sheet>) -> Workbook {
@@ -409,7 +409,7 @@ fn bytes_a_rich_value_cannot_hold_are_kept_as_a_floating_picture() {
     // Too large for a cell picture: this can't be a run's, and the bytes still aren't lost.
     let mut sheet = Sheet::new("Data");
     let picture = CellPicture { data: png(9000, 10), mime: "image/png".into(), alt: "wide".into() };
-    let image = PyImage { picture: Arc::new(picture), width: 9000, height: 10, density: 1 , floor: None, fitted: None};
+    let image = PyImage { picture: Arc::new(picture), width: 9000, height: 10, density: 1, floor: None, fitted: None };
     image_cell(&mut sheet, "A1", false, image);
     let (back, report) = read_xlsx(&write_xlsx(&book(vec![sheet])).unwrap()).unwrap();
     let sheet = &back.sheets[0];

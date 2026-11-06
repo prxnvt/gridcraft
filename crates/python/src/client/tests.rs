@@ -440,7 +440,8 @@ fn stdout_and_objects_come_through() {
     let t = FakeTransport::new(|mut w| {
         w.ready();
         while let Some(req) = w.next_request() {
-            let reply = Reply::Done { id: req.id(), result: Ok(Output::object("dict", "{1: 2}")), stdout: "printed\n".into(), peak: None, touched: None };
+            let reply =
+                Reply::Done { id: req.id(), result: Ok(Output::object("dict", "{1: 2}")), stdout: "printed\n".into(), peak: None, touched: None };
             w.send(&reply);
         }
     });

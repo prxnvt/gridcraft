@@ -130,7 +130,7 @@ fn at(cell: &str) -> CellRef {
 fn picture_result(data: Vec<u8>, width: u32, height: u32) -> PyOutput {
     let alt = format!("Image {width} x {height}");
     let picture = Arc::new(CellPicture { data, mime: "image/png".into(), alt });
-    let image = PyImage { picture, width, height, density: 2 , floor: None, fitted: None};
+    let image = PyImage { picture, width, height, density: 2, floor: None, fitted: None };
     PyOutput {
         value: Value::text("Image"),
         type_name: "Image".into(),
@@ -171,7 +171,8 @@ fn workbook() -> Session {
         data: Arc::new(object_picture()),
         mime: "image/png".into(),
         alt: "Python result of G5".into(),
-        python_source: Some(REFERENCE.into()), rendered: None,
+        python_source: Some(REFERENCE.into()),
+        rendered: None,
     });
     s
 }

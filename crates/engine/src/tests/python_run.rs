@@ -102,7 +102,13 @@ fn answer(w: &mut FakeWorker, id: u64, code: &str, inputs: &BTreeMap<String, Inp
         // It changed a figure an earlier cell made: sheet, row and column.
         "touch" => {
             let n = |i: usize| words[i].parse().unwrap();
-            return w.send(&Reply::Done { id, result: value(Value::Number(1.0)), stdout: String::new(), peak: None, touched: Some([n(1), n(2), n(3)]) });
+            return w.send(&Reply::Done {
+                id,
+                result: value(Value::Number(1.0)),
+                stdout: String::new(),
+                peak: None,
+                touched: Some([n(1), n(2), n(3)]),
+            });
         }
         "fail" => Err(PyError { message: "ValueError: boom".into(), line: Some(1), kind: None, subject: None }),
         "num" => value(Value::Error(CellError::Num)),

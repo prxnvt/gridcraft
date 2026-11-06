@@ -185,7 +185,14 @@ impl Request {
                 let input = |v: RawInput| Input { value: v.value.0.value, headers: v.headers, stamps: v.value.0.stamps };
                 let inputs = raw.inputs.unwrap_or_default().into_iter().map(|(k, v)| (k, input(v))).collect();
                 let init = raw.init.as_deref().and_then(Init::parse);
-                Ok(Request::Run { id: raw.id, code: raw.code.unwrap_or_default(), inputs, object: raw.output.as_deref() == Some("object"), init, at: raw.at })
+                Ok(Request::Run {
+                    id: raw.id,
+                    code: raw.code.unwrap_or_default(),
+                    inputs,
+                    object: raw.output.as_deref() == Some("object"),
+                    init,
+                    at: raw.at,
+                })
             }
             RequestKind::Render => {
                 let at = raw.at.ok_or("render without at")?;
@@ -267,7 +274,12 @@ impl Picture {
         let Some((mime, width, height)) = picture_header(&bytes) else {
             return Err("a picture that is neither a PNG nor a JPEG".to_string());
         };
-        if width == 0 || height == 0 || width > MAX_PICTURE_SIDE || height > MAX_PICTURE_SIDE || u64::from(width) * u64::from(height) > MAX_PICTURE_PIXELS {
+        if width == 0
+            || height == 0
+            || width > MAX_PICTURE_SIDE
+            || height > MAX_PICTURE_SIDE
+            || u64::from(width) * u64::from(height) > MAX_PICTURE_PIXELS
+        {
             return Err(format!("a picture of {width} x {height} pixels"));
         }
         Ok(Picture { mime, bytes, width, height, density, floor: None })

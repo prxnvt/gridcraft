@@ -159,7 +159,15 @@ fn kept_table(t: Table) -> Arc<PyTable> {
 fn kept(output: Output, sys: DateSystem, object: bool) -> Write {
     match output {
         Output::Value(value) => Write::Result(
-            PyOutput { type_name: type_name(&value).into(), preview: preview(&value), value, convertible: true, table: None, from_run: true, image: None },
+            PyOutput {
+                type_name: type_name(&value).into(),
+                preview: preview(&value),
+                value,
+                convertible: true,
+                table: None,
+                from_run: true,
+                image: None,
+            },
             ResultDates::default(),
         ),
         Output::Dated(dated) => {
@@ -618,7 +626,9 @@ impl DocRun {
         let edit_behind = self.entries.get(flight.index).is_some_and(|e| match e.ran {
             Some(ran) => ran != flight.fp,
             None => d.undo.last().is_some_and(|step| {
-                let code = |wb: &gridcraft_model::Workbook| wb.sheet(e.sheet).and_then(|s| s.cell(e.at)).and_then(|c| c.py.as_deref()).map(|py| py.code.clone());
+                let code = |wb: &gridcraft_model::Workbook| {
+                    wb.sheet(e.sheet).and_then(|s| s.cell(e.at)).and_then(|c| c.py.as_deref()).map(|py| py.code.clone())
+                };
                 code(&step.wb) != code(&d.wb)
             }),
         });

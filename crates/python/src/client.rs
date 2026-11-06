@@ -147,7 +147,13 @@ impl Client {
     /// [`Client::submit_run`] for a cell with its return type: with `object`, a result with no
     /// single-cell form comes back as a Python object rather than cells to spill. `at` is the cell's
     /// place in the run order, as sheet, row and column.
-    pub fn submit_cell(&mut self, code: &str, inputs: std::collections::BTreeMap<String, Input>, object: bool, at: Option<[u32; 3]>) -> Result<u64, Busy> {
+    pub fn submit_cell(
+        &mut self,
+        code: &str,
+        inputs: std::collections::BTreeMap<String, Input>,
+        object: bool,
+        at: Option<[u32; 3]>,
+    ) -> Result<u64, Busy> {
         let id = self.take_id()?;
         self.send(Request::Run { id, code: code.to_string(), inputs, object, init: None, at });
         Ok(id)

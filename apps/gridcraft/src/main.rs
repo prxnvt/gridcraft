@@ -166,7 +166,8 @@ fn published_picture_note() -> std::path::PathBuf {
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
-    let (html_clipboard, text_clipboard, image_clipboard, copy_clipboard) = (clipboard.clone(), clipboard.clone(), clipboard.clone(), clipboard.clone());
+    let (html_clipboard, text_clipboard, image_clipboard, copy_clipboard) =
+        (clipboard.clone(), clipboard.clone(), clipboard.clone(), clipboard.clone());
     Services {
         copy_html: Some(Box::new(move |html, text| {
             let mut clipboard = clipboard.borrow_mut();

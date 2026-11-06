@@ -350,7 +350,8 @@ fn sample() -> Workbook {
         data: png.into(),
         mime: "image/png".into(),
         alt: "Logo \"x\"".into(),
-        python_source: None, rendered: None,
+        python_source: None,
+        rendered: None,
     });
     s.shapes.push(Shape {
         math: Default::default(),

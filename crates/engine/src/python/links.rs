@@ -36,13 +36,14 @@ fn names_a_python_cell(wb: &Workbook, reference: &str) -> bool {
 
 /// Every linked picture whose source is gone. Costs nothing on a workbook with no linked pictures.
 pub(crate) fn prune(d: &mut DocState) -> bool {
-    let gone: Vec<(usize, u32)> = d
-        .wb
-        .sheets
-        .iter()
-        .enumerate()
-        .flat_map(|(i, sh)| sh.images.iter().filter(|o| o.python_source.as_deref().is_some_and(|r| !names_a_python_cell(&d.wb, r))).map(move |o| (i, o.id)))
-        .collect();
+    let gone: Vec<(usize, u32)> =
+        d.wb.sheets
+            .iter()
+            .enumerate()
+            .flat_map(|(i, sh)| {
+                sh.images.iter().filter(|o| o.python_source.as_deref().is_some_and(|r| !names_a_python_cell(&d.wb, r))).map(move |o| (i, o.id))
+            })
+            .collect();
     remove(d, &gone)
 }
 
@@ -68,7 +69,9 @@ fn linked_to(wb: &Workbook, sheet: usize, at: CellRef) -> Vec<(usize, u32)> {
     wb.sheets
         .iter()
         .enumerate()
-        .flat_map(|(i, sh)| sh.images.iter().filter(|o| o.python_source.as_deref().and_then(|r| source_of(wb, r)) == Some((sheet, at))).map(move |o| (i, o.id)))
+        .flat_map(|(i, sh)| {
+            sh.images.iter().filter(|o| o.python_source.as_deref().and_then(|r| source_of(wb, r)) == Some((sheet, at))).map(move |o| (i, o.id))
+        })
         .collect()
 }
 
@@ -167,7 +170,6 @@ pub(crate) fn as_pasted(wb: &Workbook, picture: &mut Image, reference: Option<&s
         picture.python_source = None;
     }
 }
-
 
 /// A figure to draw again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -275,7 +277,9 @@ pub(super) fn after_render(d: &mut DocState, due: &DueRender, outcome: gridcraft
                 let Some(py) = cx.sheet_mut(sheet)?.cells.get_mut(at).and_then(|c| c.py.as_mut()) else { return Ok(()) };
                 let Some(image) = Arc::make_mut(py).output.as_mut().and_then(|o| o.image.as_mut()) else { return Ok(()) };
                 let fitted = match picture {
-                    Some(p) => Arc::new(gridcraft_model::CellPicture { data: p.bytes, mime: p.mime.mime().to_string(), alt: image.picture.alt.clone() }),
+                    Some(p) => {
+                        Arc::new(gridcraft_model::CellPicture { data: p.bytes, mime: p.mime.mime().to_string(), alt: image.picture.alt.clone() })
+                    }
                     None => image.picture.clone(),
                 };
                 image.fitted = Some((fitted, due.size));

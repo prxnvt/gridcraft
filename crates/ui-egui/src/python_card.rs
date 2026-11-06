@@ -482,7 +482,13 @@ fn result_buttons(ui: &mut egui::Ui, text: &CardText, can_edit: bool, can_save: 
 }
 
 /// What the card of a picture offers: its return type, and taking the picture somewhere.
-fn picture_buttons(ui: &mut egui::Ui, text: &CardText, can_edit: bool, (can_copy, can_save): (bool, bool), lang: crate::i18n::Language) -> Option<Action> {
+fn picture_buttons(
+    ui: &mut egui::Ui,
+    text: &CardText,
+    can_edit: bool,
+    (can_copy, can_save): (bool, bool),
+    lang: crate::i18n::Language,
+) -> Option<Action> {
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
         for (label, object) in [(PYTHON_OBJECT, true), (EXCEL_VALUE, false)] {
@@ -511,7 +517,9 @@ fn act(app: &mut SheetApp, ctx: &egui::Context, card: Card, action: Action) {
         Action::CopyImage => crate::python_plots::copy_image(app, card.sheet, card.cell),
         Action::SaveImage => crate::python_plots::save_image(app, card.sheet, card.cell),
         Action::DisplayOverCells => app.run_or_alert("python.displayOverCells", json!({"sheet": sheet, "cell": cell})),
-        Action::Output(object) => app.run_or_alert("python.output", json!({"sheet": sheet, "cell": cell, "mode": if object { "object" } else { "value" }})),
+        Action::Output(object) => {
+            app.run_or_alert("python.output", json!({"sheet": sheet, "cell": cell, "mode": if object { "object" } else { "value" }}))
+        }
         Action::Copy(format) => copy_table(app, ctx, card, format),
         Action::Save => save_table(app, json!({"sheet": sheet, "cell": cell})),
         Action::SpillHere => app.run_or_alert("python.output", json!({"sheet": sheet, "cell": cell, "mode": "value"})),

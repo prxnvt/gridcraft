@@ -567,7 +567,14 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 /// block that no longer exists is dropped.
 pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(&str, gridcraft_formula::Expr) -> gridcraft_formula::Expr) {
     for si in 0..wb.sheets.len() {
-        let Some(host) = wb.sheets.get(si).filter(|s| !s.charts.is_empty() || !s.controls.is_empty() || s.images.iter().any(|i| i.python_source.is_some())).map(|s| s.name.clone()) else { continue };
+        let Some(host) = wb
+            .sheets
+            .get(si)
+            .filter(|s| !s.charts.is_empty() || !s.controls.is_empty() || s.images.iter().any(|i| i.python_source.is_some()))
+            .map(|s| s.name.clone())
+        else {
+            continue;
+        };
         let Some(sh) = wb.sheet_mut(si) else { continue };
         let fix = |text: &str| -> String {
             match gridcraft_formula::parse(text) {

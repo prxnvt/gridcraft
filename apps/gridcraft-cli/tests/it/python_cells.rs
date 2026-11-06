@@ -1149,7 +1149,11 @@ fn every_kind_of_plot_can_be_drawn_again() {
 #[test]
 fn a_figure_whose_size_the_code_chose_isnt_drawn_again() {
     let Some(mut s) = plots_session() else { return };
-    py(&mut s, "A1", "from seaborn import pairplot as _pp\ndf = pd.DataFrame(np.arange(12.0).reshape(4, 3), columns=list('abc'))\nFIXED = dict(figsize=(3, 3))\ndef helper():\n    return plt.subplots(figsize=(3, 3))[0]\ndef seaborn_helper():\n    return sns.pairplot(df, height=2)");
+    py(
+        &mut s,
+        "A1",
+        "from seaborn import pairplot as _pp\ndf = pd.DataFrame(np.arange(12.0).reshape(4, 3), columns=list('abc'))\nFIXED = dict(figsize=(3, 3))\ndef helper():\n    return plt.subplots(figsize=(3, 3))[0]\ndef seaborn_helper():\n    return sns.pairplot(df, height=2)",
+    );
     settle(&mut s);
     assert_eq!(kind(&s, "A1"), None);
     let fixed = [
@@ -1164,7 +1168,15 @@ fn a_figure_whose_size_the_code_chose_isnt_drawn_again() {
         "helper()",
         "seaborn_helper()",
     ];
-    let free = ["plt.figure()\nplt.plot([1])", "plt.subplots()[0]", "df.plot()", "df.hist()", "sns.pairplot(df)", "sns.relplot(df, x='a', y='b')", "plt.figure()\nplt.bar([1, 2], height=[3, 4])"];
+    let free = [
+        "plt.figure()\nplt.plot([1])",
+        "plt.subplots()[0]",
+        "df.plot()",
+        "df.hist()",
+        "sns.pairplot(df)",
+        "sns.relplot(df, x='a', y='b')",
+        "plt.figure()\nplt.bar([1, 2], height=[3, 4])",
+    ];
     let can_be_redrawn = |s: &Session, cell: &str| {
         let wb = &s.doc().unwrap().wb;
         wb.active().unwrap().cell(CellRef::parse(cell).unwrap()).unwrap().py.as_deref().unwrap().image().unwrap().floor.is_some()

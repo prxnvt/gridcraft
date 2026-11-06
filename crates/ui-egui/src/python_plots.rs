@@ -101,7 +101,14 @@ pub(crate) fn card_grip(app: &mut SheetApp, ui: &egui::Ui, frame: Rect, width: f
 
 /// Copy Image: the picture's pixels on the system clipboard, for other applications.
 pub(crate) fn copy_image(app: &mut SheetApp, sheet: usize, at: CellRef) {
-    let picture = app.session.active().and_then(|d| d.wb.sheet(sheet)).and_then(|sh| sh.cell(at)).and_then(|c| c.py.as_deref()).and_then(|py| py.image()).map(|i| i.picture.clone());
+    let picture = app
+        .session
+        .active()
+        .and_then(|d| d.wb.sheet(sheet))
+        .and_then(|sh| sh.cell(at))
+        .and_then(|c| c.py.as_deref())
+        .and_then(|py| py.image())
+        .map(|i| i.picture.clone());
     let pixels = picture.as_ref().and_then(|p| crate::cell_pictures::rgba(p));
     let done = match (&pixels, app.services.copy_image.as_mut()) {
         (Some(pixels), Some(copy)) => copy(pixels),
@@ -128,7 +135,14 @@ pub(crate) fn copy_image(app: &mut SheetApp, sheet: usize, at: CellRef) {
 pub(crate) fn save_image(app: &mut SheetApp, sheet: usize, at: CellRef) {
     let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
     let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
-    let picture = app.session.active().and_then(|d| d.wb.sheet(sheet)).and_then(|sh| sh.cell(at)).and_then(|c| c.py.as_deref()).and_then(|py| py.image()).map(|i| i.picture.clone());
+    let picture = app
+        .session
+        .active()
+        .and_then(|d| d.wb.sheet(sheet))
+        .and_then(|sh| sh.cell(at))
+        .and_then(|c| c.py.as_deref())
+        .and_then(|py| py.image())
+        .map(|i| i.picture.clone());
     let Some(picture) = picture else { return };
     let ending = if picture.mime == "image/jpeg" { "jpg" } else { "png" };
     let name = format!("{stem}-{}.{ending}", at.a1());
@@ -199,7 +213,9 @@ pub fn picture_chrome(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &She
     ui.painter().rect_filled(place, 5.0, ui.visuals().window_fill());
     ui.painter().rect_stroke(place, 5.0, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
     let clicked = ui
-        .scope_builder(egui::UiBuilder::new().max_rect(place), |ui| crate::widgets::icon_button(ui, Icon::Link, t.text, lang.tr(CREATE_REFERENCE), size).clicked())
+        .scope_builder(egui::UiBuilder::new().max_rect(place), |ui| {
+            crate::widgets::icon_button(ui, Icon::Link, t.text, lang.tr(CREATE_REFERENCE), size).clicked()
+        })
         .inner;
     if clicked {
         app.run_or_alert("python.createReference", json!({"id": id}));
