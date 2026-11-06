@@ -279,6 +279,12 @@ pub struct Workbook {
     /// the links in memory are still written for the old one. Not in JSON.
     #[serde(skip)]
     pub source_path: Option<std::path::PathBuf>,
+    /// The Python cell of the picture waiting on the object clipboard: the copy it belongs to, and a
+    /// reference that follows the cell as the ones in the sheets do, so a paste after a row insert or
+    /// a sheet rename links to the right cell. It is here and not with the clipboard so that Undo and
+    /// Redo bring back the reference that goes with their workbook. Not in JSON.
+    #[serde(skip)]
+    pub held_link: Option<(u64, String)>,
 }
 
 fn is_all(s: &ShowObjects) -> bool {
@@ -369,6 +375,7 @@ impl Workbook {
             macros_read: vec![],
             macros_unread: Arc::default(),
             preserved: None,
+            held_link: None,
             source_dir: None,
             source_path: None,
         }

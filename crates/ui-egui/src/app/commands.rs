@@ -12,6 +12,10 @@ impl SheetApp {
         if matches!(id, "edit.copy" | "edit.cut") && r.is_ok() {
             self.clipboard_text_at_copy = self.system_clipboard_text();
             self.cut_text = if id == "edit.cut" { self.clipboard_text_at_copy.clone() } else { None };
+            self.forget_published_picture();
+        }
+        if matches!(id, "object.copy" | "object.cut") && r.is_ok() {
+            self.note_clipboard_at_object_copy();
         }
         r
     }
@@ -100,6 +104,13 @@ impl SheetApp {
             && let Some(chart) = r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
         {
             self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Chart, chart));
+        }
+        // The pasted picture is selected, as the new chart is above.
+        if id == "object.paste"
+            && let Ok(r) = &r
+            && let Some(image) = r.get("image").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
+        {
+            self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Image, image));
         }
         if id == "file.exportPdf"
             && let Ok(r) = &r

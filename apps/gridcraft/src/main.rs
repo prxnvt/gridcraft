@@ -158,6 +158,11 @@ fn read_clipboard<T>(
     read(clipboard.as_mut()?).ok()
 }
 
+/// Where running GridCraft processes tell each other which floating picture is on the clipboard.
+fn published_picture_note() -> std::path::PathBuf {
+    std::env::temp_dir().join(gridcraft_ui_egui::published_picture::NOTE_FILE)
+}
+
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
@@ -188,6 +193,12 @@ fn services() -> Services {
             };
             clipboard.as_mut().ok_or("clipboard unavailable")?.set_image(data).map_err(|e| e.to_string())
         })),
+        note_published_picture: Some(Box::new(|hash| {
+            if let Err(e) = gridcraft_ui_egui::published_picture::write(&published_picture_note(), hash) {
+                log::warn!("Can't note the published picture: {e}");
+            }
+        })),
+        read_published_picture: Some(Box::new(|| gridcraft_ui_egui::published_picture::read(&published_picture_note()))),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])

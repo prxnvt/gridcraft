@@ -103,13 +103,22 @@ pub(crate) fn card_grip(app: &mut SheetApp, ui: &egui::Ui, frame: Rect, width: f
 pub(crate) fn copy_image(app: &mut SheetApp, sheet: usize, at: CellRef) {
     let picture = app.session.active().and_then(|d| d.wb.sheet(sheet)).and_then(|sh| sh.cell(at)).and_then(|c| c.py.as_deref()).and_then(|py| py.image()).map(|i| i.picture.clone());
     let pixels = picture.as_ref().and_then(|p| crate::cell_pictures::rgba(p));
-    let done = match (pixels, app.services.copy_image.as_mut()) {
-        (Some(pixels), Some(copy)) => copy(&pixels),
+    let done = match (&pixels, app.services.copy_image.as_mut()) {
+        (Some(pixels), Some(copy)) => copy(pixels),
         (None, _) => Err("The image can't be read.".to_string()),
         (_, None) => Err("This window can't put a picture on the clipboard.".to_string()),
     };
     match done {
-        Ok(()) => app.toast = Some((IMAGE_COPIED.into(), crate::now_ms())),
+        Ok(()) => {
+            // These pixels are for other applications. They end any copy of a floating picture, and
+            // a paste of them is a paste of a plain picture, even when the two look the same. No
+            // floating object goes between workbooks, so another workbook still refuses them.
+            app.forget_picture_copy();
+            if let Some(pixels) = &pixels {
+                app.note_copied_image(pixels);
+            }
+            app.toast = Some((IMAGE_COPIED.into(), crate::now_ms()));
+        }
         Err(e) => app.message = Some(("GridCraft".into(), crate::clean_error(&e))),
     }
 }

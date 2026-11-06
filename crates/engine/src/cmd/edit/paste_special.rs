@@ -430,6 +430,12 @@ pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(
             i.python_source = i.python_source.as_deref().map(fix);
         }
     }
+    // The picture on the object clipboard isn't on a sheet, and its reference names its own sheet.
+    if let Some((_, text)) = wb.held_link.as_mut()
+        && let Ok(expr) = gridcraft_formula::parse(text)
+    {
+        *text = gridcraft_formula::print(&f("\u{0}", expr));
+    }
 }
 
 /// Rewrites the `xl("…")` literals in every Python cell with `f`, which maps a reference held on

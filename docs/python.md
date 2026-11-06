@@ -196,7 +196,8 @@ floating picture you can move and resize. It stays tied to its cell:
 - When the cell gives a new picture, the floating picture shows it.
 - Copy and paste it, or cut and paste it, anywhere in the workbook, or use **Create Reference** beside the
   selected picture: every copy stays tied to the same cell. A floating object can't be pasted into
-  another workbook. To take a picture elsewhere, use Copy Image or Save Image on the card.
+  another workbook, whichever way it was copied. To take a picture to another application, use Copy Image
+  or Save Image on the card.
 - The tie follows the cell when rows and columns are inserted, when the cell is cut and pasted, and when
   its sheet is renamed.
 

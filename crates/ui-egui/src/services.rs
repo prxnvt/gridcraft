@@ -3,6 +3,7 @@ use super::printing;
 type PickSave = Box<dyn Fn(&str) -> Option<String>>;
 type OpenUrl = Box<dyn Fn(&str)>;
 type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
+type CopyImage = Box<dyn FnMut(&image::RgbaImage) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
 type PrintPdf = Box<dyn Fn(&[u8])>;
 
@@ -39,7 +40,13 @@ pub struct Services {
     pub paste_image: Option<Box<dyn FnMut() -> Option<image::RgbaImage>>>,
     /// Put a picture on the system clipboard, for other applications. `None` where the host has no
     /// clipboard for pictures.
-    pub copy_image: Option<Box<dyn FnMut(&image::RgbaImage) -> Result<(), String>>>,
+    pub copy_image: Option<CopyImage>,
+    /// Tell other running GridCraft processes the hash of the floating picture this one just put on
+    /// the system clipboard (`None`: it no longer stands), so they refuse to paste it
+    /// ([`crate::published_picture`]). `None` where one process is all there is (web).
+    pub note_published_picture: Option<Box<dyn FnMut(Option<u64>)>>,
+    /// Read the hash last noted by any process. `None` from the host means no note.
+    pub read_published_picture: Option<Box<dyn FnMut() -> Option<u64>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Download>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
