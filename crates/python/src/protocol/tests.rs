@@ -26,7 +26,7 @@ fn requests_and_replies_round_trip() {
             headers: Some(true),
         },
     );
-    let run = Request::Run { id: 7, object: false, code: "x = xl(\"A1\")\nx * 2".into(), inputs };
+    let run = Request::Run { id: 7, object: false, code: "x = xl(\"A1\")\nx * 2".into(), inputs, init: None };
     let line = run.to_line();
     assert!(line.ends_with(b"\n") && !line[..line.len() - 1].contains(&b'\n'), "one line");
     assert_eq!(Request::parse(&line[..line.len() - 1]).unwrap(), run);
@@ -214,7 +214,7 @@ fn inputs_never_carry_objects_and_odd_numbers_become_errors() {
     let mut inputs = BTreeMap::new();
     inputs.insert("A1".to_string(), Input::new(Value::Number(f64::NAN)));
     inputs.insert("B1:B2".to_string(), Input::new(array(2, 1, vec![inner, Value::Number(f64::INFINITY)])));
-    let line = Request::Run { id: 1, code: String::new(), inputs, object: true }.to_line();
+    let line = Request::Run { id: 1, code: String::new(), inputs, object: true, init: None }.to_line();
     let Request::Run { inputs, object: true, .. } = Request::parse(line.trim_ascii_end()).unwrap() else { panic!() };
     assert_eq!(inputs["A1"].value, Value::Error(CellError::Num));
     assert_eq!(inputs["B1:B2"].value, array(2, 1, vec![Value::Error(CellError::Value), Value::Error(CellError::Num)]));
@@ -260,4 +260,19 @@ fn a_peak_is_an_optional_capped_number_on_an_answer() {
     ] {
         assert!(Reply::parse(bad.as_bytes()).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn initialization_code_says_whose_it_is() {
+    for (init, wire) in [(Init::Person, "person"), (Init::File, "file")] {
+        let run = Request::Run { id: 3, code: "import x".into(), inputs: BTreeMap::new(), object: false, init: Some(init) };
+        let line = run.to_line();
+        assert!(String::from_utf8_lossy(&line).contains(&format!("\"init\":\"{wire}\"")), "{line:?}");
+        assert_eq!(Request::parse(line.trim_ascii_end()).unwrap(), run);
+    }
+    let cell = Request::Run { id: 3, code: "1".into(), inputs: BTreeMap::new(), object: false, init: None };
+    assert!(!String::from_utf8_lossy(&cell.to_line()).contains("init"), "a cell's request doesn't mention it");
+    // What this build doesn't know is no initialization.
+    let odd = Request::parse(br#"{"type":"run","id":1,"code":"","init":"later"}"#).unwrap();
+    assert!(matches!(odd, Request::Run { init: None, .. }));
 }

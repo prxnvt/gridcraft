@@ -488,6 +488,87 @@ def _gridcraft_worker():
         body = compile(tree, "<cell>", "exec")
         return body, (compile(last, "<cell>", "eval") if last is not None else None)
 
+    # Initialization code. What a line binds, and which package a line that can't run is about: that
+    # is reported, and an empty answer is a line left out without a word (a plotting module, which
+    # cells don't use). None means the error is the code's own.
+    def bound_by(stmt):
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            return [a.asname or a.name.split(".")[0] for a in stmt.names]
+        return [n.id for n in ast.walk(stmt) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)]
+
+    def modules_of(stmt):
+        if isinstance(stmt, ast.Import):
+            return [a.name.split(".")[0] for a in stmt.names]
+        if isinstance(stmt, ast.ImportFrom) and stmt.level == 0:
+            return [(stmt.module or "").split(".")[0]]
+        return []
+
+    def module_call(stmt, g):
+        # A call on a module at the top level, such as warnings.simplefilter("ignore"): what setting
+        # an option looks like. The module's name, or None.
+        call = stmt.value if isinstance(stmt, ast.Expr) else None
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+            return None
+        root = call.func
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if isinstance(root, ast.Name) and isinstance(g.get(root.id), (types.ModuleType, Lazy, Plotting)):
+            return root.id
+        return None
+
+    def left_to_lazy(stmt):
+        # What the worker already gives lazily, and plots, which cells don't draw: Excel's default
+        # initialization imports these, and doing so would only cost the time it takes.
+        if isinstance(stmt, ast.ImportFrom):
+            return any(m in PLOT_MODULES for m in modules_of(stmt))
+        if not isinstance(stmt, ast.Import):
+            return False
+        for alias in stmt.names:
+            top = alias.name.split(".")[0]
+            lazy = DEFAULT_IMPORTS.get(alias.asname or top, "").split(".")[0]
+            if top not in PLOT_MODULES and lazy != top:
+                return False
+        return True
+
+    def why_skipped(e, stmt, gone, g, from_file):
+        if isinstance(e, NameError) and getattr(e, "name", None) in gone:
+            return gone[e.name]
+        modules = modules_of(stmt)
+        if not from_file:
+            return "excel" if modules == ["excel"] and isinstance(e, ImportError) else None
+        if isinstance(e, NoPlots) or through_plotting(e):
+            return ""
+        if modules:
+            name = getattr(e, "name", None)
+            return (name if isinstance(name, str) and name else modules[0]).split(".")[0]
+        if isinstance(e, ImportError) and e.name:
+            return e.name.split(".")[0]
+        return module_call(stmt, g) if isinstance(e, Exception) else None
+
+    def initialize(code, from_file):
+        tree = ast.parse(code, "<cell>", "exec")
+        g = namespace["globals"]
+        if not from_file and not any("excel" in modules_of(s) for s in tree.body):
+            exec(compile(tree, "<cell>", "exec"), g)
+            return None
+        skipped = {}
+        gone = {}
+        for stmt in tree.body:
+            if from_file and left_to_lazy(stmt):
+                gone.update((name, "") for name in bound_by(stmt) if name not in g)
+                continue
+            try:
+                exec(compile(ast.Module([stmt], []), "<cell>", "exec"), g)
+            except BaseException as e:  # noqa: BLE001 - what the rules don't skip is raised again
+                why = why_skipped(e, stmt, gone, g, from_file)
+                if why is None:
+                    raise
+                if why:
+                    skipped.setdefault(why, stmt.lineno)
+                for name in bound_by(stmt):
+                    gone.setdefault(name, why)
+        return [[module, line] for module, line in skipped.items()] or None
+
     namespace = {}
 
     def fresh():
@@ -506,18 +587,23 @@ def _gridcraft_worker():
         rid = req.get("id")
         code = req.get("code")
         inputs = req.get("inputs")
+        init = req.get("init")
         capture = Capture()
         saved = sys.stdout
         try:
             if not isinstance(code, str):
                 raise TypeError("no code")
-            state["inputs"] = inputs if isinstance(inputs, dict) else {}
+            # xl() has no cell to read for while initialization code runs.
+            state["inputs"] = None if init else inputs if isinstance(inputs, dict) else {}
             sys.stdout = capture
             try:
-                body, last = compile_cell(code)
-                g = namespace["globals"]
-                exec(body, g)
-                value = eval(last, g) if last is not None else None
+                if init:
+                    value = initialize(code, init == "file")
+                else:
+                    body, last = compile_cell(code)
+                    g = namespace["globals"]
+                    exec(body, g)
+                    value = eval(last, g) if last is not None else None
             finally:
                 sys.stdout = saved
                 state["inputs"] = None

@@ -297,3 +297,173 @@ fn a_memory_spike_lands_on_its_cell_and_the_next_cell_keeps_its_variables() {
     assert_eq!((v(&s, "A3"), kind(&s, "A3")), (num(41.0), None), "a fresh worker ran A1 first");
     assert_eq!((v(&s, "A4"), kind(&s, "A4")), (num(42.0), None));
 }
+
+// ---------------------------------------------------------------- initialization code
+
+fn init(s: &mut Session, code: &str) {
+    s.execute("python.initialization", json!({"code": code})).unwrap();
+}
+
+/// The run log's rows of the initialization code.
+fn init_runs(s: &Session) -> Vec<Option<&'static str>> {
+    s.python_run_log().filter(|r| r.initialization).map(|r| r.diagnostic).collect()
+}
+
+#[test]
+fn an_import_in_initialization_is_there_for_the_cells() {
+    let Some(mut s) = session() else { return };
+    init(&mut s, "import math as m\nrate = 2\nprint('ready')");
+    py(&mut s, "A1", "m.floor(2.5) + rate");
+    py(&mut s, "A2", "rate = rate * 10\nrate");
+    py(&mut s, "A3", "rate");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), num(4.0));
+    assert_eq!(v(&s, "A2"), num(20.0));
+    assert_eq!(v(&s, "A3"), num(20.0), "it shares their variables");
+    let log: Vec<_> = s.python_run_log().collect();
+    assert!(log[0].initialization, "it ran first");
+    assert_eq!(log[0].stdout, "ready\n", "what it printed is in the log");
+    // Changed, everything runs again from the top, without what the old code left.
+    init(&mut s, "import math as n\nrate = 3");
+    settle(&mut s);
+    assert_eq!(v(&s, "A2"), num(30.0));
+    assert_eq!(v(&s, "A1"), Value::Error(CellError::Python), "the old name went with the old worker");
+    assert_eq!(kind(&s, "A1"), Some("python.name"));
+    // An undo brings the old code back, and the cells follow.
+    s.execute("edit.undo", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), num(4.0));
+    // xl() has no cell to read for in it, and says so.
+    init(&mut s, "x = xl('A1')");
+    settle(&mut s);
+    let d = s.python_diagnostic(0, CellRef::parse("A1").unwrap()).unwrap();
+    assert_eq!(d.kind.id, "init.failed");
+    assert!(d.detail.contains("xl() only works while a cell runs"), "{}", d.detail);
+}
+
+#[test]
+fn a_failing_initialization_shows_in_every_cell_until_it_is_fixed() {
+    let Some(mut s) = session() else { return };
+    py(&mut s, "A1", "1 + 1");
+    py(&mut s, "A2", "2 + 2");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), num(2.0));
+    // A person's import that fails is the code's failure, with Python's message and line.
+    init(&mut s, "x = 1\nimport a_package_nobody_has\ny = 2");
+    settle(&mut s);
+    for cell in ["A1", "A2"] {
+        assert_eq!(v(&s, cell), Value::Error(CellError::Python), "{cell}");
+        let d = s.python_diagnostic(0, CellRef::parse(cell).unwrap()).unwrap();
+        assert_eq!((d.kind.id, d.line), ("init.failed", Some(2)));
+        assert!(d.detail.contains("No module named 'a_package_nobody_has'"), "{}", d.detail);
+    }
+    assert_eq!(init_runs(&s).last().copied().flatten(), Some("init.failed"));
+    let rows = s.execute("python.diagnostics", json!({})).unwrap();
+    assert_eq!(rows.as_array().unwrap().iter().filter(|r| r["kind"] == "init.failed").count(), 1, "{rows}");
+    assert_eq!(s.execute("python.environment", json!({})).unwrap()["initialization"]["kind"], "init.failed");
+    // A syntax error too, and an exception, each on its line.
+    for (code, line, says) in [("a = 1\nif", 2, "SyntaxError"), ("\n\n1 / 0", 3, "ZeroDivisionError")] {
+        init(&mut s, code);
+        settle(&mut s);
+        let d = s.python_diagnostic(0, CellRef::parse("A1").unwrap()).unwrap();
+        assert_eq!((d.kind.id, d.line), ("init.failed", Some(line)), "{code}");
+        assert!(d.detail.contains(says), "{}", d.detail);
+    }
+    // Recovery: fixed, the cells run, in a worker with nothing of what failed.
+    init(&mut s, "rate = 5");
+    settle(&mut s);
+    assert_eq!((v(&s, "A1"), v(&s, "A2")), (num(2.0), num(4.0)));
+    assert_eq!(kind(&s, "A1"), None);
+    assert!(s.execute("python.environment", json!({})).unwrap()["initialization"].is_null());
+    // What failed partway left nothing: a name from before the failure isn't there.
+    init(&mut s, "left = 1\n1 / 0");
+    settle(&mut s);
+    init(&mut s, "rate = 6");
+    py(&mut s, "A3", "left");
+    settle(&mut s);
+    assert_eq!(kind(&s, "A3"), Some("python.name"));
+    assert_eq!(v(&s, "A1"), num(2.0));
+}
+
+#[test]
+fn code_from_a_file_goes_on_without_what_it_cant_import() {
+    let Some(mut s) = session() else { return };
+    // A workbook file whose environment holds what such code holds: imports and options, none of it
+    // written by a person. The packages may or may not be here; the cells run either way.
+    let code = "import numpy as np\n\
+                import matplotlib.pyplot as plt\n\
+                import seaborn as sns\n\
+                import a_package_nobody_has as nobody\n\
+                import excel\n\
+                from another_package_nobody_has import thing\n\
+                import warnings\n\
+                warnings.simplefilter('ignore')\n\
+                excel.set_some_option(excel.some_value)\n\
+                nobody.configure(1)\n\
+                plt.style.use('default')\n\
+                ready = 41\n";
+    let saved = s.execute("file.saveBytes", json!({"format": "json"})).unwrap();
+    let bytes = gridcraft_engine::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    doc["python_env"] = json!({"code": code, "userModified": false});
+    let opened = gridcraft_engine::io::base64_encode(&serde_json::to_vec(&doc).unwrap());
+    s.execute("file.open", json!({"name": "from-file.json", "base64": opened})).unwrap();
+    py(&mut s, "A1", "ready + 1");
+    py(&mut s, "A2", "repr(plt)");
+    settle(&mut s);
+    assert_eq!(kind(&s, "A1"), Some("off.workbook"), "a file's workbook stays off");
+    assert_eq!(s.python_run_log().count(), 0, "nothing ran");
+    s.set_python_workbook_enabled(true);
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), num(42.0), "the rest of it ran, and so do the cells");
+    assert_eq!(kind(&s, "A1"), None);
+    assert_eq!(s.python_init_failure(), None);
+    // What it couldn't have is reported once for each package, at the first line that wanted it, and
+    // what the worker gives anyway isn't: plots don't draw here, and numpy waits until it is used.
+    let rows = s.execute("python.diagnostics", json!({})).unwrap();
+    let skipped: Vec<(String, u64)> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "init.skipped")
+        .map(|r| (r["detail"].as_str().unwrap().to_string(), r["line"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(skipped, [("a_package_nobody_has".to_string(), 4), ("excel".to_string(), 5), ("another_package_nobody_has".to_string(), 6)], "{rows}");
+    assert_eq!(init_runs(&s), [Some("init.skipped")]);
+    // The plot names still say what they say.
+    py(&mut s, "A3", "plt.plot([1])");
+    settle(&mut s);
+    assert_eq!(kind(&s, "A3"), Some("plot.unsupported"));
+    // A line that isn't an import or an option is still the code's failure.
+    for (bad, line, says) in [("import nothing_here_either\n1 / 0", 2, "ZeroDivisionError"), ("undefined_name + 1", 1, "NameError")] {
+        let mut doc = doc.clone();
+        doc["python_env"] = json!({"code": bad, "userModified": false});
+        let opened = gridcraft_engine::io::base64_encode(&serde_json::to_vec(&doc).unwrap());
+        s.execute("file.open", json!({"name": "bad.json", "base64": opened})).unwrap();
+        py(&mut s, "A1", "1");
+        s.set_python_workbook_enabled(true);
+        settle(&mut s);
+        let d = s.python_diagnostic(0, CellRef::parse("A1").unwrap()).unwrap();
+        assert_eq!((d.kind.id, d.line), ("init.failed", Some(line)), "{bad}");
+        assert!(d.detail.contains(says), "{}", d.detail);
+    }
+}
+
+#[test]
+fn a_persons_code_can_keep_excels_own_module() {
+    // Code a person changed in Excel keeps the lines around their own: Excel's own module, which no
+    // other Python has, doesn't stop it, while anything else that fails does.
+    let Some(mut s) = session() else { return };
+    init(&mut s, "import excel\nexcel.set_some_option(excel.some_value)\nrate = 2");
+    py(&mut s, "A1", "rate");
+    settle(&mut s);
+    assert_eq!(v(&s, "A1"), num(2.0));
+    let rows = s.execute("python.diagnostics", json!({})).unwrap();
+    let row = rows.as_array().unwrap().iter().find(|r| r["kind"] == "init.skipped").expect("it says so");
+    assert_eq!((row["detail"].as_str(), row["line"].as_u64(), row["install"].clone()), (Some("excel"), Some(1), serde_json::Value::Null));
+    assert!(!rows.as_array().unwrap().iter().any(|r| r["kind"] == "packages.missing"), "nothing to install: {rows}");
+    // Another module on the same line isn't excused.
+    init(&mut s, "import excel, a_package_nobody_has\nrate = 3");
+    settle(&mut s);
+    assert_eq!(kind(&s, "A1"), Some("init.failed"));
+}

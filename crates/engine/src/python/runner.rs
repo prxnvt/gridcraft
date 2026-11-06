@@ -1,6 +1,6 @@
 //! Running due cells, one at a time: submit the next, take its result, write it, plan again. A cell
 //! only runs in a worker that has run every cell before it, since they share variables: a fresh
-//! worker runs those first. A result writes no undo step.
+//! worker runs the initialization code and those first. A result writes no undo step.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -45,7 +45,7 @@ pub(super) struct Inflight {
 }
 
 #[allow(clippy::disallowed_methods)] // `web_time`'s clock, which works on wasm
-fn now() -> Instant {
+pub(super) fn now() -> Instant {
     Instant::now()
 }
 
@@ -76,7 +76,7 @@ fn confined(_: &gridcraft_python::describe::Interpreter, _: &PythonCapability) -
 }
 
 /// What one step of the queue did.
-enum Step {
+pub(super) enum Step {
     /// A request went to the worker.
     Submitted,
     /// The cell settled without the worker, and the workbook changed.
@@ -153,7 +153,7 @@ fn undefined_name(outcome: &Outcome) -> Option<&str> {
 }
 
 /// Printed output cut for the log, and whether anything was cut, here or by the worker.
-fn cut_output(mut stdout: String) -> (String, bool) {
+pub(super) fn cut_output(mut stdout: String) -> (String, bool) {
     let mut cut = stdout.ends_with(OUTPUT_CUT);
     if stdout.len() > LOG_OUTPUT_BYTES {
         let mut end = LOG_OUTPUT_BYTES;
@@ -259,7 +259,7 @@ impl DocRun {
     /// Sends the next cell due to the worker, if none is running. Returns whether the workbook
     /// changed on the way (cells settled without the worker).
     pub fn pump(&mut self, d: &mut DocState, starter: &Starter, cx: Cx, stats: &mut PythonStats) -> bool {
-        if self.inflight.is_some() {
+        if self.requesting() {
             return false;
         }
         let mut wrote = false;
@@ -288,6 +288,9 @@ impl DocRun {
     }
 
     fn step(&mut self, d: &mut DocState, starter: &Starter, cx: Cx, stats: &mut PythonStats) -> Step {
+        if let Some(step) = self.initialization_step(d, starter, stats) {
+            return step;
+        }
         let index = self.cursor;
         let Some(e) = self.entries.get(index) else { return Step::End };
         if e.state != CellState::Queued && e.in_worker {
@@ -325,6 +328,23 @@ impl DocRun {
     /// the cell with its variables gone. So that is checked around the send: then the cells before it
     /// run first, in a fresh worker, and the send is taken back.
     fn submit(&mut self, index: usize, fp: u64, py: &PyCode, inputs: BTreeMap<String, Input>, starter: &Starter, stats: &mut PythonStats) -> Step {
+        match self.send(starter, stats, |client| client.submit_cell(&py.code, inputs, py.object)) {
+            Ok(id) => {
+                self.inflight = Some(Inflight { id, index, fp, started: now(), discard: false });
+                Step::Submitted
+            }
+            Err(step) => step,
+        }
+    }
+
+    /// Sends a request in the worker that has the variables, as [`DocRun::submit`] says. Returns its
+    /// id, or what the step comes to when it didn't go out.
+    pub(super) fn send(
+        &mut self,
+        starter: &Starter,
+        stats: &mut PythonStats,
+        request: impl FnOnce(&mut Client) -> Result<u64, gridcraft_python::Busy>,
+    ) -> Result<u64, Step> {
         if self.client.is_none() {
             self.client = starter.client();
             stats.clients = stats.clients.saturating_add(u64::from(self.client.is_some()));
@@ -332,27 +352,26 @@ impl DocRun {
         let was_alive = self.client.as_ref().is_some_and(Client::alive);
         if !was_alive && self.worker_used {
             self.lost_between_cells();
-            return Step::Skipped;
+            return Err(Step::Skipped);
         }
-        let Some(client) = self.client.as_mut() else { return Step::Stop };
+        let Some(client) = self.client.as_mut() else { return Err(Step::Stop) };
         let starts = client.starts();
-        let sent = client.submit_cell(&py.code, inputs, py.object);
+        let sent = request(client);
         let replaced = was_alive && client.starts() != starts;
         match sent {
             Ok(id) if !replaced => {
-                self.inflight = Some(Inflight { id, index, fp, started: now(), discard: false });
                 self.worker_used = true;
-                Step::Submitted
+                Ok(id)
             }
             Ok(_) => {
                 client.stop();
                 self.lost_between_cells();
-                Step::Skipped
+                Err(Step::Skipped)
             }
             Err(_) => {
                 client.stop();
                 self.lost_between_cells();
-                Step::Stop
+                Err(Step::Stop)
             }
         }
     }
@@ -416,8 +435,9 @@ impl DocRun {
     /// Waits up to `wait` for the running request, and returns its result when it has one. It also
     /// notices a worker that went away while idle: its variables went with it.
     pub fn poll_worker(&mut self, wait: Duration) -> Option<RunResult> {
+        let requesting = self.requesting();
         let client = self.client.as_mut()?;
-        if self.inflight.is_some() {
+        if requesting {
             return client.poll(wait);
         }
         let alive = client.alive();
@@ -430,6 +450,8 @@ impl DocRun {
 
     /// The worker is gone, and the variables with it.
     pub fn worker_gone(&mut self) {
+        self.init.in_worker = false;
+        self.init.flight = None;
         for e in &mut self.entries {
             e.in_worker = false;
         }
@@ -437,7 +459,7 @@ impl DocRun {
         self.worker_used = false;
     }
 
-    fn log_run(&mut self, run: PythonRun) {
+    pub(super) fn log_run(&mut self, run: PythonRun) {
         self.log.push_back(run);
         while self.log.len() > LOG_LIMIT {
             self.log.pop_front();
@@ -446,6 +468,9 @@ impl DocRun {
 
     /// Writes what a finished request gave.
     pub fn finish(&mut self, d: &mut DocState, result: RunResult, cx: Cx, stats: &mut PythonStats) -> Finish {
+        if self.init.flight.as_ref().is_some_and(|(id, _)| *id == result.id) {
+            return self.finish_initialization(d, result, stats);
+        }
         let mut out = Finish::default();
         let Some(flight) = self.inflight.take_if(|f| f.id == result.id) else { return out };
         let outcome = result.outcome;
@@ -517,7 +542,7 @@ impl DocRun {
         self.replays = self.replays.saturating_add(1);
     }
 
-    fn give_up_after_losses(&mut self) {
+    pub(super) fn give_up_after_losses(&mut self) {
         if self.replays > MAX_REPLAYS {
             self.demote_queued();
         }
@@ -545,6 +570,9 @@ impl DocRun {
     /// Stops the running cell and leaves the ones waiting as stale. Returns whether anything was
     /// running or waiting.
     pub fn stop(&mut self, d: &mut DocState) -> bool {
+        if self.stop_initialization(d) {
+            return true;
+        }
         let flight = self.inflight.take();
         if flight.is_none() && self.due == 0 {
             return false;
@@ -581,6 +609,7 @@ impl DocRun {
 
     /// Asks for every cell to run, in a fresh worker when `fresh`, whatever the calculation mode.
     pub fn run_everything(&mut self, d: &mut DocState, fresh: bool) -> usize {
+        self.asked_to_run();
         if fresh {
             if let Some(client) = self.client.as_mut() {
                 client.stop();
@@ -611,6 +640,8 @@ impl DocRun {
     pub fn run_one(&mut self, d: &mut DocState, index: usize, cx: Cx) -> usize {
         let Some(e) = self.entries.get(index) else { return 0 };
         self.refused.remove(&(e.uid, e.at));
+        self.asked_to_run();
+        let cx = Cx { manual: super::manual(self, d), ..cx };
         for (i, e) in self.entries.iter_mut().enumerate().skip(index) {
             e.ran = None;
             e.unsettled = false;

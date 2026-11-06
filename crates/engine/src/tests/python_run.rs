@@ -15,7 +15,7 @@ use super::v;
 use crate::python::{PythonCalculation, PythonCapability, PythonState, python_order};
 use crate::{DocState, Session, Trust};
 
-fn c(a1: &str) -> CellRef {
+pub(super) fn c(a1: &str) -> CellRef {
     CellRef::parse(a1).unwrap()
 }
 
@@ -102,7 +102,7 @@ fn answer(w: &mut FakeWorker, id: u64, code: &str, inputs: &BTreeMap<String, Inp
     w.done(id, result)
 }
 
-fn worker() -> FakeTransport {
+pub(super) fn worker() -> FakeTransport {
     FakeTransport::new(|mut w| {
         w.ready();
         let mut vars = HashMap::new();
@@ -118,13 +118,13 @@ fn worker() -> FakeTransport {
     })
 }
 
-fn capability(limits: Limits) -> (PythonCapability, FakeHandle) {
+pub(super) fn capability(limits: Limits) -> (PythonCapability, FakeHandle) {
     let t = worker();
     let h = t.handle();
     (PythonCapability { enabled: true, limits, transport: Some(Arc::new(move || Box::new(t.sharing()))), ..PythonCapability::default() }, h)
 }
 
-fn with_limits(limits: Limits) -> (Session, FakeHandle) {
+pub(super) fn with_limits(limits: Limits) -> (Session, FakeHandle) {
     let mut s = Session::new();
     s.execute("file.new", json!({})).unwrap();
     let (cap, h) = capability(limits);
@@ -132,12 +132,12 @@ fn with_limits(limits: Limits) -> (Session, FakeHandle) {
     (s, h)
 }
 
-fn session() -> (Session, FakeHandle) {
+pub(super) fn session() -> (Session, FakeHandle) {
     with_limits(Limits::default())
 }
 
 /// Waits until the workers have read this many requests (a worker reads on its own thread).
-fn read_requests(h: &FakeHandle, n: usize) {
+pub(super) fn read_requests(h: &FakeHandle, n: usize) {
     let mut left = 2_000;
     while runs(h).len() < n {
         std::thread::sleep(Duration::from_millis(1));
@@ -147,7 +147,7 @@ fn read_requests(h: &FakeHandle, n: usize) {
 }
 
 /// Polls until Python has nothing left to do.
-fn settle(s: &mut Session) {
+pub(super) fn settle(s: &mut Session) {
     let mut left = 4_000;
     while s.python_busy() {
         s.python_poll(Duration::from_millis(5));
@@ -156,16 +156,16 @@ fn settle(s: &mut Session) {
     }
 }
 
-fn py(s: &mut Session, cell: &str, code: &str) {
+pub(super) fn py(s: &mut Session, cell: &str, code: &str) {
     s.execute("python.set", json!({"cell": cell, "code": code})).unwrap();
 }
 
-fn set(s: &mut Session, cell: &str, input: &str) {
+pub(super) fn set(s: &mut Session, cell: &str, input: &str) {
     s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
 }
 
 /// The code the workers have read so far.
-fn runs(h: &FakeHandle) -> Vec<String> {
+pub(super) fn runs(h: &FakeHandle) -> Vec<String> {
     h.requests()
         .into_iter()
         .filter_map(|r| match r {
@@ -175,7 +175,7 @@ fn runs(h: &FakeHandle) -> Vec<String> {
         .collect()
 }
 
-fn diagnostic(s: &Session, cell: &str) -> Option<&'static str> {
+pub(super) fn diagnostic(s: &Session, cell: &str) -> Option<&'static str> {
     s.python_diagnostic(0, c(cell)).map(|d| d.kind.id)
 }
 
@@ -529,7 +529,7 @@ fn going_over_the_memory_limit_shows_its_error() {
 }
 
 /// A transport that never starts.
-struct NoStart(&'static str);
+pub(super) struct NoStart(pub(super) &'static str);
 
 impl Transport for NoStart {
     fn start(&mut self) -> Result<Pipes, String> {

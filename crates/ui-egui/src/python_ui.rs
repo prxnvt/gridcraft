@@ -756,7 +756,7 @@ pub(crate) fn action_button(app: &mut SheetApp, ui: &mut Ui, d: &Diagnostic, cel
             }
             pressed
         }
-        Action::Reset => {
+        Action::OpenInitialization => {
             let pressed = ui.button(lang.tr("Reset")).clicked();
             if pressed {
                 app.run_or_alert("python.reset", json!({}));

@@ -9,12 +9,14 @@
 //! - `inputs` resolves a cell's `xl("…")` references and fingerprints what they read.
 //! - `plan` keeps the list of Python cells up to date and decides what is due.
 //! - `runner` submits cells and writes results.
+//! - `initialization` runs the workbook's initialization code before the cells.
 //! - `environment` works out on a thread of its own whether Python can run here.
 //!
 //! A due cell, with its kept result, shows `#BUSY!` until the new one arrives; what the result
 //! spilled stays in place until then ([`gridcraft_model::PyCode::busy`]).
 
 mod environment;
+mod initialization;
 mod inputs;
 mod packages;
 mod plan;
@@ -96,6 +98,8 @@ pub struct PythonRun {
     pub stdout_cut: bool,
     /// The id of what is worth saying about the run ([`Kind::id`]).
     pub diagnostic: Option<&'static str>,
+    /// This was the initialization code rather than a cell: `sheet` is empty, and `cell` means nothing.
+    pub initialization: bool,
 }
 
 impl PythonRun {
@@ -108,17 +112,27 @@ impl PythonRun {
         stdout_cut: bool,
         diagnostic: Option<&'static str>,
     ) -> PythonRun {
-        PythonRun { sheet: d.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default(), cell, duration, stdout, stdout_cut, diagnostic }
+        PythonRun {
+            sheet: d.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default(),
+            cell,
+            duration,
+            stdout,
+            stdout_cut,
+            diagnostic,
+            initialization: false,
+        }
     }
 }
 
-/// The cell a workbook's worker is running now.
+/// What a workbook's worker is running now: a cell, or the initialization code.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PythonRunning {
     pub sheet: String,
     pub cell: CellRef,
     /// How long it has been running.
     pub elapsed: Duration,
+    /// This is the initialization code rather than a cell: `sheet` is empty, and `cell` means nothing.
+    pub initialization: bool,
 }
 
 /// One Python the search found, for a person to choose from.
@@ -175,6 +189,8 @@ pub struct PythonDiagnosticEntry {
     pub diagnostic: Diagnostic,
     /// The sheet's index and the cell; `None` for what is about the whole workbook or the app.
     pub cell: Option<(usize, CellRef)>,
+    /// It is about the initialization code.
+    pub initialization: bool,
 }
 
 /// How much work the runtime has done, for tests of what it must not do.
@@ -233,7 +249,7 @@ impl Runtime {
 }
 
 fn manual(r: &DocRun, d: &DocState) -> bool {
-    r.mode == PythonCalculation::Manual || d.wb.calc.mode == CalcMode::Manual
+    r.mode == PythonCalculation::Manual || d.wb.calc.mode == CalcMode::Manual || r.init.stopped
 }
 
 /// The Python cells of a sheet, row by row.
@@ -314,7 +330,7 @@ impl Session {
     /// Whether Python is working or about to: a request runs, cells wait for one, or the check of
     /// Python hasn't answered. The interface keeps polling while it is true.
     pub fn python_busy(&self) -> bool {
-        self.python.env.checking() || self.python.docs.values().any(|r| r.inflight.is_some() || r.due > 0)
+        self.python.env.checking() || self.python.docs.values().any(|r| r.requesting() || r.due > 0)
     }
 
     /// What is wrong, or worth saying, about a Python cell of the active workbook. `None` for a
@@ -327,6 +343,9 @@ impl Session {
         }
         let r = self.python.docs.get(&d.uid)?;
         let e = r.entries.get(r.index_of(sheet, cell)?)?;
+        if let Some(failed) = &r.init.failed {
+            return Some(failed);
+        }
         match e.state {
             CellState::Queued => Some(&STATE_BUSY),
             CellState::Stale if self.python.env.gate() == Gate::No => self.python.env.report.diagnostic.as_ref().or(Some(&STATE_STALE)),
@@ -340,7 +359,7 @@ impl Session {
     /// what is about the app or the workbook.
     pub fn python_diagnostics(&self) -> Vec<PythonDiagnosticEntry> {
         let Some(d) = self.active() else { return Vec::new() };
-        let entry = |diagnostic: &Diagnostic, cell| PythonDiagnosticEntry { diagnostic: diagnostic.clone(), cell };
+        let entry = |diagnostic: &Diagnostic, cell| PythonDiagnosticEntry { diagnostic: diagnostic.clone(), cell, initialization: false };
         let mut out = Vec::new();
         if let Some(off) = self.python.off_reason(d) {
             if !python_order(&d.wb).is_empty() {
@@ -350,20 +369,41 @@ impl Session {
         }
         // That pandas is missing is said once, about the workbook, when it has something to say it about.
         out.extend(self.python.env.report.diagnostic.iter().filter(|x| x.kind.id != "packages.noPandas").map(|x| entry(x, None)));
+        out.extend(self.python_init_diagnostics());
         out.extend(self.python_workbook_diagnostics());
         let Some(r) = self.python.docs.get(&d.uid) else { return out };
         for e in &r.entries {
-            if let Some(x) = self.python_diagnostic(e.sheet, e.at).filter(|x| x.kind.scope != Scope::Environment) {
+            // That the initialization code failed is said once, about the workbook.
+            if let Some(x) = self.python_diagnostic(e.sheet, e.at).filter(|x| x.kind.scope != Scope::Environment && x.kind.id != "init.failed") {
                 out.push(entry(x, Some((e.sheet, e.at))));
             }
         }
         out
     }
 
+    /// What the active workbook's initialization code did: `init.failed`, with Python's message and
+    /// line, or an `init.skipped` for each package it went on without, with the package as the detail
+    /// and the line that wanted it.
+    pub fn python_init_diagnostics(&self) -> Vec<PythonDiagnosticEntry> {
+        let Some(r) = self.active().and_then(|d| self.python.docs.get(&d.uid)) else { return Vec::new() };
+        r.init
+            .failed
+            .iter()
+            .chain(&r.init.skipped)
+            .map(|x| PythonDiagnosticEntry { diagnostic: x.clone(), cell: None, initialization: true })
+            .collect()
+    }
+
+    /// What the active workbook's initialization code last said when it failed: what every Python
+    /// cell shows until it is fixed.
+    pub fn python_init_failure(&self) -> Option<&Diagnostic> {
+        self.active().and_then(|d| self.python.docs.get(&d.uid)).and_then(|r| r.init.failed.as_ref())
+    }
+
     /// What is worth saying about the active workbook's code as a whole, once the package list is
     /// known: `packages.missing` for each module it imports that this Python doesn't have, with the
-    /// module as the detail and the first cell that imports it, and `packages.noPandas`. An empty
-    /// list isn't known, so it reports nothing.
+    /// module as the detail and the first cell that imports it (none for the initialization code),
+    /// and `packages.noPandas`. An empty list isn't known, so it reports nothing.
     pub fn python_workbook_diagnostics(&self) -> Vec<PythonDiagnosticEntry> {
         let Some(r) = self.active().and_then(|d| self.python.docs.get(&d.uid)).filter(|r| r.tracked && !r.entries.is_empty()) else {
             return Vec::new();
@@ -376,10 +416,14 @@ impl Session {
             .packages
             .missing
             .iter()
-            .map(|m| PythonDiagnosticEntry { diagnostic: Diagnostic::new("packages.missing", m.module.clone(), None), cell: Some((m.sheet, m.cell)) })
+            .map(|m| PythonDiagnosticEntry {
+                diagnostic: Diagnostic::new("packages.missing", m.module.clone(), None),
+                cell: m.place,
+                initialization: m.place.is_none(),
+            })
             .collect();
         if !packages.iter().any(|(name, _)| name.eq_ignore_ascii_case("pandas")) {
-            out.push(PythonDiagnosticEntry { diagnostic: Diagnostic::new("packages.noPandas", "", None), cell: None });
+            out.push(PythonDiagnosticEntry { diagnostic: Diagnostic::new("packages.noPandas", "", None), cell: None, initialization: false });
         }
         out
     }
@@ -396,7 +440,7 @@ impl Session {
     /// is there at once.
     pub fn python_environment(&self) -> PythonEnvironment {
         let mut report = self.python.env.report.clone();
-        if self.python.docs.values().any(|r| r.inflight.is_some()) {
+        if self.python.docs.values().any(DocRun::requesting) {
             report.state = PythonState::Running;
         }
         report
@@ -405,7 +449,7 @@ impl Session {
     /// [`Session::python_environment`]'s state without its copy of the report, for what asks every
     /// frame.
     pub fn python_state(&self) -> PythonState {
-        if self.python.docs.values().any(|r| r.inflight.is_some()) { PythonState::Running } else { self.python.env.report.state }
+        if self.python.docs.values().any(DocRun::requesting) { PythonState::Running } else { self.python.env.report.state }
     }
 
     /// The report as the last check left it, without a copy. Its `state` doesn't say whether a cell
@@ -414,14 +458,17 @@ impl Session {
         &self.python.env.report
     }
 
-    /// The cell the active workbook's worker is running, with how long it has run. Other workbooks'
-    /// cells aren't this workbook's to report.
+    /// What the active workbook's worker is running, with how long it has run: a cell, or the
+    /// initialization code. Other workbooks' cells aren't this workbook's to report.
     pub fn python_running(&self) -> Option<PythonRunning> {
         let d = self.active()?;
         let r = self.python.docs.get(&d.uid)?;
+        if let Some((_, started)) = &r.init.flight {
+            return Some(PythonRunning { sheet: String::new(), cell: CellRef::new(0, 0), elapsed: started.elapsed(), initialization: true });
+        }
         let flight = r.inflight.as_ref()?;
         let e = r.entries.get(flight.index)?;
-        Some(PythonRunning { sheet: d.wb.sheet(e.sheet)?.name.clone(), cell: e.at, elapsed: flight.started.elapsed() })
+        Some(PythonRunning { sheet: d.wb.sheet(e.sheet)?.name.clone(), cell: e.at, elapsed: flight.started.elapsed(), initialization: false })
     }
 
     /// Whether the active workbook holds a Python cell. This is cheap once the session has seen the
@@ -436,7 +483,7 @@ impl Session {
         }
     }
 
-    /// The active workbook's last 200 runs, oldest first.
+    /// The active workbook's last 200 runs, oldest first, the initialization code's among them.
     pub fn python_run_log(&self) -> impl Iterator<Item = &PythonRun> {
         self.active().and_then(|d| self.python.docs.get(&d.uid)).into_iter().flat_map(|r| r.log.iter())
     }
@@ -535,6 +582,10 @@ impl Session {
         if !self.python.env.take(wait) {
             return false;
         }
+        // The package the initialization code lacked may be there now.
+        for r in self.python.docs.values_mut() {
+            r.retry_failed_initialization();
+        }
         self.python_rederive();
         true
     }
@@ -603,7 +654,7 @@ impl Session {
 
     /// Nothing is ready: waits up to `wait` on the first thing that will be.
     fn python_wait(&mut self, wait: Duration) -> bool {
-        if self.python.docs.values().any(|r| r.inflight.is_some()) {
+        if self.python.docs.values().any(DocRun::requesting) {
             return self.python_take_one_result_waiting(wait);
         }
         if self.python.env.checking() {
@@ -614,7 +665,7 @@ impl Session {
 
     fn python_take_one_result_waiting(&mut self, wait: Duration) -> bool {
         let Some((i, uid)) =
-            self.docs.iter().enumerate().find(|(_, d)| self.python.docs.get(&d.uid).is_some_and(|r| r.inflight.is_some())).map(|(i, d)| (i, d.uid))
+            self.docs.iter().enumerate().find(|(_, d)| self.python.docs.get(&d.uid).is_some_and(DocRun::requesting)).map(|(i, d)| (i, d.uid))
         else {
             return false;
         };
@@ -729,12 +780,38 @@ impl Session {
     pub(crate) fn python_refresh_environment(&mut self) {
         let capability = self.python.capability.clone();
         self.python.env.restart(capability.as_ref());
+        // The package the initialization code lacked may be there now, where the answer is there at
+        // once; otherwise this happens when it comes.
+        if !self.python.env.checking() {
+            for r in self.python.docs.values_mut() {
+                r.retry_failed_initialization();
+            }
+        }
         self.python_rederive();
+    }
+
+    /// `python.initialization` with code: sets the active workbook's initialization code, which keeps
+    /// the rest of what its file said about the environment. Code that is what it was changes nothing,
+    /// so it costs no undo step and runs nothing.
+    pub(crate) fn python_set_initialization(&mut self, code: &str) -> Result<()> {
+        let old = self.doc()?.wb.python_env.clone();
+        if old.as_ref().map_or("", |e| e.code.as_str()) == code {
+            return Ok(());
+        }
+        let env = gridcraft_model::PyEnvironment {
+            id: old.as_ref().and_then(|e| e.id.clone()).or_else(|| Some(gridcraft_model::python::environment_id(code))),
+            kept: old.as_ref().and_then(|e| e.kept.clone()),
+            ..gridcraft_model::PyEnvironment::from_person(code)
+        };
+        crate::cmd::edit(self, |cx| {
+            cx.wb.python_env = Some(Arc::new(env));
+            Ok(())
+        })
     }
 }
 
 /// A diagnostic as JSON, with the catalog's words.
-fn diagnostic_json(d: &Diagnostic) -> Json {
+pub(crate) fn diagnostic_json(d: &Diagnostic) -> Json {
     json!({
         "kind": d.kind.id,
         "severity": d.kind.severity.id(),
@@ -772,18 +849,27 @@ pub(crate) fn diagnostic_entry_json(wb: &Workbook, e: &PythonDiagnosticEntry) ->
     let cell = e.cell.and_then(|(sheet, at)| wb.sheet(sheet).map(|sh| format!("{}!{}", gridcraft_core::quote_sheet(&sh.name), at.a1())));
     if let Some(o) = row.as_object_mut() {
         o.insert("cell".into(), json!(cell));
-        if e.diagnostic.kind.id == "packages.missing" {
-            o.insert("install".into(), json!(install_name(&e.diagnostic.detail)));
+        o.insert("initialization".into(), json!(e.initialization));
+        if matches!(e.diagnostic.kind.id, "packages.missing" | "init.skipped") {
+            o.insert("install".into(), json!(install_name_of(&e.diagnostic.detail)));
         }
     }
     row
 }
 
+/// The name to install a package under, for what a diagnostic says is missing. Excel's own module has
+/// none: no package gives it.
+pub fn install_name_of(module: &str) -> Option<String> {
+    (module.split('.').next() != Some("excel")).then(|| install_name(module))
+}
+
 /// A run as JSON (`python.runLog`).
 pub(crate) fn run_json(r: &PythonRun) -> Json {
+    let place = |text: String| if r.initialization { Json::Null } else { json!(text) };
     json!({
-        "sheet": r.sheet,
-        "cell": r.cell.a1(),
+        "initialization": r.initialization,
+        "sheet": place(r.sheet.clone()),
+        "cell": place(r.cell.a1()),
         "ms": r.duration.as_secs_f64() * 1000.0,
         "stdout": r.stdout,
         "stdoutCut": r.stdout_cut,

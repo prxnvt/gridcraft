@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::protocol::{Input, SelfTest};
+use crate::protocol::{Init, Input, SelfTest};
 pub use crate::run::*;
 
 /// Why a request can't run here.
@@ -45,6 +45,9 @@ impl Client {
         self.refuse()
     }
     pub fn submit_cell(&mut self, _code: &str, _inputs: BTreeMap<String, Input>, _object: bool) -> Result<u64, Busy> {
+        self.refuse()
+    }
+    pub fn submit_init(&mut self, _code: &str, _init: Init) -> Result<u64, Busy> {
         self.refuse()
     }
     pub fn submit_reset(&mut self) -> Result<u64, Busy> {

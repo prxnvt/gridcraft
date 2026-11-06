@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use gridcraft_core::Value;
 
-use crate::protocol::{Input, Output, Reply, Request, SelfTest};
+use crate::protocol::{Init, Input, Output, Reply, Request, SelfTest};
 pub use crate::run::*;
 
 /// Lines (or other events) the reader may queue before it waits for the client.
@@ -141,7 +141,15 @@ impl Client {
     /// single-cell form comes back as a Python object rather than cells to spill.
     pub fn submit_cell(&mut self, code: &str, inputs: std::collections::BTreeMap<String, Input>, object: bool) -> Result<u64, Busy> {
         let id = self.take_id()?;
-        self.send(Request::Run { id, code: code.to_string(), inputs, object });
+        self.send(Request::Run { id, code: code.to_string(), inputs, object, init: None });
+        Ok(id)
+    }
+
+    /// Runs a workbook's initialization code, under the rules of `init`. A result's value is empty,
+    /// or a row of `module, line` for each package it skipped.
+    pub fn submit_init(&mut self, code: &str, init: Init) -> Result<u64, Busy> {
+        let id = self.take_id()?;
+        self.send(Request::Run { id, code: code.to_string(), inputs: std::collections::BTreeMap::new(), object: false, init: Some(init) });
         Ok(id)
     }
 
