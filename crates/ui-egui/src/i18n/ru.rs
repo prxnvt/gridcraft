@@ -730,6 +730,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Результат пуст.",
         "The result needs cells that aren't empty." => "Результату нужны непустые ячейки.",
         "The result isn't a number a cell can hold." => "Результат не является числом, которое может хранить ячейка.",
+        "This date or length of time is outside what a cell can hold." => {
+            "Эта дата или длительность выходит за пределы того, что может хранить ячейка."
+        }
         "This cell is running." => "Эта ячейка выполняется.",
         "What this cell reads has changed since it last ran." => "То, что читает эта ячейка, изменилось с её последнего выполнения.",
         "This cell was stopped before it finished." => "Эта ячейка была остановлена до завершения.",

@@ -1243,6 +1243,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Wynik jest pusty.",
         "The result needs cells that aren't empty." => "Wynik wymaga komórek, które nie są puste.",
         "The result isn't a number a cell can hold." => "Wynik nie jest liczbą, którą może pomieścić komórka.",
+        "This date or length of time is outside what a cell can hold." => "Ta data lub długość czasu wykracza poza to, co może pomieścić komórka.",
         "This cell is running." => "Ta komórka jest uruchomiona.",
         "What this cell reads has changed since it last ran." => "To, co czyta ta komórka, zmieniło się od ostatniego uruchomienia.",
         "This cell was stopped before it finished." => "Ta komórka została zatrzymana przed zakończeniem.",

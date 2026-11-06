@@ -1259,6 +1259,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Το αποτέλεσμα είναι κενό.",
         "The result needs cells that aren't empty." => "Το αποτέλεσμα χρειάζεται κελιά που δεν είναι κενά.",
         "The result isn't a number a cell can hold." => "Το αποτέλεσμα δεν είναι αριθμός που μπορεί να περιέχει ένα κελί.",
+        "This date or length of time is outside what a cell can hold." => {
+            "Αυτή η ημερομηνία ή χρονική διάρκεια είναι εκτός όσων μπορεί να περιέχει ένα κελί."
+        }
         "This cell is running." => "Αυτό το κελί εκτελείται.",
         "What this cell reads has changed since it last ran." => "Αυτό που διαβάζει αυτό το κελί έχει αλλάξει από την τελευταία του εκτέλεση.",
         "This cell was stopped before it finished." => "Αυτό το κελί διακόπηκε πριν ολοκληρωθεί.",

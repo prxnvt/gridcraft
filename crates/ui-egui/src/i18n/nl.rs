@@ -800,6 +800,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Het resultaat is leeg.",
         "The result needs cells that aren't empty." => "Het resultaat heeft cellen nodig die niet leeg zijn.",
         "The result isn't a number a cell can hold." => "Het resultaat is geen getal dat een cel kan bevatten.",
+        "This date or length of time is outside what a cell can hold." => "Deze datum of tijdsduur valt buiten wat een cel kan bevatten.",
         "This cell is running." => "Deze cel wordt uitgevoerd.",
         "What this cell reads has changed since it last ran." => "Wat deze cel leest, is gewijzigd sinds de laatste uitvoering.",
         "This cell was stopped before it finished." => "Deze cel is gestopt voordat hij klaar was.",

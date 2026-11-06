@@ -762,6 +762,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Das Ergebnis ist leer.",
         "The result needs cells that aren't empty." => "Das Ergebnis benötigt Zellen, die nicht leer sind.",
         "The result isn't a number a cell can hold." => "Das Ergebnis ist keine Zahl, die eine Zelle aufnehmen kann.",
+        "This date or length of time is outside what a cell can hold." => {
+            "Dieses Datum oder diese Zeitspanne liegt außerhalb dessen, was eine Zelle aufnehmen kann."
+        }
         "This cell is running." => "Diese Zelle wird ausgeführt.",
         "What this cell reads has changed since it last ran." => "Was diese Zelle liest, hat sich seit der letzten Ausführung geändert.",
         "This cell was stopped before it finished." => "Diese Zelle wurde vor dem Abschluss beendet.",

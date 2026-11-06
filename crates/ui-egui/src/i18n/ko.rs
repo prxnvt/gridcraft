@@ -724,6 +724,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "결과가 비어 있습니다.",
         "The result needs cells that aren't empty." => "결과에는 비어 있지 않은 셀이 필요합니다.",
         "The result isn't a number a cell can hold." => "결과가 셀에 담을 수 있는 숫자가 아닙니다.",
+        "This date or length of time is outside what a cell can hold." => "이 날짜 또는 기간은 셀에 담을 수 있는 범위를 벗어납니다.",
         "This cell is running." => "이 셀이 실행 중입니다.",
         "What this cell reads has changed since it last ran." => "이 셀이 읽는 내용이 마지막 실행 이후 변경되었습니다.",
         "This cell was stopped before it finished." => "이 셀은 완료되기 전에 중지되었습니다.",

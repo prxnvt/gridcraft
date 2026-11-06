@@ -685,6 +685,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Kết quả trống.",
         "The result needs cells that aren't empty." => "Kết quả cần các ô không trống.",
         "The result isn't a number a cell can hold." => "Kết quả không phải là số mà ô có thể chứa.",
+        "This date or length of time is outside what a cell can hold." => "Ngày hoặc khoảng thời gian này nằm ngoài phạm vi mà ô có thể chứa.",
         "This cell is running." => "Ô này đang chạy.",
         "What this cell reads has changed since it last ran." => "Nội dung ô này đọc đã thay đổi kể từ lần chạy trước.",
         "This cell was stopped before it finished." => "Ô này đã bị dừng trước khi hoàn tất.",

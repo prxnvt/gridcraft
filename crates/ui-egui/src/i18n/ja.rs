@@ -715,6 +715,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("The result is empty.", "結果が空です。"),
     ("The result needs cells that aren't empty.", "結果には空でないセルが必要です。"),
     ("The result isn't a number a cell can hold.", "結果はセルに格納できる数値ではありません。"),
+    ("This date or length of time is outside what a cell can hold.", "この日付または時間の長さは、セルに格納できる範囲外です。"),
     ("This cell is running.", "このセルは実行中です。"),
     ("What this cell reads has changed since it last ran.", "このセルが読み取る内容が、前回の実行以降に変更されました。"),
     ("This cell was stopped before it finished.", "このセルは完了する前に停止されました。"),

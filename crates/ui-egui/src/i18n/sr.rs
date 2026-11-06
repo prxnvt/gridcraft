@@ -715,6 +715,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Rezultat je prazan.",
         "The result needs cells that aren't empty." => "Rezultatu trebaju ćelije koje nisu prazne.",
         "The result isn't a number a cell can hold." => "Rezultat nije broj koji ćelija može da sadrži.",
+        "This date or length of time is outside what a cell can hold." => "Ovaj datum ili trajanje je izvan onoga što ćelija može da sadrži.",
         "This cell is running." => "Ova ćelija radi.",
         "What this cell reads has changed since it last ran." => "Ono što ova ćelija čita promenilo se od njenog poslednjeg pokretanja.",
         "This cell was stopped before it finished." => "Ova ćelija je zaustavljena pre nego što je završila.",

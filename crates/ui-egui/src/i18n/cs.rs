@@ -831,6 +831,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Výsledek je prázdný.",
         "The result needs cells that aren't empty." => "Výsledek potřebuje buňky, které nejsou prázdné.",
         "The result isn't a number a cell can hold." => "Výsledek není číslo, které může buňka obsahovat.",
+        "This date or length of time is outside what a cell can hold." => "Toto datum nebo časový úsek je mimo rozsah, který může buňka obsahovat.",
         "This cell is running." => "Tato buňka běží.",
         "What this cell reads has changed since it last ran." => "To, co tato buňka čte, se od posledního spuštění změnilo.",
         "This cell was stopped before it finished." => "Tato buňka byla zastavena před dokončením.",

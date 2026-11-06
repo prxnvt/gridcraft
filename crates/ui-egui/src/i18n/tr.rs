@@ -687,6 +687,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Sonuç boş.",
         "The result needs cells that aren't empty." => "Sonuç, boş olmayan hücreler gerektiriyor.",
         "The result isn't a number a cell can hold." => "Sonuç, bir hücrenin tutabileceği bir sayı değil.",
+        "This date or length of time is outside what a cell can hold." => "Bu tarih veya süre, bir hücrenin tutabileceği aralığın dışında.",
         "This cell is running." => "Bu hücre çalışıyor.",
         "What this cell reads has changed since it last ran." => "Bu hücrenin okuduğu şey son çalıştırmadan beri değişti.",
         "This cell was stopped before it finished." => "Bu hücre tamamlanmadan önce durduruldu.",

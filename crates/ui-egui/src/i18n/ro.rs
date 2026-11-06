@@ -1305,6 +1305,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Rezultatul este gol.",
         "The result needs cells that aren't empty." => "Rezultatul are nevoie de celule care nu sunt goale.",
         "The result isn't a number a cell can hold." => "Rezultatul nu este un număr pe care îl poate conține o celulă.",
+        "This date or length of time is outside what a cell can hold." => "Această dată sau durată este în afara a ceea ce poate conține o celulă.",
         "This cell is running." => "Această celulă rulează.",
         "What this cell reads has changed since it last ran." => "Ceea ce citește această celulă s-a schimbat de la ultima rulare.",
         "This cell was stopped before it finished." => "Această celulă a fost oprită înainte de a termina.",

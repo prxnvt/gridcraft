@@ -694,6 +694,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "结果为空。",
         "The result needs cells that aren't empty." => "结果需要非空的单元格。",
         "The result isn't a number a cell can hold." => "结果不是单元格可以容纳的数字。",
+        "This date or length of time is outside what a cell can hold." => "此日期或时长超出了单元格可以容纳的范围。",
         "This cell is running." => "此单元格正在运行。",
         "What this cell reads has changed since it last ran." => "此单元格读取的内容自上次运行后已更改。",
         "This cell was stopped before it finished." => "此单元格在完成前已停止。",

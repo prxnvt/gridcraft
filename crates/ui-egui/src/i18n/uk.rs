@@ -1249,6 +1249,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The result is empty." => "Результат порожній.",
         "The result needs cells that aren't empty." => "Результату потрібні непорожні клітинки.",
         "The result isn't a number a cell can hold." => "Результат не є числом, яке може зберігати клітинка.",
+        "This date or length of time is outside what a cell can hold." => "Ця дата або тривалість виходить за межі того, що може зберігати клітинка.",
         "This cell is running." => "Ця клітинка виконується.",
         "What this cell reads has changed since it last ran." => "Те, що читає ця клітинка, змінилося з її останнього виконання.",
         "This cell was stopped before it finished." => "Цю клітинку було зупинено до завершення.",
