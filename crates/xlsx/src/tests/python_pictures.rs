@@ -5,7 +5,7 @@ use std::io::Read;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, Value};
-use gridcraft_model::{Anchor, Cell, Image, PyCode, Sheet, Workbook};
+use gridcraft_model::{Anchor, Cell, CellPicture, Image, PyCode, PyImage, PyOutput, Sheet, Workbook};
 
 use super::make_zip;
 use crate::{read_xlsx, write_xlsx};
@@ -43,33 +43,120 @@ fn book(sheets: Vec<Sheet>) -> Workbook {
     Workbook { sheets: sheets.into_iter().map(Arc::new).collect(), ..Default::default() }
 }
 
-/// A one-sheet package whose drawing holds one picture with this description, on B2, and whose sheet
-/// has this cell XML in its first row. Its code is one script, `1 + 1`.
+/// A one-sheet package, hand written, whose drawing holds pictures on B2.
+struct Package<'a> {
+    /// One picture for each description.
+    descriptions: &'a [&'a str],
+    /// The cell XML of row 2.
+    cells: &'a str,
+    /// Script 0 of its Python part.
+    script: String,
+    /// The bytes of its one media part.
+    picture: Vec<u8>,
+}
+
+impl Package<'_> {
+    fn bytes(&self) -> Vec<u8> {
+        let workbook = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2023/09/relationships/Python" Target="python.xml"/></Relationships>"#;
+        let python = format!(
+            r#"<python xmlns="http://schemas.microsoft.com/office/spreadsheetml/2023/python"><pythonScripts><pythonScript><code>{}</code></pythonScript></pythonScripts></python>"#,
+            self.script
+        );
+        let sheet = format!(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="2">{}</row></sheetData><drawing r:id="rId1"/></worksheet>"#,
+            self.cells
+        );
+        let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+        let pictures: String = self
+            .descriptions
+            .iter()
+            .map(|descr| {
+                format!(
+                    r#"<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="952500" cy="952500"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="P" descr="{}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill><xdr:spPr/></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>"#,
+                    crate::xml::esc_attr(descr)
+                )
+            })
+            .collect();
+        let drawing = format!(
+            r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{pictures}</xdr:wsDr>"#
+        );
+        let drawing_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>"#;
+        make_zip(&[
+            ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", workbook.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            ("xl/python.xml", python.as_bytes()),
+            ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+            ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
+            ("xl/drawings/drawing1.xml", drawing.as_bytes()),
+            ("xl/drawings/_rels/drawing1.xml.rels", drawing_rels.as_bytes()),
+            ("xl/media/image1.png", self.picture.as_slice()),
+        ])
+    }
+}
+
+/// A package with one picture, whose script is `1 + 1`.
 fn package_with_picture(descr: &str, cells: &str) -> Vec<u8> {
-    let workbook = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
-    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2023/09/relationships/Python" Target="python.xml"/></Relationships>"#;
-    let python = r#"<python xmlns="http://schemas.microsoft.com/office/spreadsheetml/2023/python"><pythonScripts><pythonScript><code>1 + 1</code></pythonScript></pythonScripts></python>"#;
-    let sheet = format!(
-        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="2">{cells}</row></sheetData><drawing r:id="rId1"/></worksheet>"#
-    );
-    let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
-    let drawing = format!(
-        r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="952500" cy="952500"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="P" descr="{}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill><xdr:spPr/></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>"#,
-        crate::xml::esc_attr(descr)
-    );
-    let drawing_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>"#;
-    let picture = png(40, 30);
-    make_zip(&[
-        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
-        ("xl/workbook.xml", workbook.as_bytes()),
-        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
-        ("xl/python.xml", python.as_bytes()),
-        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
-        ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
-        ("xl/drawings/drawing1.xml", drawing.as_bytes()),
-        ("xl/drawings/_rels/drawing1.xml.rels", drawing_rels.as_bytes()),
-        ("xl/media/image1.png", picture.as_slice()),
-    ])
+    Package { descriptions: &[descr], cells, script: "1 + 1".into(), picture: png(40, 30) }.bytes()
+}
+
+/// A package as it is, with these parts replaced or added.
+fn repack(bytes: &[u8], changes: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let mut parts: Vec<(String, Vec<u8>)> = vec![];
+    for i in 0..z.len() {
+        let mut part = z.by_index(i).unwrap();
+        let mut data = vec![];
+        part.read_to_end(&mut data).unwrap();
+        parts.push((part.name().to_string(), data));
+    }
+    for (name, data) in changes {
+        parts.retain(|(n, _)| n != name);
+        parts.push((name.to_string(), data.to_vec()));
+    }
+    let parts: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    make_zip(&parts)
+}
+
+/// A package with one part's text changed.
+fn with_text_changed(bytes: &[u8], part: &str, from: &str, to: &str) -> Vec<u8> {
+    let was = text(bytes, part);
+    assert!(was.contains(from), "{was}");
+    repack(bytes, &[(part, was.replace(from, to).as_bytes())])
+}
+
+fn image_of(data: &[u8], density: u32) -> PyImage {
+    let (width, height, mime) = crate::richdata::picture_size(data).unwrap();
+    let picture = CellPicture { data: data.to_vec(), mime: mime.to_string(), alt: "Image <plot> 40 x 30".to_string() };
+    PyImage { picture: Arc::new(picture), width: width / density, height: height / density, density }
+}
+
+/// A Python cell whose last run gave this picture, with a chosen return type.
+fn image_cell(sheet: &mut Sheet, cell: &str, object: bool, image: PyImage) {
+    let output = PyOutput {
+        value: Value::text("Image"),
+        type_name: "Image".into(),
+        preview: "Image".into(),
+        from_run: true,
+        image: Some(image),
+        ..PyOutput::default()
+    };
+    python_cell(sheet, cell, PyCode { object, output_chosen: true, output: Some(output), ..PyCode::new("plot()") }, Value::text("Image"));
+}
+
+fn py_at<'a>(sheet: &'a Sheet, cell: &str) -> &'a PyCode {
+    sheet.cell(at(cell)).unwrap().py.as_deref().unwrap()
+}
+
+fn media_parts(bytes: &[u8]) -> Vec<String> {
+    let z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    z.file_names().filter(|n| n.starts_with("xl/media/")).map(str::to_string).collect()
+}
+
+fn part_names(bytes: &[u8]) -> Vec<String> {
+    let z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    z.file_names().map(str::to_string).collect()
 }
 
 /// The Python Object cell B2 of [`package_with_picture`], its code being its one script.
@@ -186,4 +273,346 @@ fn a_picture_saved_with_a_link_a_file_cannot_hold_is_a_plain_picture() {
     let (back, _) = read_xlsx(&write_xlsx(&book(vec![sheet])).unwrap()).unwrap();
     assert_eq!(back.sheets[0].images[0].python_source, None);
     assert_eq!(back.sheets[0].images[0].alt, "my text");
+}
+
+#[test]
+fn a_python_cell_keeps_its_picture_through_a_file_for_either_return_type() {
+    let (object, value) = (png(80, 60), png(90, 70));
+    let mut sheet = Sheet::new("Data");
+    image_cell(&mut sheet, "G5", true, image_of(&object, 2));
+    image_cell(&mut sheet, "H7", false, image_of(&value, 2));
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+
+    // The cells: the text for a Python Object, the rich value of cell pictures for an Excel Value.
+    let cells = text(&bytes, "xl/worksheets/sheet1.xml");
+    assert!(cells.contains(r#"<c r="G5" t="str"><f>_xlfn._xlws.PY(0,1)</f><v>Image</v></c>"#), "{cells}");
+    assert!(cells.contains(r#"<c r="H7" vm="1" t="e"><f>_xlfn._xlws.PY(1,0)</f><v>#VALUE!</v></c>"#), "{cells}");
+    // The companions: hidden, on their cells, named for them, saying what the file holds nowhere else.
+    let drawing = text(&bytes, "xl/drawings/drawing1.xml");
+    assert_eq!(drawing.matches("<xdr:oneCellAnchor>").count(), 2, "{drawing}");
+    assert!(drawing.contains(r#"<xdr:from><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="381000" cy="285750"/>"#), "{drawing}");
+    assert!(drawing.contains(r#"name="Python G5" descr="gridcraft:pythonCell:G5:2:Image &lt;plot&gt; 40 x 30" hidden="1""#), "{drawing}");
+    assert!(drawing.contains(r#"name="Python H7" descr="gridcraft:pythonCell:H7:2:Image &lt;plot&gt; 40 x 30" hidden="1""#), "{drawing}");
+
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("picture")), "{:?}", report.warnings);
+    let sheet = &back.sheets[0];
+    assert!(sheet.images.is_empty(), "a companion is no floating picture");
+    assert!(sheet.cell_pictures.is_empty(), "a picture with code is no plain cell picture");
+    for (cell, data, width, height, object) in [("G5", &object, 40, 30, true), ("H7", &value, 45, 35, false)] {
+        let py = py_at(sheet, cell);
+        assert_eq!((py.code.as_str(), py.object, py.shows_object()), ("plot()", object, object), "{cell}");
+        let output = py.output.as_ref().unwrap();
+        assert_eq!((output.value.clone(), output.type_name.as_str()), (Value::text("Image"), "Image"), "{cell}");
+        assert!(!output.convertible && !output.from_run, "{cell}");
+        let image = py.image().unwrap();
+        assert_eq!((image.width, image.height, image.density), (width, height, 2), "{cell}");
+        assert_eq!(image.picture.data, *data, "{cell}");
+        assert_eq!((image.picture.mime.as_str(), image.picture.alt.as_str()), ("image/png", "Image <plot> 40 x 30"), "{cell}");
+        assert_eq!(sheet.cell(at(cell)).unwrap().value, Value::text("Image"), "{cell}");
+    }
+    assert!(sheet.picture_at(at("G5")).is_none() && sheet.picture_at(at("H7")).is_some());
+    assert!(sheet.input_text(at("H7")).contains("plot()"), "the formula bar has the code: {}", sheet.input_text(at("H7")));
+
+    // A second save says the same.
+    let again = write_xlsx(&back).unwrap();
+    assert_eq!(text(&again, "xl/drawings/drawing1.xml"), drawing);
+    assert_eq!(text(&again, "xl/worksheets/sheet1.xml"), cells);
+}
+
+#[test]
+fn a_picture_with_the_density_of_one_keeps_its_size() {
+    let mut sheet = Sheet::new("Data");
+    image_cell(&mut sheet, "A1", true, image_of(&png(80, 61), 1));
+    // Odd pixels round down, as a run has it, and a side of one pixel still has a size.
+    image_cell(&mut sheet, "A2", true, image_of(&png(1, 61), 2));
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let size = |c: &str| {
+        let i = py_at(&back.sheets[0], c).image().cloned().unwrap();
+        (i.width, i.height, i.density)
+    };
+    assert_eq!(size("A1"), (80, 61, 1));
+    assert_eq!(size("A2"), (1, 30, 2));
+}
+
+#[test]
+fn the_bytes_of_a_python_picture_are_stored_once() {
+    let picture = png(40, 30);
+    let mut sheet = Sheet::new("Data");
+    image_cell(&mut sheet, "A1", false, image_of(&picture, 1));
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+    let media = media_parts(&bytes);
+    assert_eq!(media.len(), 1, "{media:?}");
+    let file = media[0].trim_start_matches("xl/media/");
+    assert!(text(&bytes, "xl/drawings/_rels/drawing1.xml.rels").contains(file));
+    assert!(text(&bytes, "xl/richData/_rels/richValueRel.xml.rels").contains(file));
+
+    // Copies of the same result, a linked picture of it and a Python Object: one part again.
+    let image = image_of(&picture, 1);
+    let mut sheet = Sheet::new("Data");
+    image_cell(&mut sheet, "A1", false, image.clone());
+    image_cell(&mut sheet, "A2", false, image.clone());
+    image_cell(&mut sheet, "A3", true, image);
+    sheet.images.push(linked_picture(1, "Data!$A$1", "linked", &picture));
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+    assert_eq!(media_parts(&bytes).len(), 1, "{:?}", media_parts(&bytes));
+    assert_eq!(text(&bytes, "xl/richData/rdrichvalue.xml").matches("<rv ").count(), 1, "one rich value for one result");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    for cell in ["A1", "A2", "A3"] {
+        assert_eq!(py_at(&back.sheets[0], cell).image().unwrap().picture.data, picture, "{cell}");
+    }
+    assert_eq!(back.sheets[0].images.len(), 1);
+
+    // A Python Object has no rich value at all, and different pictures have parts of their own.
+    let mut sheet = Sheet::new("Data");
+    image_cell(&mut sheet, "A1", true, image_of(&picture, 1));
+    image_cell(&mut sheet, "A2", true, image_of(&png(41, 30), 1));
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+    assert_eq!(media_parts(&bytes).len(), 2);
+    assert!(!part_names(&bytes).iter().any(|n| n.starts_with("xl/richData/")));
+}
+
+#[test]
+fn a_python_picture_with_no_room_for_a_rich_value_never_fails_a_save() {
+    // Past what a rich value can hold, each picture alone or all of them together, the cell holds what
+    // a Python Object does, and its companion holds the picture. Plain cell pictures have nowhere else
+    // to go, so their room is theirs.
+    let big = |fill: u8| {
+        let mut data = png(100 + u32::from(fill), 100);
+        data.resize(15 * 1024 * 1024, fill);
+        data
+    };
+    let mut sheet = Sheet::new("Data");
+    for i in 0..8u8 {
+        let picture = CellPicture { data: big(i), mime: "image/png".into(), alt: String::new() };
+        sheet.set_picture(CellRef::new(u32::from(i), 0), Arc::new(picture));
+    }
+    image_cell(&mut sheet, "B1", false, image_of(&big(8), 1));
+    image_cell(&mut sheet, "B2", false, image_of(&big(9), 1));
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+    let cells = text(&bytes, "xl/worksheets/sheet1.xml");
+    assert!(cells.contains(r#"<c r="B2" t="str"><f>_xlfn._xlws.PY(1,0)</f><v>Image</v></c>"#), "{}", &cells[..cells.len().min(800)]);
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("picture")), "{:?}", report.warnings);
+    let sheet = &back.sheets[0];
+    assert_eq!(sheet.cell_pictures.len(), 8);
+    for (cell, fill) in [("B1", 8), ("B2", 9)] {
+        let py = py_at(sheet, cell);
+        assert_eq!(py.image().unwrap().picture.data, big(fill), "{cell}");
+        assert!(sheet.picture_at(at(cell)).is_some(), "{cell}: still an Excel Value");
+    }
+}
+
+#[test]
+fn bytes_a_rich_value_cannot_hold_are_kept_as_a_floating_picture() {
+    // Too large for a cell picture: this can't be a run's, and the bytes still aren't lost.
+    let mut sheet = Sheet::new("Data");
+    let picture = CellPicture { data: png(9000, 10), mime: "image/png".into(), alt: "wide".into() };
+    let image = PyImage { picture: Arc::new(picture), width: 9000, height: 10, density: 1 };
+    image_cell(&mut sheet, "A1", false, image);
+    let (back, report) = read_xlsx(&write_xlsx(&book(vec![sheet])).unwrap()).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(sheet.images.len(), 1);
+    assert_eq!((sheet.images[0].data.as_slice(), sheet.images[0].alt.as_str()), (png(9000, 10).as_slice(), "wide"));
+    assert_eq!(py_at(sheet, "A1").image(), None);
+    assert!(report.warnings.iter().any(|w| w.contains("floating")), "{:?}", report.warnings);
+}
+
+#[test]
+fn a_malformed_companion_marker_leaves_a_plain_picture() {
+    for descr in [
+        "gridcraft:pythonCell:",
+        "gridcraft:pythonCell:B2",
+        "gridcraft:pythonCell:B2:",
+        "gridcraft:pythonCell:B2:1",
+        "gridcraft:pythonCell::1:x",
+        "gridcraft:pythonCell:B2:0:x",
+        "gridcraft:pythonCell:B2:3:x",
+        "gridcraft:pythonCell:B2:-1:x",
+        "gridcraft:pythonCell:B2:01:x",
+        "gridcraft:pythonCell:B2:99999999999999999999:x",
+        "gridcraft:pythonCell:ZZZZ1:1:x",
+        "gridcraft:pythonCell:B0:1:x",
+        "gridcraft:pythonCell:B99999999:1:x",
+        "gridcraft:pythonCell:\u{1F600}:1:x",
+    ] {
+        let (back, report) = read_xlsx(&package_with_picture(descr, OBJECT_CELL)).unwrap();
+        let sheet = &back.sheets[0];
+        assert_eq!(sheet.images.len(), 1, "{descr}");
+        assert_eq!(sheet.images[0].alt, descr);
+        assert_eq!(sheet.images[0].python_source, None, "{descr}");
+        assert_eq!(py_at(sheet, "B2").image(), None, "{descr}");
+        assert!(!report.warnings.iter().any(|w| w.contains("floating")), "{descr}: {:?}", report.warnings);
+    }
+}
+
+#[test]
+fn a_companion_with_no_python_cell_is_a_floating_picture() {
+    let descr = "gridcraft:pythonCell:B2:2:my text";
+    for cells in [
+        "",
+        r#"<c r="B2"><v>5</v></c>"#,
+        r#"<c r="B2" t="str"><v>Image</v></c>"#,
+        // A script the file doesn't hold, as after a save through openpyxl.
+        r#"<c r="B2" t="str"><f>_xlfn._xlws.PY(7,1)</f><v>Image</v></c>"#,
+    ] {
+        let (back, report) = read_xlsx(&package_with_picture(descr, cells)).unwrap();
+        let sheet = &back.sheets[0];
+        assert_eq!(sheet.images.len(), 1, "{cells}");
+        assert_eq!(sheet.images[0].alt, "my text", "{cells}");
+        assert_eq!(sheet.images[0].anchor.cell, at("B2"), "{cells}");
+        assert_eq!(sheet.images[0].data.as_slice(), png(40, 30), "{cells}");
+        assert!(report.warnings.iter().any(|w| w.contains("floating")), "{cells}: {:?}", report.warnings);
+    }
+}
+
+#[test]
+fn a_companion_goes_by_its_anchor_which_moves_with_the_cell() {
+    // Another application inserted a row above the cell: the anchor moved, the description didn't.
+    let (back, report) = read_xlsx(&package_with_picture("gridcraft:pythonCell:B1:2:x", OBJECT_CELL)).unwrap();
+    let sheet = &back.sheets[0];
+    assert!(sheet.images.is_empty(), "{:?}", report.warnings);
+    assert_eq!(py_at(sheet, "B2").image().unwrap().density, 2);
+    // And a marker naming a Python cell elsewhere doesn't reach it.
+    let cells = r#"<c r="A2" t="str"><f>_xlfn._xlws.PY(0,1)</f><v>Image</v></c>"#;
+    let (back, _) = read_xlsx(&package_with_picture("gridcraft:pythonCell:A2:2:x", cells)).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(sheet.images.len(), 1);
+    assert_eq!(py_at(sheet, "A2").image(), None);
+}
+
+#[test]
+fn a_newer_result_keeps_its_value_and_the_old_companion_floats() {
+    // An application that doesn't know the companion changed the code, and left it behind.
+    let cells = r#"<c r="B2"><f>_xlfn._xlws.PY(0,1)</f><v>5</v></c>"#;
+    let (back, _) = read_xlsx(&package_with_picture("gridcraft:pythonCell:B2:1:x", cells)).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(sheet.images.len(), 1);
+    assert_eq!(sheet.value(at("B2")), Value::Number(5.0));
+    assert_eq!(py_at(sheet, "B2").image(), None);
+}
+
+#[test]
+fn a_second_companion_on_a_cell_is_a_floating_picture() {
+    let descriptions = ["gridcraft:pythonCell:B2:1:first", "gridcraft:pythonCell:B2:2:second"];
+    let package = Package { descriptions: &descriptions, cells: OBJECT_CELL, script: "1 + 1".into(), picture: png(40, 30) };
+    let (back, _) = read_xlsx(&package.bytes()).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(py_at(sheet, "B2").image().unwrap().picture.alt, "first");
+    assert_eq!(sheet.images.iter().map(|o| o.alt.as_str()).collect::<Vec<_>>(), ["second"]);
+}
+
+#[test]
+fn a_companion_that_cannot_be_a_cell_picture_stays_a_floating_picture() {
+    let descriptions = ["gridcraft:pythonCell:B2:1:x"];
+    let mut oversized = png(40, 30);
+    oversized.resize(16 * 1024 * 1024 + 1, 0);
+    for picture in [png(0, 30), png(9000, 30), png(5000, 5000), b"not a picture".to_vec(), oversized] {
+        let package = Package { descriptions: &descriptions, cells: OBJECT_CELL, script: "1 + 1".into(), picture: picture.clone() };
+        let (back, _) = read_xlsx(&package.bytes()).unwrap();
+        let sheet = &back.sheets[0];
+        assert_eq!(sheet.images.len(), 1, "{} bytes", picture.len());
+        assert_eq!(sheet.images[0].data.as_slice(), picture);
+        assert_eq!(py_at(sheet, "B2").image(), None);
+    }
+}
+
+#[test]
+fn code_too_long_to_stay_is_no_place_for_a_picture() {
+    // The engine takes such code away, and what would then hold the picture? So the picture stays out.
+    let script = "x".repeat(gridcraft_model::python::MAX_FORMULA_CHARS + 1);
+    let descriptions = ["gridcraft:pythonCell:B2:1:x", "gridcraft:python:9:Data!$B$2:y"];
+    let package = Package { descriptions: &descriptions, cells: OBJECT_CELL, script, picture: png(40, 30) };
+    let (back, _) = read_xlsx(&package.bytes()).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(py_at(sheet, "B2").image(), None);
+    assert_eq!(sheet.images.len(), 2);
+    assert!(sheet.images.iter().all(|o| o.python_source.is_none()));
+}
+
+/// A workbook with an Excel Value picture on A1, as saved.
+fn excel_value_file(picture: &[u8]) -> Vec<u8> {
+    let mut sheet = Sheet::new("Data");
+    image_cell(&mut sheet, "A1", false, image_of(picture, 2));
+    write_xlsx(&book(vec![sheet])).unwrap()
+}
+
+#[test]
+fn a_rich_value_is_a_python_cell_with_or_without_its_companion() {
+    let picture = png(80, 60);
+    let bytes = excel_value_file(&picture);
+    // With no drawing the size comes from the pixels alone.
+    let bare = with_text_changed(&bytes, "xl/worksheets/sheet1.xml", "<drawing r:id=\"rId1\"/>", "");
+    let (back, _) = read_xlsx(&bare).unwrap();
+    let sheet = &back.sheets[0];
+    let image = py_at(sheet, "A1").image().cloned().unwrap();
+    assert_eq!((image.width, image.height, image.density), (80, 60, 1));
+    assert_eq!(image.picture.alt, "Image <plot> 40 x 30");
+    assert_eq!(sheet.value(at("A1")), Value::text("Image"));
+    assert!(sheet.cell_pictures.is_empty() && sheet.images.is_empty());
+    // The next save gives it a companion.
+    let again = write_xlsx(&back).unwrap();
+    assert!(text(&again, "xl/drawings/drawing1.xml").contains("gridcraft:pythonCell:A1:1:"));
+}
+
+#[test]
+fn a_companion_with_other_bytes_than_the_cells_rich_value_floats() {
+    let bytes = repack(&excel_value_file(&png(80, 60)), &[("xl/media/image2.png", &png(70, 60))]);
+    let bytes = with_text_changed(&bytes, "xl/drawings/_rels/drawing1.xml.rels", "media/image1.png", "media/image2.png");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(py_at(sheet, "A1").image().unwrap().picture.data, png(80, 60));
+    assert_eq!(py_at(sheet, "A1").image().unwrap().density, 1, "that companion says nothing about this picture");
+    assert_eq!(sheet.images.len(), 1);
+    assert_eq!(sheet.images[0].data.as_slice(), png(70, 60));
+}
+
+#[test]
+fn a_rich_value_whose_code_is_gone_stays_a_plain_cell_picture() {
+    // A formula naming a script the file lacks keeps only what it shows, which here is a picture, and
+    // the companion, finding no Python cell, floats.
+    let picture = png(80, 60);
+    let python = r#"<python xmlns="http://schemas.microsoft.com/office/spreadsheetml/2023/python"/>"#;
+    let bytes = repack(&excel_value_file(&picture), &[("xl/python.xml", python.as_bytes())]);
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(sheet.cell_pictures.get(&at("A1")).unwrap().data, picture);
+    assert_eq!(sheet.cell(at("A1")).unwrap().py, None);
+    assert_eq!(sheet.images.len(), 1);
+    assert!(report.warnings.iter().any(|w| w.contains("Python cell(s)")), "{:?}", report.warnings);
+}
+
+#[test]
+fn a_picture_is_the_whole_result_whatever_range_the_file_declares() {
+    // A rich value: the range spills nothing, and the cells in it stay what they are.
+    let bytes = excel_value_file(&png(80, 60));
+    let sheet_part = "xl/worksheets/sheet1.xml";
+    let was = text(&bytes, sheet_part);
+    let declared = was
+        .replace("<f>_xlfn._xlws.PY(0,0)</f>", r#"<f t="array" ref="A1:A3">_xlfn._xlws.PY(0,0)</f>"#)
+        .replace("</row>", r#"</row><row r="2"><c r="A2"><v>7</v></c></row>"#);
+    let (back, _) = read_xlsx(&repack(&bytes, &[(sheet_part, declared.as_bytes())])).unwrap();
+    let sheet = &back.sheets[0];
+    assert!(py_at(sheet, "A1").image().is_some());
+    assert!(sheet.spill_ranges.is_empty(), "{:?}", sheet.spill_ranges);
+    assert_eq!(sheet.value(at("A2")), Value::Number(7.0));
+
+    // A Python Object whose file says it spills: a picture isn't what spilled.
+    let cells = r#"<c r="B2" t="str"><f t="array" ref="B2:B3">_xlfn._xlws.PY(0,1)</f><v>Image</v></c>"#;
+    let (back, _) = read_xlsx(&package_with_picture("gridcraft:pythonCell:B2:1:x", cells)).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(py_at(sheet, "B2").image(), None);
+    assert_eq!(sheet.images.len(), 1);
+}
+
+#[test]
+fn a_python_cell_with_no_picture_writes_no_companion() {
+    let mut sheet = Sheet::new("Data");
+    python_cell(&mut sheet, "A1", PyCode { object: true, output_chosen: true, ..PyCode::new("1") }, Value::text("Image"));
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+    assert!(!part_names(&bytes).iter().any(|n| n.starts_with("xl/drawings/") || n.starts_with("xl/media/")));
+    // The text alone says nothing about a picture.
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(py_at(&back.sheets[0], "A1").image(), None);
 }

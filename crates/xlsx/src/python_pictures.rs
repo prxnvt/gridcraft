@@ -7,16 +7,29 @@
 //! of characters of the reference, is what ends it; characters and not bytes, so that a script holding
 //! the description as text can slice it. A picture whose description doesn't read this way is a plain
 //! picture, with the description as its alternative text.
+//!
+//! The picture a Python cell gave, for either return type, is a companion picture: hidden, anchored to
+//! one cell, on that cell, named `Python G5`, with the description
+//! `gridcraft:pythonCell:<cell>:<density>:<alt>`. The density is what the file holds nowhere else, as
+//! the pixels come from the image's header. A reopened workbook then shows its saved plots without
+//! running code. Reading goes by the anchor, as that moves with its cell when another application
+//! inserts a row and the description doesn't. With no Python cell there, as after a save through
+//! openpyxl, the companion is an ordinary floating picture, so that no picture is lost.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use gridcraft_core::CellRef;
 use gridcraft_core::addr::unquote_sheet;
-use gridcraft_model::Workbook;
+use gridcraft_core::{CellRef, Value};
+use gridcraft_model::{CellPicture, PyCode, PyImage, PyOutput, Sheet, Workbook};
 
 use crate::xml;
 
 const LINK: &str = "gridcraft:python:";
+const CELL: &str = "gridcraft:pythonCell:";
+/// What a Python cell whose result is a picture holds as its value, and what the worker names the
+/// result's type.
+pub const IMAGE: &str = "Image";
 /// Longest reference a marker holds: a quoted sheet name of 31 characters, each doubled, and the
 /// largest cell come to 77. A crafted file can claim any length.
 const MAX_REFERENCE_CHARS: usize = 128;
@@ -94,4 +107,82 @@ pub fn settle_links(wb: &mut Workbook) -> usize {
         }
     }
     dropped
+}
+
+/// The description of the companion picture of the cell `at`.
+pub fn cell_descr(at: CellRef, image: &PyImage) -> String {
+    format!("{CELL}{}:{}:{}", at.a1(), image.density, image.picture.alt)
+}
+
+/// What a companion picture's description says, past its cell.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CellMarker<'a> {
+    pub density: u32,
+    pub alt: &'a str,
+}
+
+/// A companion picture's description. `None` for any other description, and for a marker that is
+/// malformed. A worker's picture has a density of 1 or 2.
+pub fn read_cell_marker(descr: &str) -> Option<CellMarker<'_>> {
+    let (cell, rest) = descr.strip_prefix(CELL)?.split_once(':')?;
+    CellRef::parse(cell)?;
+    let (density, alt) = rest.split_once(':')?;
+    let density = match density {
+        "1" => 1,
+        "2" => 2,
+        _ => return None,
+    };
+    Some(CellMarker { density, alt })
+}
+
+/// `picture` as a Python cell's image, its size worked out as a run works it out. `None` for bytes
+/// past the limits of a cell picture, which a worker never sends.
+fn saved_image(picture: Arc<CellPicture>, density: u32) -> Option<PyImage> {
+    let (width, height, _) = crate::richdata::picture_size(&picture.data)?;
+    let density = density.max(1);
+    Some(PyImage { picture, width: (width / density).max(1), height: (height / density).max(1), density })
+}
+
+/// The result of a cell whose picture a file holds: what a run left, without what only a run knows.
+fn saved_output(image: PyImage) -> PyOutput {
+    PyOutput {
+        value: Value::text(IMAGE),
+        type_name: IMAGE.to_string(),
+        preview: IMAGE.to_string(),
+        convertible: false,
+        table: None,
+        from_run: false,
+        image: Some(image),
+    }
+}
+
+/// `py` with the picture a cell's rich value holds as its result. `None` when it can't be one.
+pub fn with_cell_picture(py: &PyCode, picture: Arc<CellPicture>) -> Option<PyCode> {
+    Some(PyCode { output: Some(saved_output(saved_image(picture, 1)?)), ..py.clone() })
+}
+
+/// Takes a companion picture as the result of the Python cell at `at`, when that cell's result is a
+/// picture and it can be this one: the file says so with its value, or with a rich value of the same
+/// bytes, whose density only the companion holds. Any other value is a newer result, from an
+/// application that left the companion alone. A spill, or code too long to stay, is no place for it
+/// either. Returns whether it was taken.
+pub fn take_for_cell(sheet: &mut Sheet, at: CellRef, marker: &CellMarker<'_>, data: &[u8]) -> bool {
+    if sheet.spill_ranges.contains_key(&at) {
+        return false;
+    }
+    let Some(cell) = sheet.cells.get_mut(at) else { return false };
+    let Some(py) = cell.py.as_mut().filter(|py| py.fits()) else { return false };
+    let image = match py.image() {
+        Some(kept) if kept.picture.data != data => return false,
+        Some(kept) => saved_image(kept.picture.clone(), marker.density),
+        None if matches!(&cell.value, Value::Text(text) if &**text == IMAGE) => crate::richdata::picture_size(data).and_then(|(_, _, mime)| {
+            let picture = CellPicture { data: data.to_vec(), mime: mime.to_string(), alt: marker.alt.to_string() };
+            saved_image(Arc::new(picture), marker.density)
+        }),
+        None => return false,
+    };
+    let Some(image) = image else { return false };
+    Arc::make_mut(py).output = Some(saved_output(image));
+    cell.value = Value::text(IMAGE);
+    true
 }

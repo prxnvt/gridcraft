@@ -40,6 +40,8 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// Pictures saved for a Python cell that became floating pictures, as no such cell took them.
+    pub python_pictures_without_cell: usize,
 }
 
 impl Ctx<'_> {
@@ -257,6 +259,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         cf_ext_ids: vec![],
         known_function,
         python: Default::default(),
+        python_pictures_without_cell: 0,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -356,6 +359,12 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
+    if cx.python_pictures_without_cell > 0 {
+        cx.warn(format!(
+            "{} picture(s) saved for a Python cell have no such cell in this file; they are shown as floating pictures",
+            cx.python_pictures_without_cell
+        ));
+    }
     let unlinked = crate::python_pictures::settle_links(&mut wb);
     if unlinked > 0 {
         cx.warn(format!(

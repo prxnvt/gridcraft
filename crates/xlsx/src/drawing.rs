@@ -4,12 +4,14 @@
 //! An equation is written as `mc:AlternateContent`: the `a14` choice is a text box holding the
 //! equation as Office Math (`a14:m`), the fallback the same text box holding the LaTeX as plain
 //! text. Both carry the source in `descr="gridcraft:latex:…"`, which wins on reading; without it,
-//! Office Math in the subset `omml` reads is converted back to LaTeX.
+//! Office Math in the subset `omml` reads is converted back to LaTeX. The pictures of Python cells
+//! have their own descriptions: see [`crate::python_pictures`].
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
-use gridcraft_model::{Anchor, AnchorMode, Color, Image, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme};
+use gridcraft_model::{Anchor, AnchorMode, Color, Image, PyImage, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme};
 
 use crate::IoError;
 use crate::read::Ctx;
@@ -129,6 +131,8 @@ fn mime_for(name: &str) -> &'static str {
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
+    // The Python cells that have their companion pictures: a second one on a cell is a floating picture.
+    let mut python_cells = HashSet::new();
     for (n, a) in x.children.iter().enumerate() {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
         let n = n + 1;
@@ -170,6 +174,19 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                     let (python_source, alt) = match crate::python_pictures::read_link(descr) {
                         Some((reference, alt)) => (Some(reference.to_string()), alt),
                         None => (None, descr),
+                    };
+                    let companion = crate::python_pictures::read_cell_marker(descr);
+                    let alt = match &companion {
+                        Some(marker) => {
+                            let first = !python_cells.contains(&anchor.cell);
+                            if first && crate::python_pictures::take_for_cell(sheet, anchor.cell, marker, &data) {
+                                python_cells.insert(anchor.cell);
+                                continue;
+                            }
+                            cx.python_pictures_without_cell = cx.python_pictures_without_cell.saturating_add(1);
+                            marker.alt
+                        }
+                        None => alt,
                     };
                     let id = cx.next_object_id();
                     let mime = mime_for(&target).to_string();
@@ -454,6 +471,8 @@ pub enum Obj<'a> {
     Image(&'a Image, String),
     Chart(&'a gridcraft_model::Chart, String),
     Shape(&'a Shape),
+    /// The companion picture of the Python cell at a place.
+    PythonCell(CellRef, &'a PyImage, String),
 }
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
@@ -476,6 +495,27 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     id - 1,
                     esc_attr(linked.as_deref().unwrap_or(&img.alt)),
                     xfrm(&img.anchor, "a:xfrm")
+                );
+            }
+            Obj::PythonCell(at, image, rid) => {
+                let anchor =
+                    Anchor { cell: *at, dx: 0.0, dy: 0.0, width: image.width as f32, height: image.height as f32, mode: AnchorMode::MoveOnly };
+                let emu = |v: f32| (f64::from(v) * EMU_PER_PX).round() as i64;
+                close_tag = "</xdr:oneCellAnchor>";
+                let _ = write!(
+                    s,
+                    "<xdr:oneCellAnchor><xdr:from><xdr:col>{}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx=\"{}\" cy=\"{}\"/>",
+                    at.col,
+                    at.row,
+                    emu(anchor.width),
+                    emu(anchor.height)
+                );
+                let _ = write!(
+                    s,
+                    "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Python {}\" descr=\"{}\" hidden=\"1\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
+                    at.a1(),
+                    esc_attr(&crate::python_pictures::cell_descr(*at, image)),
+                    xfrm(&anchor, "a:xfrm")
                 );
             }
             Obj::Chart(ch, rid) if crate::chartex::is_chartex(ch.kind) => {

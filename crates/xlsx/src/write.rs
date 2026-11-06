@@ -134,6 +134,19 @@ pub struct Out {
     pub kept: crate::passthrough::KeptOut,
     /// The code of the Python cells written so far, in order: script `i` of the Python part.
     pub python_scripts: Vec<String>,
+    /// The pictures of the Python cells of the sheet being written, which its drawing part holds.
+    pub python_images: Vec<(gridcraft_core::CellRef, gridcraft_model::PyImage)>,
+    /// `xl/media` parts by a hash of their extension and bytes, as places in `parts`. A workbook can
+    /// hold a picture for every Python cell, and each is looked for here.
+    media: HashMap<u64, Vec<usize>>,
+}
+
+fn media_key(ext: &str, data: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    ext.hash(&mut hasher);
+    data.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl Out {
@@ -146,16 +159,20 @@ impl Out {
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
     /// or twice on one, is written once and every drawing points to that part, as in Excel.
     pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
-        let existing = self.parts.iter().find(|(name, bytes)| {
-            name.strip_prefix("xl/media/image").is_some_and(|rest| rest.ends_with(&format!(".{ext}"))) && bytes.as_slice() == data
-        });
-        if let Some((name, _)) = existing {
-            return name.trim_start_matches("xl/media/").to_string();
+        if let Some(file) = self.find_image(ext, data) {
+            return file;
         }
         self.images += 1;
         let file = format!("image{}.{ext}", self.images);
+        self.media.entry(media_key(ext, data)).or_default().push(self.parts.len());
         self.part(&format!("xl/media/{file}"), None, data.to_vec());
         file
+    }
+    /// The `xl/media` file name of the part [`Out::image_part`] wrote with these bytes, if any.
+    pub fn find_image(&self, ext: &str, data: &[u8]) -> Option<String> {
+        let places = self.media.get(&media_key(ext, data))?;
+        let (name, _) = places.iter().filter_map(|i| self.parts.get(*i)).find(|(_, bytes)| bytes.as_slice() == data)?;
+        name.strip_prefix("xl/media/").map(str::to_string)
     }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
         self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
@@ -269,8 +286,11 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         cell_pictures: Default::default(),
         kept: Default::default(),
         python_scripts: vec![],
+        python_images: vec![],
+        media: HashMap::new(),
     };
     out.kept.reserve_vml_blocks(wb);
+    out.cell_pictures.keep_room_for_plain_pictures(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
     out.default_type("xml", "application/xml");
 
