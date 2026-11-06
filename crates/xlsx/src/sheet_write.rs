@@ -772,11 +772,12 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     // A picture a Python cell gave goes in the drawing part, for either return type. With Excel Value
     // the cell also holds the rich value plain cell pictures have, and without room for one it holds
     // what a Python Object does.
-    let image = py.and_then(gridcraft_model::PyCode::image);
+    let image = py.and_then(gridcraft_model::PyCode::image).filter(|image| out.take_python_image_room(image.picture.data.len()));
     if let Some(image) = image {
         out.python_images.push((c, image.clone()));
     }
-    let rich_value = py.and_then(gridcraft_model::PyCode::image_in_cell).and_then(|p| out.cell_pictures.python_index(p));
+    let in_cell = py.and_then(gridcraft_model::PyCode::image_in_cell).filter(|_| image.is_some());
+    let rich_value = in_cell.and_then(|p| out.cell_pictures.python_index(p));
     let value: Value = match (ov, extra) {
         (Some(t), _) => Value::text(t.as_str()),
         (None, Some(v)) => v.clone(),

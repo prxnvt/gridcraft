@@ -529,6 +529,18 @@ fn code_too_long_to_stay_is_no_place_for_a_picture() {
     assert_eq!(py_at(sheet, "B2").image(), None);
     assert_eq!(sheet.images.len(), 2);
     assert!(sheet.images.iter().all(|o| o.python_source.is_none()));
+
+    // The same with a rich value: the picture is what is left of the cell, and the code goes here, as
+    // the engine would take it from a Python cell.
+    let picture = png(80, 60);
+    let long = "x".repeat(gridcraft_model::python::MAX_FORMULA_CHARS + 1);
+    let bytes = with_text_changed(&excel_value_file(&picture), "xl/python.xml", "<code>plot()</code>", &format!("<code>{long}</code>"));
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    let sheet = &back.sheets[0];
+    assert_eq!(sheet.cell_pictures.get(&at("A1")).unwrap().data, picture);
+    assert_eq!(sheet.cell(at("A1")).unwrap().py, None);
+    assert_eq!(sheet.images.len(), 1);
+    assert!(report.warnings.iter().any(|w| w.contains("static pictures")), "{:?}", report.warnings);
 }
 
 /// A workbook with an Excel Value picture on A1, as saved.
@@ -615,4 +627,33 @@ fn a_python_cell_with_no_picture_writes_no_companion() {
     // The text alone says nothing about a picture.
     let (back, _) = read_xlsx(&bytes).unwrap();
     assert_eq!(py_at(&back.sheets[0], "A1").image(), None);
+}
+
+#[test]
+fn more_python_pictures_than_a_file_can_reopen_are_left_for_the_cells_to_run_again() {
+    // One result in many cells: one part, and each cell's picture is read when the file opens. Without
+    // a limit this file would be refused as too large, with the person's work in it.
+    let mut data = png(100, 100);
+    data.resize(15 * 1024 * 1024, 0);
+    let image = image_of(&data, 1);
+    let cells = (crate::package::MAX_TOTAL as usize / data.len()) as u32 + 2;
+    let mut sheet = Sheet::new("Data");
+    for row in 0..cells {
+        let cell = CellRef::new(row, 0).a1();
+        image_cell(&mut sheet, &cell, row % 2 == 0, image.clone());
+    }
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+    assert_eq!(media_parts(&bytes).len(), 1);
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    let sheet = &back.sheets[0];
+    let kept = crate::write::MAX_PYTHON_IMAGE_BYTES / data.len();
+    assert!(kept < cells as usize);
+    for row in 0..cells {
+        let at = CellRef::new(row, 0);
+        let py = sheet.cell(at).unwrap().py.as_deref().unwrap();
+        assert_eq!(py.code, "plot()", "{row}");
+        assert_eq!(py.image().is_some(), (row as usize) < kept, "{row}");
+        assert_eq!(sheet.value(at), Value::text("Image"), "{row}");
+    }
+    assert!(sheet.images.is_empty(), "{:?}", report.warnings);
 }

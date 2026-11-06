@@ -136,6 +136,8 @@ pub struct Out {
     pub python_scripts: Vec<String>,
     /// The pictures of the Python cells of the sheet being written, which its drawing part holds.
     pub python_images: Vec<(gridcraft_core::CellRef, gridcraft_model::PyImage)>,
+    /// Bytes of pictures Python cells may still save.
+    python_image_room: usize,
     /// `xl/media` parts by a hash of their extension and bytes, as places in `parts`. A workbook can
     /// hold a picture for every Python cell, and each is looked for here.
     media: HashMap<u64, Vec<usize>>,
@@ -174,6 +176,16 @@ impl Out {
         let (name, _) = places.iter().filter_map(|i| self.parts.get(*i)).find(|(_, bytes)| bytes.as_slice() == data)?;
         name.strip_prefix("xl/media/").map(str::to_string)
     }
+    /// Takes the room for a picture of this many bytes, if there is any.
+    pub fn take_python_image_room(&mut self, bytes: usize) -> bool {
+        match self.python_image_room.checked_sub(bytes) {
+            Some(left) => {
+                self.python_image_room = left;
+                true
+            }
+            None => false,
+        }
+    }
     /// The bytes of a part written so far.
     pub fn part_data(&self, name: &str) -> Option<&[u8]> {
         self.parts.iter().find(|(n, _)| n == name).map(|(_, data)| data.as_slice())
@@ -194,6 +206,11 @@ impl Out {
 pub fn person_guid(i: usize) -> String {
     format!("{{00000000-0000-4000-8002-{:012X}}}", i as u64 & 0xFFFF_FFFF_FFFF)
 }
+
+/// Most bytes of pictures the Python cells of a file save, counting each cell's, even where they share
+/// a part. Reading charges each to [`crate::package::MAX_TOTAL`], and a file past that doesn't open.
+/// This leaves room for everything else a file holds, and a cell past it has its code and can run again.
+pub(crate) const MAX_PYTHON_IMAGE_BYTES: usize = 512 * 1024 * 1024;
 
 /// `$A$1:$D$20` (or `$1:$3` / `$A:$C`).
 pub fn abs_range(r: &RangeRef) -> String {
@@ -297,6 +314,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         kept: Default::default(),
         python_scripts: vec![],
         python_images: vec![],
+        python_image_room: MAX_PYTHON_IMAGE_BYTES,
         media: HashMap::new(),
     };
     out.kept.reserve_vml_blocks(wb);
