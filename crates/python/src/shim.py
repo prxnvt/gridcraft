@@ -14,6 +14,7 @@
 def _gridcraft_worker():
     import ast
     import builtins
+    import datetime
     import errno
     import importlib
     import io
@@ -33,6 +34,7 @@ def _gridcraft_worker():
     MAX_MESSAGE_BYTES = 8192
     MAX_SUBJECT_BYTES = 1024
     MAX_TYPE_NAME_BYTES = 256
+    MAX_DATE_BYTES = 64
     MAX_PREVIEW_CHARS = 255
     MAX_STDOUT_BYTES = 1048576
     MAX_ARRAY_CELLS = 1000000
@@ -148,6 +150,21 @@ def _gridcraft_worker():
             if isinstance(a, dict):
                 rows, cols, data = a.get("rows", 0), a.get("cols", 0), a.get("data", [])
                 return [[to_py(x) for x in data[i * cols:(i + 1) * cols]] for i in range(rows)]
+            return date_to_py(v)
+        return None
+
+    def date_to_py(v):
+        # GridCraft works out dates from serial numbers, in the workbook's date system. A serial that
+        # names no day never gets here: it arrives as a number.
+        try:
+            if "date" in v:
+                return datetime.date.fromisoformat(v["date"])
+            if "dateTime" in v:
+                return datetime.datetime.fromisoformat(v["dateTime"])
+            if "time" in v:
+                return datetime.time.fromisoformat(v["time"])
+        except (TypeError, ValueError):
+            return ExcelError("#VALUE!")
         return None
 
     state = {"inputs": None}
@@ -200,13 +217,46 @@ def _gridcraft_worker():
         except Exception:
             return rows
         if headers and rows:
-            return pandas.DataFrame(rows[1:], columns=rows[0])
-        return pandas.DataFrame(rows)
+            return date_columns(pandas, pandas.DataFrame(rows[1:], columns=rows[0]))
+        return date_columns(pandas, pandas.DataFrame(rows))
+
+    def date_columns(pandas, frame):
+        # pandas keeps datetime.date values as objects, and some versions datetime.datetime values
+        # past its range too. A column of dates and empty cells becomes a datetime column, in the
+        # units it can hold them in. Past what this pandas can do, or with something else in the
+        # column, it stays as it is: the values are right either way.
+        try:
+            for i in range(frame.shape[1]):
+                column = frame.iloc[:, i]
+                if column.dtype == object and holds_only_dates(column.tolist()):
+                    frame.isetitem(i, as_dates(pandas, column))
+        except Exception:
+            pass
+        return frame
+
+    def holds_only_dates(values):
+        found = False
+        for x in values:
+            if isinstance(x, datetime.date):
+                found = True
+            elif x is not None:
+                return False
+        return found
+
+    def as_dates(pandas, column):
+        try:
+            return pandas.to_datetime(column)
+        except Exception:
+            import numpy
+
+            return pandas.Series(numpy.array(column.tolist(), dtype="datetime64[us]"), index=column.index)
 
     def xl(reference, headers=False):
         """xl(reference, headers=False): the value of a cell, or a range as a pandas DataFrame (a
         list of rows when pandas isn't installed). With headers=True the first row names the
-        columns. The reference must be written as text in the cell's code, such as xl("A1:B5")."""
+        columns. A cell formatted as a date or a time is a datetime.date, datetime.time or
+        datetime.datetime. The reference must be written as text in the cell's code, such as
+        xl("A1:B5")."""
         inputs = state["inputs"]
         if inputs is None:
             raise RuntimeError("xl() only works while a cell runs")
@@ -224,9 +274,12 @@ def _gridcraft_worker():
     NOT_SCALAR = object()
 
     def item(x):
-        # A numpy scalar as the Python value it holds.
+        # A numpy scalar as the Python value it holds. A numpy date or duration stays what it is: its
+        # own item() gives a bare integer in nanoseconds or past Python's years.
         get = getattr(x, "item", None)
         if get is not None and getattr(x, "shape", None) == ():
+            if getattr(getattr(x, "dtype", None), "kind", None) in ("M", "m"):
+                return x[()]
             try:
                 return get()
             except Exception:
@@ -264,9 +317,16 @@ def _gridcraft_worker():
                 raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
             labels = not default_index(v.index)
             return [([item(label)] if labels else []) + [blank(x)] for label, x in zip(v.index, v.tolist())]
+        if module == "pandas" and name in ("DatetimeIndex", "TimedeltaIndex"):
+            if len(v) > MAX_ARRAY_CELLS:
+                raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
+            return [[x] for x in v.tolist()]
         if module == "numpy" and name == "ndarray" and v.ndim in (1, 2):
             if v.size > MAX_ARRAY_CELLS:
                 raise TooBig("A result can have at most %d cells" % MAX_ARRAY_CELLS)
+            if v.dtype.kind in ("M", "m"):
+                # tolist() gives bare integers for nanoseconds: the elements keep their units.
+                return [[x] for x in v] if v.ndim == 1 else [list(r) for r in v]
             return [[x] for x in v.tolist()] if v.ndim == 1 else v.tolist()
         return None
 
@@ -276,6 +336,99 @@ def _gridcraft_worker():
         except (OverflowError, ValueError, TypeError):
             return {"error": "#NUM!"}
         return f if math.isfinite(f) else {"error": "#NUM!"}
+
+    # Dates and durations, for a result. What Python can spell goes out as it is; GridCraft alone turns
+    # it into a serial number, and gives #NUM! for what a serial can't hold.
+    DAY_ATTOSECONDS = 86400 * 10**18
+    NUMPY_UNITS = {
+        "W": 7 * DAY_ATTOSECONDS,
+        "D": DAY_ATTOSECONDS,
+        "h": 3600 * 10**18,
+        "m": 60 * 10**18,
+        "s": 10**18,
+        "ms": 10**15,
+        "us": 10**12,
+        "ns": 10**9,
+        "ps": 10**6,
+        "fs": 10**3,
+        "as": 1,
+    }
+    NUMPY_NAT = -(2**63)
+
+    def day_text(v):
+        return "%04d-%02d-%02d" % (v.year, v.month, v.day)
+
+    def clock_text(v):
+        text = "%02d:%02d:%02d" % (v.hour, v.minute, v.second)
+        return text + (".%06d" % v.microsecond if v.microsecond else "")
+
+    def date_on_wire(key, text):
+        return {key: text} if len(text) <= MAX_DATE_BYTES else {"error": "#NUM!"}
+
+    def moment_on_wire(v, date_only_at_midnight):
+        # The attributes are the local wall-clock time, whatever time zone the value has: Excel has
+        # no time zones.
+        clock = clock_text(v)
+        if date_only_at_midnight and clock == "00:00:00":
+            return date_on_wire("date", day_text(v))
+        return date_on_wire("dateTime", day_text(v) + "T" + clock)
+
+    def numpy_ticks(x):
+        # How many of its unit a numpy date or duration holds, as a Python integer, since numpy's own
+        # conversions between units overflow without a word. None for NaT.
+        unit, count = sys.modules["numpy"].datetime_data(x.dtype)
+        n = int(x.astype("int64"))
+        return None if n == NUMPY_NAT else (unit, n * count)
+
+    def numpy_date_on_wire(x):
+        ticks = numpy_ticks(x)
+        if ticks is None:
+            return None
+        unit, n = ticks
+        try:
+            if unit in ("Y", "M"):
+                years, months = (n, 0) if unit == "Y" else divmod(n, 12)
+                return date_on_wire("date", day_text(datetime.date(1970 + years, months + 1, 1)))
+            days, rest = divmod(n * NUMPY_UNITS[unit], DAY_ATTOSECONDS)
+            moment = datetime.datetime(1970, 1, 1) + datetime.timedelta(days=days, microseconds=rest // 10**12)
+        except (KeyError, OverflowError, ValueError):
+            # Past Python's years: no serial holds it either.
+            return {"error": "#NUM!"}
+        return moment_on_wire(moment, True)
+
+    def numpy_duration_on_wire(x):
+        ticks = numpy_ticks(x)
+        if ticks is None:
+            return None
+        unit, n = ticks
+        # Years and months have no length in days.
+        if unit not in NUMPY_UNITS:
+            return {"error": "#NUM!"}
+        try:
+            return {"duration": n * NUMPY_UNITS[unit] / DAY_ATTOSECONDS}
+        except OverflowError:
+            return {"error": "#NUM!"}
+
+    def date_scalar(v):
+        """A date, a time or a duration in its wire form, or NOT_SCALAR for anything else. pandas's
+        Timestamp, Timedelta and NaT are subclasses of the datetime classes. pandas and numpy have
+        no type for a date without a time, so midnight there means just the date."""
+        name = type(v).__name__
+        if name == "NaTType":
+            return None
+        if (type(v).__module__ or "").split(".")[0] == "numpy":
+            if name == "datetime64":
+                return numpy_date_on_wire(v)
+            return numpy_duration_on_wire(v) if name == "timedelta64" else NOT_SCALAR
+        if isinstance(v, datetime.datetime):
+            return moment_on_wire(v, name == "Timestamp")
+        if isinstance(v, datetime.date):
+            return date_on_wire("date", day_text(v))
+        if isinstance(v, datetime.time):
+            return date_on_wire("time", clock_text(v))
+        if isinstance(v, datetime.timedelta):
+            return {"duration": float(v / datetime.timedelta(days=1))}
+        return NOT_SCALAR
 
     def scalar(v):
         v = item(v)
@@ -291,7 +444,10 @@ def _gridcraft_worker():
             return str(v)
         if isinstance(v, ExcelError):
             return {"error": v.text} if v.text in ERRORS else {"error": "#VALUE!"}
-        return NOT_SCALAR
+        try:
+            return date_scalar(v)
+        except Exception:
+            return {"error": "#VALUE!"}
 
     def safe_repr(v):
         try:

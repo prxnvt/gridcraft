@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use gridcraft_core::{Array, CellError, Value};
 use gridcraft_python::interp::{self, Detection, SearchEnv};
 use gridcraft_python::process::ProcessTransport;
-use gridcraft_python::{Client, Input, Limits, Outcome, Output, PyError, RunResult, SelfTest, Transport};
+use gridcraft_python::{Client, Clock, Dated, Day, Input, Limits, Outcome, Output, PyError, RunResult, SelfTest, Stamp, Transport};
 
 fn python() -> Option<PathBuf> {
     let env = SearchEnv::from_process();
@@ -397,4 +397,356 @@ fn the_return_type_decides_between_cells_and_an_object() {
         panic!("number")
     };
     assert_eq!(n, 3.0);
+}
+
+const JAN15: Day = Day { year: 2024, month: 1, day: 15 };
+const CLOCK: Clock = Clock { hour: 10, minute: 30, second: 5, micro: 250_000 };
+const NOON: Clock = Clock { hour: 12, minute: 0, second: 0, micro: 0 };
+
+fn one(stamp: Stamp) -> Input {
+    Input { value: Value::Empty, headers: None, stamps: vec![(0, stamp)] }
+}
+
+fn day(year: i32, month: u8, day: u8) -> Stamp {
+    Stamp::Date(Day { year, month, day })
+}
+
+fn dated_scalar(stamp: Stamp) -> Output {
+    Output::Dated(Dated { value: Value::Empty, stamps: vec![(0, stamp)] })
+}
+
+fn output(o: Outcome) -> Output {
+    match o {
+        Outcome::Ok { output, .. } => output,
+        other => panic!("not a result: {other:?}"),
+    }
+}
+
+/// `import datetime` and the code, on a client, as its output.
+fn with_datetime(c: &mut Client, code: &str) -> Output {
+    output(run(c, &format!("import datetime\n{code}")))
+}
+
+/// The shim gives `xl()` real `datetime` values, with no serial number in sight.
+#[test]
+fn xl_gives_dates_and_times() {
+    let Some(py) = python() else { return };
+    let mut c = client(py);
+    let inputs = BTreeMap::from([
+        ("A1".to_string(), one(Stamp::Date(JAN15))),
+        ("A2".to_string(), one(Stamp::DateTime(JAN15, CLOCK))),
+        ("A3".to_string(), one(Stamp::Time(CLOCK))),
+        (
+            "B1:C2".to_string(),
+            Input {
+                value: array(2, 2, vec![Value::Empty, Value::text("x"), Value::Number(60.0), Value::Empty]),
+                headers: None,
+                stamps: vec![(0, Stamp::Date(JAN15)), (3, Stamp::Time(CLOCK))],
+            },
+        ),
+    ]);
+    let answer = |c: &mut Client, code: &str| value(c.run(code, inputs.clone()).unwrap());
+    assert_eq!(answer(&mut c, "type(xl('A1')).__name__"), Value::text("date"));
+    assert_eq!(answer(&mut c, "xl('A1').isoformat()"), Value::text("2024-01-15"));
+    assert_eq!(answer(&mut c, "type(xl('A2')).__name__"), Value::text("datetime"));
+    assert_eq!(answer(&mut c, "xl('A2').isoformat()"), Value::text("2024-01-15T10:30:05.250000"));
+    assert_eq!(answer(&mut c, "type(xl('A3')).__name__"), Value::text("time"));
+    assert_eq!(answer(&mut c, "xl('A3').isoformat()"), Value::text("10:30:05.250000"));
+    // In a range, without pandas: a list of rows, each cell what it is.
+    assert_eq!(
+        answer(&mut c, "[[type(x).__name__ for x in r] for r in xl('B1:C2')]"),
+        array(2, 2, vec![Value::text("date"), Value::text("str"), Value::text("int"), Value::text("time")])
+    );
+    assert_eq!(answer(&mut c, "xl('B1:C2')[1][0]"), Value::Number(60.0), "a serial that names no day stays a number");
+    // They are real values: arithmetic works, and the round trip gives a date back.
+    assert_eq!(answer(&mut c, "(xl('A1') - __import__('datetime').date(2024, 1, 1)).days"), Value::Number(14.0));
+    assert_eq!(output(c.run("xl('A1') + __import__('datetime').timedelta(days=1)", inputs.clone()).unwrap()), dated_scalar(day(2024, 1, 16)));
+    assert_eq!(c.starts(), 1);
+}
+
+#[test]
+fn date_results_go_out_as_dates() {
+    let Some(py) = python() else { return };
+    let mut c = client(py);
+    assert_eq!(with_datetime(&mut c, "datetime.date(2024, 1, 15)"), dated_scalar(Stamp::Date(JAN15)));
+    assert_eq!(with_datetime(&mut c, "datetime.datetime(2024, 1, 15, 10, 30, 5, 250000)"), dated_scalar(Stamp::DateTime(JAN15, CLOCK)));
+    // A datetime is a datetime, even at midnight.
+    assert_eq!(with_datetime(&mut c, "datetime.datetime(2024, 1, 15)"), dated_scalar(Stamp::DateTime(JAN15, Clock::MIDNIGHT)));
+    assert_eq!(with_datetime(&mut c, "datetime.time(10, 30, 5, 250000)"), dated_scalar(Stamp::Time(CLOCK)));
+    assert_eq!(with_datetime(&mut c, "datetime.timedelta(days=1, hours=12)"), dated_scalar(Stamp::Duration(1.5)));
+    assert_eq!(with_datetime(&mut c, "-datetime.timedelta(days=2)"), dated_scalar(Stamp::Duration(-2.0)));
+    // A time zone only says where the wall clock is.
+    assert_eq!(
+        with_datetime(&mut c, "datetime.datetime(2024, 1, 15, 12, tzinfo=datetime.timezone(datetime.timedelta(hours=9)))"),
+        dated_scalar(Stamp::DateTime(JAN15, NOON))
+    );
+    assert_eq!(with_datetime(&mut c, "datetime.time(12, tzinfo=datetime.timezone.utc)"), dated_scalar(Stamp::Time(NOON)));
+    // Python's own extremes go out as they are; the parent says what a serial holds.
+    assert_eq!(with_datetime(&mut c, "datetime.date.min"), dated_scalar(day(1, 1, 1)));
+    assert_eq!(with_datetime(&mut c, "datetime.date.max"), dated_scalar(day(9999, 12, 31)));
+    assert_eq!(
+        with_datetime(&mut c, "datetime.datetime.max"),
+        dated_scalar(Stamp::DateTime(Day { year: 9999, month: 12, day: 31 }, Clock { hour: 23, minute: 59, second: 59, micro: 999_999 }))
+    );
+    assert_eq!(with_datetime(&mut c, "datetime.timedelta.max"), dated_scalar(Stamp::Duration(999_999_999.0 + 86_399.999_999 / 86_400.0)));
+    // Across a spill, among other values, and in a list as in a list of lists.
+    assert_eq!(
+        with_datetime(&mut c, "[[datetime.date(2024, 1, 15), 'x'], [3, datetime.time(12)]]"),
+        Output::Dated(Dated {
+            value: array(2, 2, vec![Value::Empty, Value::text("x"), Value::Number(3.0), Value::Empty]),
+            stamps: vec![(0, Stamp::Date(JAN15)), (3, Stamp::Time(NOON))],
+        })
+    );
+    assert_eq!(
+        with_datetime(&mut c, "[datetime.date(2024, 1, 15), None]"),
+        Output::Dated(Dated { value: array(2, 1, vec![Value::Empty, Value::Empty]), stamps: vec![(0, Stamp::Date(JAN15))] })
+    );
+    assert_eq!(c.starts(), 1, "none of these cost a worker");
+}
+
+/// A million of the longest dates fit in a line, so a big result of them reaches the cells.
+#[test]
+fn a_million_dates_stay_within_the_caps() {
+    let Some(py) = python() else { return };
+    let mut c = Client::new(
+        Box::new(ProcessTransport::new(py)),
+        Limits { timeout: Duration::from_secs(120), start_timeout: Duration::from_secs(20), ..Limits::default() },
+    );
+    match with_datetime(&mut c, "[[datetime.datetime(2024, 1, 15, 10, 30, 5, 250000)] * 1000] * 1000") {
+        Output::Dated(Dated { value: Value::Array(a), stamps }) => {
+            assert_eq!(((a.rows, a.cols), stamps.len()), ((1000, 1000), 1_000_000));
+            assert_eq!(stamps.last(), Some(&(999_999, Stamp::DateTime(JAN15, CLOCK))));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(c.starts(), 1);
+}
+
+/// A class of the cell's own that claims to be a date can't break the protocol or the run.
+#[test]
+fn a_date_that_lies_about_itself_costs_nothing() {
+    let Some(py) = python() else { return };
+    let mut c = client(py);
+    let class = "class D(datetime.date):\n    __slots__ = ()\n    year = property(lambda self: {year})\n";
+    let d = "D(2024, 1, 15)";
+    assert_eq!(with_datetime(&mut c, &format!("{}{d}", class.replace("{year}", "1/0"))), Output::Value(Value::Error(CellError::Value)));
+    assert_eq!(with_datetime(&mut c, &format!("{}{d}", class.replace("{year}", "'x'"))), Output::Value(Value::Error(CellError::Value)));
+    // A year too long for the protocol's cap is no date any serial holds.
+    assert_eq!(with_datetime(&mut c, &format!("{}{d}", class.replace("{year}", "10 ** 100"))), Output::Value(Value::Error(CellError::Num)));
+    assert_eq!(value(run(&mut c, "2 + 2")), Value::Number(4.0));
+    assert_eq!(c.starts(), 1);
+}
+
+/// A client on the interpreter in `GRIDCRAFT_TEST_PYTHON`, which has numpy and pandas.
+fn client_with_pandas() -> Option<Client> {
+    let Some(python) = std::env::var_os("GRIDCRAFT_TEST_PYTHON") else {
+        println!("skipped: GRIDCRAFT_TEST_PYTHON isn't set, so there is no pandas");
+        return None;
+    };
+    let found = gridcraft_python::describe::describe(&PathBuf::from(python), Duration::from_secs(30)).unwrap();
+    let transport = ProcessTransport::new(found.run_as).with_site_dirs(found.site_dirs);
+    Some(Client::new(Box::new(transport), Limits { timeout: Duration::from_secs(120), start_timeout: Duration::from_secs(60), ..Limits::default() }))
+}
+
+fn numpy_code(c: &mut Client, code: &str) -> Output {
+    output(run(c, &format!("import numpy, datetime\n{code}")))
+}
+
+/// numpy's own conversions give bare integers in nanoseconds and past Python's years, and overflow
+/// without a word.
+#[test]
+fn numpy_dates_and_durations_keep_their_units() {
+    let Some(mut c) = client_with_pandas() else { return };
+    let moment = |unit: &str, text: &str| format!("numpy.datetime64('{text}', '{unit}')");
+    for (unit, text, want) in [
+        ("Y", "2024", day(2024, 1, 1)),
+        ("M", "2024-03", day(2024, 3, 1)),
+        ("M", "1969-12", day(1969, 12, 1)),
+        // numpy counts whole weeks from a Thursday, 1 January 1970.
+        ("W", "2024-01-15", day(2024, 1, 11)),
+        ("D", "2024-01-15", Stamp::Date(JAN15)),
+        ("D", "1900-01-01", day(1900, 1, 1)),
+        ("h", "2024-01-15T12", Stamp::DateTime(JAN15, NOON)),
+        ("h", "2024-01-15T00", Stamp::Date(JAN15)),
+        ("m", "2024-01-15T12:00", Stamp::DateTime(JAN15, NOON)),
+        ("s", "2024-01-15T12:00:00", Stamp::DateTime(JAN15, NOON)),
+        ("ms", "2024-01-15T10:30:05.250", Stamp::DateTime(JAN15, CLOCK)),
+        ("us", "2024-01-15T10:30:05.250000", Stamp::DateTime(JAN15, CLOCK)),
+        ("ns", "2024-01-15T10:30:05.250000000", Stamp::DateTime(JAN15, CLOCK)),
+        ("ns", "2024-01-15", Stamp::Date(JAN15)),
+        // Picoseconds only reach some weeks from 1970.
+        ("ps", "1970-01-15T10:30:05.250000000000", Stamp::DateTime(Day { year: 1970, month: 1, day: 15 }, CLOCK)),
+    ] {
+        assert_eq!(numpy_code(&mut c, &moment(unit, text)), dated_scalar(want), "{text} in {unit}");
+    }
+    // Before the epoch, and with a count in the unit.
+    assert_eq!(
+        numpy_code(&mut c, "numpy.datetime64('1900-03-01T06:00:00', 's')"),
+        dated_scalar(Stamp::DateTime(Day { year: 1900, month: 3, day: 1 }, Clock { hour: 6, ..NOON }))
+    );
+    assert_eq!(numpy_code(&mut c, "numpy.datetime64(3, '10D')"), dated_scalar(day(1970, 1, 31)));
+    // A zero-dimensional array is its element.
+    assert_eq!(numpy_code(&mut c, "numpy.array(numpy.datetime64('2024-01-15'))"), dated_scalar(Stamp::Date(JAN15)));
+    // NaT, in every form, is an empty cell.
+    for nat in ["numpy.datetime64('NaT')", "numpy.datetime64('NaT', 'ns')", "numpy.timedelta64('NaT')", "numpy.timedelta64('NaT', 's')"] {
+        assert_eq!(numpy_code(&mut c, nat), Output::Value(Value::Empty), "{nat}");
+    }
+    // Past Python's years, in units where numpy would wrap around: no serial holds them.
+    for far in [
+        "numpy.datetime64(10**15, 'Y')",
+        "numpy.datetime64(-(10**15), 'Y')",
+        "numpy.datetime64(10**15, 'D')",
+        "numpy.datetime64('12345-01-01', 'D')",
+        "numpy.datetime64(9 * 10**18, 'W')",
+    ] {
+        assert_eq!(numpy_code(&mut c, far), Output::Value(Value::Error(CellError::Num)), "{far}");
+    }
+    // Durations.
+    for (code, days) in [
+        ("numpy.timedelta64(36, 'h')", 1.5),
+        ("numpy.timedelta64(36 * 3600 * 10**9, 'ns')", 1.5),
+        ("numpy.timedelta64(-2, 'D')", -2.0),
+        ("numpy.timedelta64(1, 'W')", 7.0),
+        ("numpy.timedelta64(86400, 's')", 1.0),
+        ("numpy.array(numpy.timedelta64(1, 'D'))", 1.0),
+    ] {
+        assert_eq!(numpy_code(&mut c, code), dated_scalar(Stamp::Duration(days)), "{code}");
+    }
+    assert_eq!(numpy_code(&mut c, "numpy.timedelta64(9 * 10**18, 'W')"), dated_scalar(Stamp::Duration(9e18 * 7.0)), "the parent says it is too long");
+    for no_length in ["numpy.timedelta64(1, 'M')", "numpy.timedelta64(1, 'Y')"] {
+        assert_eq!(numpy_code(&mut c, no_length), Output::Value(Value::Error(CellError::Num)), "{no_length}: no length in days");
+    }
+    // Arrays, whose tolist() gives bare integers in nanoseconds.
+    assert_eq!(
+        numpy_code(&mut c, "numpy.array(['2024-01-15', 'NaT'], dtype='datetime64[ns]')"),
+        Output::Dated(Dated { value: array(2, 1, vec![Value::Empty, Value::Empty]), stamps: vec![(0, Stamp::Date(JAN15))] })
+    );
+    assert_eq!(
+        numpy_code(&mut c, "numpy.array([['2024-01-15T12:00', '2024-01-15']], dtype='datetime64[ns]')"),
+        Output::Dated(Dated {
+            value: array(1, 2, vec![Value::Empty, Value::Empty]),
+            stamps: vec![(0, Stamp::DateTime(JAN15, NOON)), (1, Stamp::Date(JAN15))]
+        })
+    );
+    assert_eq!(
+        numpy_code(&mut c, "numpy.array([86400 * 10**9], dtype='timedelta64[ns]')"),
+        Output::Dated(Dated { value: array(1, 1, vec![Value::Empty]), stamps: vec![(0, Stamp::Duration(1.0))] })
+    );
+    assert_eq!(c.starts(), 1, "none of these cost a worker");
+}
+
+fn pandas_code(c: &mut Client, code: &str) -> Output {
+    output(run(c, &format!("import pandas, numpy, datetime\n{code}")))
+}
+
+#[test]
+fn pandas_results_come_back_as_dates() {
+    let Some(mut c) = client_with_pandas() else { return };
+    // pandas has no date without a time: midnight means the date.
+    assert_eq!(pandas_code(&mut c, "pandas.Timestamp('2024-01-15')"), dated_scalar(Stamp::Date(JAN15)));
+    assert_eq!(pandas_code(&mut c, "pandas.Timestamp('2024-01-15 10:30:05.25')"), dated_scalar(Stamp::DateTime(JAN15, CLOCK)));
+    // Its wall clock, in whatever time zone.
+    assert_eq!(pandas_code(&mut c, "pandas.Timestamp('2024-01-15 12:00', tz='Asia/Tokyo')"), dated_scalar(Stamp::DateTime(JAN15, NOON)));
+    assert_eq!(pandas_code(&mut c, "pandas.Timedelta(hours=36)"), dated_scalar(Stamp::Duration(1.5)));
+    assert_eq!(pandas_code(&mut c, "pandas.NaT"), Output::Value(Value::Empty));
+    assert_eq!(pandas_code(&mut c, "[pandas.NaT, 1]"), Output::Value(array(2, 1, vec![Value::Empty, Value::Number(1.0)])));
+    // A DataFrame's date column under its header, with a missing value.
+    assert_eq!(
+        pandas_code(&mut c, "pandas.DataFrame({'when': pandas.to_datetime(['2024-01-15', None]), 'n': [1, 2]})"),
+        Output::Dated(Dated {
+            value: array(3, 2, vec![Value::text("when"), Value::text("n"), Value::Empty, Value::Number(1.0), Value::Empty, Value::Number(2.0)]),
+            stamps: vec![(2, Stamp::Date(JAN15))],
+        })
+    );
+    // Time zones and durations in a column, and a date in the row labels.
+    assert_eq!(
+        pandas_code(
+            &mut c,
+            "pandas.DataFrame({'at': pandas.to_datetime(['2024-01-15 12:00']).tz_localize('Asia/Tokyo'), 'for': [pandas.Timedelta(days=1)]}, index=pandas.to_datetime(['2024-01-15']))"
+        ),
+        Output::Dated(Dated {
+            value: array(2, 3, vec![Value::text(""), Value::text("at"), Value::text("for"), Value::Empty, Value::Empty, Value::Empty]),
+            stamps: vec![(3, Stamp::Date(JAN15)), (4, Stamp::DateTime(JAN15, NOON)), (5, Stamp::Duration(1.0))],
+        })
+    );
+    // A Series, the values of a column, and an index of dates.
+    let column = Output::Dated(Dated { value: array(1, 1, vec![Value::Empty]), stamps: vec![(0, Stamp::Date(JAN15))] });
+    assert_eq!(pandas_code(&mut c, "pandas.Series(pandas.to_datetime(['2024-01-15']))"), column);
+    assert_eq!(pandas_code(&mut c, "pandas.Series(pandas.to_datetime(['2024-01-15'])).values"), column);
+    assert_eq!(pandas_code(&mut c, "pandas.to_datetime(['2024-01-15'])"), column);
+    assert_eq!(pandas_code(&mut c, "pandas.Series([pandas.Timestamp('2024-01-15')], dtype=object)"), column);
+    assert_eq!(
+        pandas_code(&mut c, "pandas.to_timedelta(['1 days'])"),
+        Output::Dated(Dated { value: array(1, 1, vec![Value::Empty]), stamps: vec![(0, Stamp::Duration(1.0))] })
+    );
+    // Dates pandas only keeps as objects.
+    assert_eq!(
+        pandas_code(&mut c, "pandas.DataFrame({'d': [datetime.date(9000, 1, 15)]})"),
+        Output::Dated(Dated { value: array(2, 1, vec![Value::text("d"), Value::Empty]), stamps: vec![(1, day(9000, 1, 15))] })
+    );
+    assert_eq!(c.starts(), 1, "none of these cost a worker");
+}
+
+#[test]
+fn a_range_of_dates_is_a_datetime_column() {
+    let Some(mut c) = client_with_pandas() else { return };
+    let stamps = vec![(1, Stamp::Date(JAN15)), (3, Stamp::Date(Day { year: 2024, month: 1, day: 16 }))];
+    let column = Input { value: array(4, 1, vec![Value::text("when"), Value::Empty, Value::Empty, Value::Empty]), headers: None, stamps };
+    let inputs = BTreeMap::from([
+        ("A1:A4".to_string(), column),
+        (
+            // Dates with times, and one past what nanoseconds hold.
+            "B1:B2".to_string(),
+            Input {
+                value: array(2, 1, vec![Value::Empty, Value::Empty]),
+                headers: None,
+                stamps: vec![(0, Stamp::DateTime(JAN15, NOON)), (1, day(9000, 1, 1))],
+            },
+        ),
+        (
+            // A date among other things isn't a date column.
+            "C1:C2".to_string(),
+            Input { value: array(2, 1, vec![Value::Empty, Value::Number(60.0)]), headers: None, stamps: vec![(0, Stamp::Date(JAN15))] },
+        ),
+        (
+            // Times have no column type in pandas.
+            "D1:D1".to_string(),
+            Input { value: array(1, 1, vec![Value::Empty]), headers: None, stamps: vec![(0, Stamp::Time(NOON))] },
+        ),
+    ]);
+    let answer = |c: &mut Client, code: &str| match c.run(code, inputs.clone()).unwrap() {
+        Outcome::Ok { output, .. } => output,
+        other => panic!("{code}: {other:?}"),
+    };
+    let text = |s: &str| Output::Value(Value::text(s));
+    assert_eq!(answer(&mut c, "xl('A1:A4', headers=True).dtypes.iloc[0].kind"), text("M"));
+    assert_eq!(answer(&mut c, "str(xl('A1:A4', headers=True)['when'].iloc[0])[:10]"), text("2024-01-15"));
+    assert_eq!(answer(&mut c, "str(xl('A1:A4', headers=True)['when'].iloc[1])"), text("NaT"), "an empty cell");
+    assert_eq!(answer(&mut c, "xl('B1:B2').dtypes.iloc[0].kind"), text("M"), "the units follow what it holds");
+    assert_eq!(answer(&mut c, "str(xl('B1:B2').iloc[1, 0])[:10]"), text("9000-01-01"));
+    assert_eq!(answer(&mut c, "xl('C1:C2').dtypes.iloc[0].kind"), text("O"));
+    assert_eq!(answer(&mut c, "type(xl('C1:C2').iloc[0, 0]).__name__"), text("date"));
+    assert_eq!(answer(&mut c, "type(xl('D1:D1').iloc[0, 0]).__name__"), text("time"));
+    // Add a day to the column and return it: the round trip of a DataFrame.
+    assert_eq!(
+        answer(&mut c, "d = xl('A1:A4', headers=True)\nd['when'] = d['when'] + pd.Timedelta(days=1)\nd"),
+        Output::Dated(Dated {
+            value: array(4, 1, vec![Value::text("when"), Value::Empty, Value::Empty, Value::Empty]),
+            stamps: vec![(1, day(2024, 1, 16)), (3, day(2024, 1, 17))],
+        })
+    );
+}
+
+/// The stand-in for pandas isn't pandas: looking for date columns in it must not raise.
+#[test]
+fn a_range_of_dates_survives_a_pandas_it_cannot_ask() {
+    let Some(p) = python() else { return };
+    let site = fake_pandas("dates");
+    let mut c = Client::new(Box::new(ProcessTransport::new(p).with_site_dirs(vec![site.clone()])), Limits::default());
+    let inputs = BTreeMap::from([(
+        "A1:A1".to_string(),
+        Input { value: array(1, 1, vec![Value::Empty]), headers: None, stamps: vec![(0, Stamp::Date(JAN15))] },
+    )]);
+    assert_eq!(value(c.run("xl('A1:A1').rows[0][0].isoformat()", inputs).unwrap()), Value::text("2024-01-15"));
+    std::fs::remove_dir_all(site).unwrap();
 }
