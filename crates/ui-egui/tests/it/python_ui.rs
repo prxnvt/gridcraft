@@ -41,6 +41,11 @@ fn worker() -> FakeTransport {
                     w.stall();
                     false
                 }
+                "spill" => {
+                    let cells = vec![gridcraft_engine::core::Value::Number(1.0), gridcraft_engine::core::Value::Number(2.0)];
+                    let array = gridcraft_engine::core::Array { rows: 2, cols: 1, data: cells };
+                    w.done(id, Ok(Output::Value(gridcraft_engine::core::Value::Array(Arc::new(array)))))
+                }
                 "fail" => w.done(id, Err(PyError { message: "ValueError: boom".into(), line: Some(2), ..PyError::default() })),
                 other => match other.strip_prefix("print ") {
                     Some(text) => w.send(&Reply::Done { id, result: value, stdout: format!("{text}\n"), peak: None }),
@@ -1555,4 +1560,27 @@ fn run_cell_on_a_draft_enters_the_code_and_runs_it() {
     assert!(h.state().editor.is_none());
     let value = h.state().session.active().unwrap().wb.active().unwrap().value(gridcraft_engine::core::CellRef::parse("B2").unwrap());
     assert_eq!(value, gridcraft_engine::core::Value::Number(9.0));
+}
+
+/// A cell a Python result spilled into shows the code in the code's font, greyed and read-only. A
+/// formula's spill stays in the interface's font.
+#[test]
+fn a_python_spill_shows_its_code_in_the_codes_font() {
+    let (mut h, _handle) = Setup::new().build();
+    h.state_mut().run("python.set", json!({"cell": "D4", "code": "spill"})).unwrap();
+    settle(&mut h);
+    select_cell(&mut h, "D5");
+    assert!(bar(&h).code_font, "the spill child");
+    assert!(h.state().editor.is_none());
+    let field = bar(&h).field.center();
+    click_at(&mut h, field);
+    assert!(h.state().editor.is_none(), "read-only: the code is edited at its anchor");
+    h.state_mut().run("cell.set", json!({"cell": "F4", "input": "=SEQUENCE(2)"})).unwrap();
+    h.run_steps(3);
+    select_cell(&mut h, "F5");
+    assert!(!bar(&h).code_font, "a formula's spill child");
+    select_cell(&mut h, "H9");
+    assert!(!bar(&h).code_font, "a plain cell");
+    select_cell(&mut h, "D4");
+    assert!(bar(&h).code_font, "the Python cell itself");
 }

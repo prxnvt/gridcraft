@@ -260,6 +260,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | A cell a Python result spilled into shows the code greyed in the code's font in the formula bar, not the interface's |
 | 2026-11-05 | minor | On a Python cell the formula bar's PY badge takes the place of fx, with a Run Cell triangle a line below it (the bar is at least two lines there); fx stays on every other cell |
 | 2026-11-05 | minor | A save waits for running Python cells: the bar with Save Now and Cancel, the cap and the message naming the cells, AutoSave, Close and Quit during a wait |
 | 2026-11-05 | minor | A Python object's card: its name and size in the cell and on the card, a virtualised grid of its table with what was left out, Copy as CSV and Markdown, Save as .csv through the native picker, Spill Here, and Spill One Line per Row for a text with line breaks |

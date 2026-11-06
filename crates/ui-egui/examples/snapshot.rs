@@ -96,7 +96,11 @@ fn fake_worker() -> FakeTransport {
                 line,
             };
             let frame = code.strip_prefix("frame ").and_then(|size| size.split_once(' ')).and_then(|(r, c)| Some((r.parse().ok()?, c.parse().ok()?)));
-            let sent = if code == "hang" {
+            let sent = if code.contains("spill") {
+                use gridcraft_engine::core::{Array, Value};
+                let cells = vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)];
+                w.done(id, Ok(Output::Value(Value::Array(std::sync::Arc::new(Array { rows: 3, cols: 1, data: cells })))))
+            } else if code == "hang" {
                 w.stall();
                 false
             } else if let Some((rows, cols)) = frame {

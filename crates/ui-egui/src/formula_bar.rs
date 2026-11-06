@@ -51,6 +51,9 @@ pub struct BarLayout {
     pub fx: Option<Rect>,
     /// Run Cell, when it is shown: on a Python cell.
     pub run_cell: Option<Rect>,
+    /// The field shows Python code in the code editor's font, not being edited: on a Python cell or
+    /// a cell its result spilled into.
+    pub code_font: bool,
     pub field: Rect,
     pub height: f32,
     /// Laid-out lines of the content (wrapped to the field), and how many show without scrolling.
@@ -69,6 +72,7 @@ impl Default for BarLayout {
             buttons: Rect::NOTHING,
             fx: None,
             run_cell: None,
+            code_font: false,
             field: Rect::NOTHING,
             height: 0.0,
             lines: 1,
@@ -175,9 +179,14 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     // colours); clicking starts editing in the bar.
                     let text = active_input(app);
                     let color = if read_only { t.text_disabled } else { t.text };
-                    let galley = if active_python(app).is_some() && !read_only {
+                    let python = active_python(app).is_some();
+                    layout.code_font = python;
+                    let galley = if python && !read_only {
                         let job = code_editor::layout_job(&text, Lang::Python, &code_editor::font(), color, &t.syntax, inner.width());
                         child.fonts_mut(|f| f.layout_job(job))
+                    } else if python {
+                        // A cell a Python result spilled into: the code as code, greyed.
+                        child.painter().layout(text, code_editor::font(), color, inner.width())
                     } else {
                         child.painter().layout(text, font.clone(), color, inner.width())
                     };
