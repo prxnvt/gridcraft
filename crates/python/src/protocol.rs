@@ -311,7 +311,7 @@ const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 /// Standard base64, padded. `None` for anything else.
 fn from_base64(text: &str) -> Option<Vec<u8>> {
     let bytes = text.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
@@ -324,7 +324,7 @@ fn from_base64(text: &str) -> Option<Vec<u8>> {
         _ => None,
     };
     let count = bytes.len() / 4;
-    for (index, group) in bytes.chunks_exact(4).enumerate() {
+    for (index, group) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let padding = if index + 1 == count { group.iter().rev().take_while(|b| **b == b'=').count() } else { 0 };
         if padding > 2 {
             return None;
@@ -401,8 +401,9 @@ pub enum SelfTest {
     Failed(String),
 }
 
-/// Worker to parent.
+/// Worker to parent. Nearly every reply is the large variant, so boxing it would save nothing.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Reply {
     /// The worker started.
     Ready { self_test: SelfTest },
