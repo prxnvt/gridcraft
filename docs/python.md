@@ -1,6 +1,6 @@
 # Python in cells
 
-> **Last updated:** 2026-11-05 · **Change:** minor (the formula bar's PY badge and Run Cell; earlier: saving while cells run; earlier: dates and times, in and out of Python; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
+> **Last updated:** 2026-11-06 · **Change:** minor (reading a saved file with openpyxl; earlier: the formula bar's PY badge and Run Cell; earlier: saving while cells run; earlier: dates and times, in and out of Python; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
 
 A Python cell runs code you write, in your own Python, on your computer. GridCraft never downloads
 Python and never installs packages. It finds the Python you have, and it runs your code in a sandbox
@@ -232,6 +232,76 @@ calculation doesn't make a save wait.
   and the quit stops.
 - A workbook that closes during its wait isn't saved.
 
+## Reading a saved file with openpyxl
+
+A script outside GridCraft can open a saved workbook with openpyxl. A cell's own Python can't: the
+sandbox refuses to open a file.
+
+**What openpyxl can read:**
+
+- **Pictures over the cells.** `ws._images` gives the anchor, the size and the bytes of each. A picture
+  linked to a Python cell has the description `gridcraft:python:<n>:<reference>:<alt>`, in
+  `image.anchor.pic.nvPicPr.cNvPr.descr`. `<n>` is the length of the reference in characters, because a
+  sheet name can hold any separator.
+- **The picture of a Python cell, with either return type.** It is in `ws._images` too: hidden
+  (`cNvPr.hidden`), anchored on the cell, named `Python G5`, with the description
+  `gridcraft:pythonCell:<cell>:<density>:<alt>`. The density is how many of its pixels stand for one of
+  the size the card reports, 1 or 2.
+- **Python cells.** `load_workbook()` gives the formula, such as `=_xlfn._xlws.PY(0,1)`. With
+  `data_only=True`, a Python Object cell whose result is a picture gives the text `Image`.
+
+```python
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+
+wb = load_workbook("book.xlsx")
+for ws in wb.worksheets:
+    for image in ws._images:
+        start, props = image.anchor._from, image.anchor.pic.nvPicPr.cNvPr
+        print(get_column_letter(start.col + 1), start.row + 1, props.hidden, props.descr)
+```
+
+**What can't be done, because of how openpyxl is written:**
+
+- **A cell picture as a cell value.** openpyxl doesn't read rich values, so an Excel Value cell whose
+  result is a picture reads as `#VALUE!`. Its picture is in `ws._images`, as above.
+- **Python code through openpyxl's interface.** openpyxl doesn't read `xl/python.xml`. It is an ordinary
+  part of the package, so a script can read it with `zipfile`:
+  `zipfile.ZipFile("book.xlsx").read("xl/python.xml")`.
+- **Keeping Python cells through `wb.save()`.** openpyxl removes the parts it doesn't model, so the code
+  and the rich values go, and GridCraft can't prevent this. The pictures stay, with their descriptions.
+  GridCraft shows them as floating pictures when it opens that file, and warns about the code.
+
+**How the file says so.** A workbook with Python cells has two custom document properties:
+
+- **At load:** a property of type `vt:bstr` whose name is a sentence, which openpyxl prints:
+  `UserWarning: Unknown type for GridCraft: this workbook has Python cells. openpyxl cannot read their
+  code or in-cell pictures, and wb.save() removes them. See wb.custom_doc_props.` It appears with a plain
+  `load_workbook()`, with `read_only=True` and through `pd.read_excel`. `wb.save()` drops this property.
+- **On request:** the text property read as `wb.custom_doc_props["GridCraft.Python.Notice"].value`, which
+  says where things are. It stays after `wb.save()`, so a later reader learns why the code is gone.
+
+These two aren't your own properties: GridCraft writes them again at each save, and a workbook with no
+Python cells loses them. Custom properties you added stay as they are.
+
+**Two limits of openpyxl:**
+
+- It needs Pillow to read pictures. Without Pillow it drops every picture.
+- Calling an image's `_data()` closes its stream, so a later `wb.save()` raises `ValueError`. To read the
+  bytes and also save, load the workbook twice.
+
+**Opening such a file in GridCraft.** A cell's picture comes back as its result, so a reopened workbook
+shows its saved plots without running code, and `python.image` works on it. What another program did to
+the file costs no picture:
+
+- A picture saved for a Python cell, with no Python cell at its anchor or with a newer value in that cell,
+  shows as a floating picture.
+- A linked picture whose source isn't a Python cell keeps its image and loses its link.
+- A description that doesn't read as either form is a plain picture's alternative text.
+
+How Excel stores a Python image isn't documented, so these are ordinary pictures with marked descriptions.
+How Excel treats them hasn't been tested.
+
 ## Limits
 
 - **Time:** 30 seconds per cell by default, from 1 second to 1 hour, plus 10 seconds for the first
@@ -240,6 +310,8 @@ calculation doesn't make a save wait.
   hard cap.
 - **Results:** at most 1,000,000 cells, and 128 KiB of text in one value.
 - **Printed output:** 1 MiB, then it is cut off.
+- **Pictures in a file:** at most 512 MiB in all, counting each cell's. Past that, a cell saves its code
+  and the word `Image`, and shows its picture again when it runs.
 
 The time and memory limits are in **File › Options › Python**. At a limit Python is restarted and its
 variables are cleared; the next run starts fresh.
