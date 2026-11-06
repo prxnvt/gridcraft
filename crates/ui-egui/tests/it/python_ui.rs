@@ -346,7 +346,7 @@ fn the_page_says_what_automatic_found_or_how_to_set_python_up_with_uv() {
     let (mut h, _) = setup.build();
     open_options(&mut h);
     assert!(h.query_by_label("uv venv ~/.gridcraft/python --python 3.12").is_some());
-    assert!(h.query_by_label("uv pip install --python ~/.gridcraft/python numpy pandas statsmodels").is_some());
+    assert!(h.query_by_label("uv pip install --compile-bytecode --python ~/.gridcraft/python numpy pandas matplotlib seaborn statsmodels").is_some());
     assert!(h.query_by_label("curl -LsSf https://astral.sh/uv/install.sh | sh").is_some(), "no uv, so how to get it");
     // Copying is all it does.
     let copy = h.get_all_by_label("Copy").count();
@@ -1017,7 +1017,7 @@ fn copy_install_command_speaks_uv_and_takes_only_package_names() {
     h.run_steps(3);
     button(&h, copy).click();
     h.step();
-    let expected = "uv pip install --python /home/you/.gridcraft/python/bin/python polars";
+    let expected = "uv pip install --compile-bytecode --python /home/you/.gridcraft/python/bin/python polars";
     assert!(h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == expected)));
     h.run_steps(2);
     // pip is behind the secondary choice.

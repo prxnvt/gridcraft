@@ -294,12 +294,12 @@ mod tests {
             site_dirs: Vec::new(),
             read_paths: Vec::new(),
         };
-        assert_eq!(uv_install_commands(&i, &["pandas"]), vec!["uv pip install --python '/a b/it'\\''s/python' pandas".to_string()]);
+        assert_eq!(uv_install_commands(&i, &["pandas"]), vec!["uv pip install --compile-bytecode --python '/a b/it'\\''s/python' pandas".to_string()]);
         assert_eq!(pip_install_command(&i, &["pandas"]), "'/a b/it'\\''s/python' -m pip install pandas");
         i.kind = Kind::Homebrew;
         assert_eq!(
             uv_install_commands(&i, &["pandas"]),
-            vec!["uv venv ~/.gridcraft/python --python 3.12".to_string(), "uv pip install --python ~/.gridcraft/python pandas".to_string()]
+            vec!["uv venv ~/.gridcraft/python --python 3.12".to_string(), "uv pip install --compile-bytecode --python ~/.gridcraft/python pandas".to_string()]
         );
     }
 }

@@ -1122,7 +1122,7 @@ mod tests {
     fn install_commands_speak_uv_first() {
         assert_eq!(
             install_command(None, &["pandas"]),
-            "uv venv ~/.gridcraft/python --python 3.12 && uv pip install --python ~/.gridcraft/python pandas"
+            "uv venv ~/.gridcraft/python --python 3.12 && uv pip install --compile-bytecode --python ~/.gridcraft/python pandas"
         );
         assert_eq!(pip_command(None, &["pandas"]), "python3 -m pip install pandas");
     }

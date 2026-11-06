@@ -56,9 +56,8 @@ pub struct Interpreter {
     pub read_paths: Vec<PathBuf>,
 }
 
-/// Packages to suggest for a new environment: what Excel's Python makes available first, without
-/// plotting: Python cells don't draw plots, the data goes to a sheet and charts are built from it.
-pub const STARTER_PACKAGES: [&str; 3] = ["numpy", "pandas", "statsmodels"];
+/// Packages to suggest for a new environment: what Excel's Python makes available first.
+pub const STARTER_PACKAGES: [&str; 5] = ["numpy", "pandas", "matplotlib", "seaborn", "statsmodels"];
 /// Installs uv, for a person who doesn't have it.
 pub const UV_INSTALL: &str = "curl -LsSf https://astral.sh/uv/install.sh | sh";
 
@@ -72,12 +71,14 @@ fn quoted(path: &Path) -> String {
 }
 
 /// The commands that make the suggested environment with uv and install `packages` in it. The
-/// search finds that environment first, so nothing else needs choosing.
+/// search finds that environment first, so nothing else needs choosing. Bytecode is compiled at
+/// install time because the sandbox can't write it later: without it, the first plot in every new
+/// worker takes about 10 seconds where it otherwise takes about 0.3.
 pub fn uv_setup_commands(packages: &[&str]) -> Vec<String> {
     let env = format!("~/{}", crate::interp::RECOMMENDED_ENV);
     let mut out = vec![format!("uv venv {env} --python 3.12")];
     if !packages.is_empty() {
-        out.push(format!("uv pip install --python {env} {}", packages.join(" ")));
+        out.push(format!("uv pip install --compile-bytecode --python {env} {}", packages.join(" ")));
     }
     out
 }
@@ -86,7 +87,7 @@ pub fn uv_setup_commands(packages: &[&str]) -> Vec<String> {
 /// environment, otherwise into a new environment, since a Python outside one refuses them.
 pub fn uv_install_commands(interpreter: &Interpreter, packages: &[&str]) -> Vec<String> {
     if interpreter.kind.is_environment() {
-        vec![format!("uv pip install --python {} {}", quoted(&interpreter.path), packages.join(" "))]
+        vec![format!("uv pip install --compile-bytecode --python {} {}", quoted(&interpreter.path), packages.join(" "))]
     } else {
         uv_setup_commands(packages)
     }

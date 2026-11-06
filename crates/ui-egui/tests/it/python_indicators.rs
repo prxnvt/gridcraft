@@ -255,7 +255,7 @@ fn the_card_copies_the_uv_command_for_a_missing_module_and_keeps_pip_behind_a_se
     assert!(h.query_by_label("This Python doesn't have that package.").is_some());
     h.get_by_label("Copy Install Command").click();
     h.step();
-    let uv = format!("uv pip install --python {PYTHON} scikit-learn");
+    let uv = format!("uv pip install --compile-bytecode --python {PYTHON} scikit-learn");
     assert!(h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if *t == uv)), "{uv}");
     h.run_steps(2);
     let pip = format!("{PYTHON} -m pip install scikit-learn");
@@ -603,7 +603,7 @@ fn a_package_the_list_lacks_is_found_in_both_places_with_its_command() {
     assert!(h.query_by_label("This workbook imports packages this Python doesn't have.").is_some());
     h.get_by_label("Copy Install Command").click();
     h.step();
-    let uv = format!("uv pip install --python {PYTHON} scikit-learn");
+    let uv = format!("uv pip install --compile-bytecode --python {PYTHON} scikit-learn");
     assert!(h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if *t == uv)));
 }
 

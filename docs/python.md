@@ -35,7 +35,7 @@ GridCraft copies them; it never runs them. Run them in a terminal, in order.
 ```sh
 curl -LsSf https://astral.sh/uv/install.sh | sh   # only if you don't have uv
 uv venv ~/.gridcraft/python --python 3.12
-uv pip install --python ~/.gridcraft/python numpy pandas statsmodels
+uv pip install --compile-bytecode --python ~/.gridcraft/python numpy pandas matplotlib seaborn statsmodels
 ```
 
 GridCraft looks in `~/.gridcraft/python` first, so there is nothing more to choose. Then choose
