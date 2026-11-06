@@ -1257,9 +1257,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Komórki Pythona nie mogą korzystać z sieci. Umieść dane w arkuszu i odczytaj je za pomocą xl()."
         }
         "Python cells can't start other programs or processes." => "Komórki Pythona nie mogą uruchamiać innych programów ani procesów.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Komórki Pythona nie rysują wykresów. Zwróć dane do arkusza i utwórz z nich wykres."
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Ten obraz jest zbyt duży, aby go narysować. Zmniejsz figsize lub dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Obraz pojawia się w komórce samoczynnie. Komórki Pythona nie mogą zapisywać plików, więc ten wiersz zakończyłby się błędem."
         }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Ten pakiet rysuje w przeglądarce internetowej, której komórki Pythona nie mogą otworzyć. Użyj matplotlib lub seaborn."
+        }
+        "Python Output" => "Dane wyjściowe Pythona",
+        "Display Plot over Cells" => "Wyświetl wykres nad komórkami",
+        "Create Reference" => "Utwórz odwołanie",
+        "Copy Image" => "Kopiuj obraz",
+        "Save Image…" => "Zapisz obraz…",
+        "The image is saved." => "Obraz został zapisany.",
+        "The image is on the clipboard." => "Obraz znajduje się w schowku.",
+        "Image" => "Obraz",
+        "size" => "rozmiar",
+        "Resize" => "Zmień rozmiar",
+        "This picture shows the last result that cell gave." => "Ten obraz pokazuje ostatni wynik zwrócony przez tę komórkę.",
+        "Select a Python cell that gave a picture first." => "Najpierw zaznacz komórkę Pythona, która zwróciła obraz.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() wymaga, aby jego odwołanie było zapisane w kodzie jako tekst, na przykład xl(\"A1:B5\")."
         }

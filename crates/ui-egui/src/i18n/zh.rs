@@ -712,9 +712,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Python 单元格无法使用网络。请将数据放到工作表中，并用 xl() 读取。"
         }
         "Python cells can't start other programs or processes." => "Python 单元格无法启动其他程序或进程。",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Python 单元格不能绘制图表。请将数据返回到工作表，并据此创建图表。"
+        "This picture is too large to draw. Make figsize or dpi smaller." => "这张图片太大，无法绘制。请减小 figsize 或 dpi。",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "图片会自动显示在单元格中。Python 单元格无法写入文件，因此这一行会失败。"
         }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "此包在网页浏览器中绘图，而 Python 单元格无法打开浏览器。请使用 matplotlib 或 seaborn。"
+        }
+        "Python Output" => "Python 输出",
+        "Display Plot over Cells" => "在单元格上方显示绘图",
+        "Create Reference" => "创建引用",
+        "Copy Image" => "复制图片",
+        "Save Image…" => "保存图片…",
+        "The image is saved." => "图片已保存。",
+        "The image is on the clipboard." => "图片已复制到剪贴板。",
+        "Image" => "图片",
+        "size" => "大小",
+        "Resize" => "调整大小",
+        "This picture shows the last result that cell gave." => "此图片显示该单元格最近一次返回的结果。",
+        "Select a Python cell that gave a picture first." => "请先选择返回了图片的 Python 单元格。",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => "xl() 的引用必须以文本形式写在代码中，例如 xl(\"A1:B5\")。",
         "This range is too large to send to Python." => "此区域太大，无法发送给 Python。",
         "xl() names something that isn't a cell, range, table or defined name here." => "xl() 指定的内容在此处不是单元格、区域、表格或已定义的名称。",

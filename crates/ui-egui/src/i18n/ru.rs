@@ -746,9 +746,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Ячейки Python не могут использовать сеть. Поместите данные на лист и прочитайте их через xl()."
         }
         "Python cells can't start other programs or processes." => "Ячейки Python не могут запускать другие программы и процессы.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Ячейки Python не строят графики. Верните данные на лист и создайте из них диаграмму."
+        "This picture is too large to draw. Make figsize or dpi smaller." => {
+            "Это изображение слишком велико для отрисовки. Уменьшите figsize или dpi."
         }
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Изображение появляется в ячейке само. Ячейки Python не могут записывать файлы, поэтому эта строка завершится ошибкой."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Этот пакет рисует в веб-браузере, который ячейки Python не могут открыть. Используйте matplotlib или seaborn."
+        }
+        "Python Output" => "Вывод Python",
+        "Display Plot over Cells" => "Показать график над ячейками",
+        "Create Reference" => "Создать ссылку",
+        "Copy Image" => "Копировать изображение",
+        "Save Image…" => "Сохранить изображение…",
+        "The image is saved." => "Изображение сохранено.",
+        "The image is on the clipboard." => "Изображение находится в буфере обмена.",
+        "Image" => "Изображение",
+        "size" => "размер",
+        "Resize" => "Изменить размер",
+        "This picture shows the last result that cell gave." => "Это изображение показывает последний результат, полученный из этой ячейки.",
+        "Select a Python cell that gave a picture first." => "Сначала выберите ячейку Python, которая вернула изображение.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() требуется ссылка, записанная в коде как текст, например xl(\"A1:B5\")."
         }

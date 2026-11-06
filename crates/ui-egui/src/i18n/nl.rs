@@ -820,9 +820,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Python-cellen kunnen het netwerk niet gebruiken. Zet de gegevens op een blad en lees ze met xl()."
         }
         "Python cells can't start other programs or processes." => "Python-cellen kunnen geen andere programma's of processen starten.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Python-cellen tekenen geen grafieken. Geef de gegevens terug aan een blad en maak daaruit een grafiek."
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Deze afbeelding is te groot om te tekenen. Verklein figsize of dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "De afbeelding verschijnt vanzelf in de cel. Python-cellen kunnen geen bestanden schrijven, dus deze regel zou mislukken."
         }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Dit pakket tekent in een webbrowser, die Python-cellen niet kunnen openen. Gebruik matplotlib of seaborn."
+        }
+        "Python Output" => "Python-uitvoer",
+        "Display Plot over Cells" => "Plot boven cellen weergeven",
+        "Create Reference" => "Verwijzing maken",
+        "Copy Image" => "Afbeelding kopiëren",
+        "Save Image…" => "Afbeelding opslaan…",
+        "The image is saved." => "De afbeelding is opgeslagen.",
+        "The image is on the clipboard." => "De afbeelding staat op het klembord.",
+        "Image" => "Afbeelding",
+        "size" => "grootte",
+        "Resize" => "Formaat wijzigen",
+        "This picture shows the last result that cell gave." => "Deze afbeelding toont het laatste resultaat van die cel.",
+        "Select a Python cell that gave a picture first." => "Selecteer eerst een Python-cel die een afbeelding heeft opgeleverd.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() heeft zijn verwijzing als tekst in de code nodig, zoals xl(\"A1:B5\")."
         }

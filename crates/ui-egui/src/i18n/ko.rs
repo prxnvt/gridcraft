@@ -740,9 +740,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Python 셀은 네트워크를 사용할 수 없습니다. 데이터를 시트에 넣고 xl()로 읽으세요."
         }
         "Python cells can't start other programs or processes." => "Python 셀은 다른 프로그램이나 프로세스를 시작할 수 없습니다.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Python 셀은 플롯을 그리지 않습니다. 데이터를 시트로 반환하고 이를 바탕으로 차트를 만드세요."
+        "This picture is too large to draw. Make figsize or dpi smaller." => "이 그림은 너무 커서 그릴 수 없습니다. figsize 또는 dpi를 줄이세요.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "그림은 셀에 자동으로 나타납니다. Python 셀은 파일을 쓸 수 없으므로 이 줄은 실패합니다."
         }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "이 패키지는 웹 브라우저에서 그리는데, Python 셀은 브라우저를 열 수 없습니다. matplotlib 또는 seaborn을 사용하세요."
+        }
+        "Python Output" => "Python 출력",
+        "Display Plot over Cells" => "셀 위에 플롯 표시",
+        "Create Reference" => "참조 만들기",
+        "Copy Image" => "이미지 복사",
+        "Save Image…" => "이미지 저장…",
+        "The image is saved." => "이미지가 저장되었습니다.",
+        "The image is on the clipboard." => "이미지가 클립보드에 있습니다.",
+        "Image" => "이미지",
+        "size" => "크기",
+        "Resize" => "크기 조정",
+        "This picture shows the last result that cell gave." => "이 그림은 해당 셀이 마지막으로 반환한 결과를 보여 줍니다.",
+        "Select a Python cell that gave a picture first." => "먼저 그림을 반환한 Python 셀을 선택하세요.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl()의 참조는 xl(\"A1:B5\")처럼 코드에 텍스트로 작성해야 합니다."
         }

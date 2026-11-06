@@ -754,9 +754,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Les cellules Python ne peuvent pas utiliser le réseau. Placez les données dans une feuille et lisez-les avec xl()."
         }
         "Python cells can't start other programs or processes." => "Les cellules Python ne peuvent pas démarrer d'autres programmes ni processus.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Les cellules Python ne tracent pas de graphiques. Renvoyez les données dans une feuille et créez-en un graphique."
+        "This picture is too large to draw. Make figsize or dpi smaller." => {
+            "Cette image est trop grande pour être dessinée. Réduisez figsize ou dpi."
         }
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "L'image apparaît d'elle-même dans la cellule. Les cellules Python ne peuvent pas écrire de fichiers, cette ligne échouerait donc."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Ce paquet dessine dans un navigateur web, que les cellules Python ne peuvent pas ouvrir. Utilisez matplotlib ou seaborn."
+        }
+        "Python Output" => "Sortie Python",
+        "Display Plot over Cells" => "Afficher le graphique sur les cellules",
+        "Create Reference" => "Créer une référence",
+        "Copy Image" => "Copier l'image",
+        "Save Image…" => "Enregistrer l'image…",
+        "The image is saved." => "L'image est enregistrée.",
+        "The image is on the clipboard." => "L'image est dans le presse-papiers.",
+        "Image" => "Image",
+        "size" => "taille",
+        "Resize" => "Redimensionner",
+        "This picture shows the last result that cell gave." => "Cette image montre le dernier résultat donné par cette cellule.",
+        "Select a Python cell that gave a picture first." => "Sélectionnez d'abord une cellule Python qui a renvoyé une image.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() a besoin que sa référence soit écrite sous forme de texte dans le code, par exemple xl(\"A1:B5\")."
         }

@@ -735,9 +735,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Python ćelije ne mogu da koriste mrežu. Stavite podatke na list i pročitajte ih pomoću xl()."
         }
         "Python cells can't start other programs or processes." => "Python ćelije ne mogu da pokreću druge programe ili procese.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Python ćelije ne crtaju grafikone. Vratite podatke na list i napravite grafikon od njih."
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Ova slika je prevelika za crtanje. Smanjite figsize ili dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Slika se sama pojavljuje u ćeliji. Python ćelije ne mogu da upisuju datoteke, pa bi ovaj red zakazao."
         }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Ovaj paket crta u veb pregledaču, koji Python ćelije ne mogu da otvore. Koristite matplotlib ili seaborn."
+        }
+        "Python Output" => "Python izlaz",
+        "Display Plot over Cells" => "Prikaži grafikon preko ćelija",
+        "Create Reference" => "Napravi referencu",
+        "Copy Image" => "Kopiraj sliku",
+        "Save Image…" => "Sačuvaj sliku…",
+        "The image is saved." => "Slika je sačuvana.",
+        "The image is on the clipboard." => "Slika je u privremenoj memoriji.",
+        "Image" => "Slika",
+        "size" => "veličina",
+        "Resize" => "Promeni veličinu",
+        "This picture shows the last result that cell gave." => "Ova slika prikazuje poslednji rezultat te ćelije.",
+        "Select a Python cell that gave a picture first." => "Prvo izaberite Python ćeliju koja je vratila sliku.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() zahteva da njegova referenca bude upisana kao tekst u kodu, na primer xl(\"A1:B5\")."
         }

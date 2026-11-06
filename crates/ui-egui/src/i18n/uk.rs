@@ -1265,9 +1265,25 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Клітинки Python не можуть використовувати мережу. Помістіть дані на аркуш і прочитайте їх через xl()."
         }
         "Python cells can't start other programs or processes." => "Клітинки Python не можуть запускати інші програми та процеси.",
-        "Python cells don't draw plots. Return the data to a sheet and build a chart from it." => {
-            "Клітинки Python не будують графіки. Поверніть дані на аркуш і створіть з них діаграму."
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Це зображення завелике для малювання. Зменште figsize або dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Зображення з’являється в клітинці саме. Клітинки Python не можуть записувати файли, тому цей рядок завершиться помилкою."
         }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Цей пакет малює у веб-браузері, який клітинки Python не можуть відкрити. Використовуйте matplotlib або seaborn."
+        }
+        "Python Output" => "Вивід Python",
+        "Display Plot over Cells" => "Показати графік над клітинками",
+        "Create Reference" => "Створити посилання",
+        "Copy Image" => "Копіювати зображення",
+        "Save Image…" => "Зберегти зображення…",
+        "The image is saved." => "Зображення збережено.",
+        "The image is on the clipboard." => "Зображення в буфері обміну.",
+        "Image" => "Зображення",
+        "size" => "розмір",
+        "Resize" => "Змінити розмір",
+        "This picture shows the last result that cell gave." => "Це зображення показує останній результат, отриманий із цієї клітинки.",
+        "Select a Python cell that gave a picture first." => "Спочатку виберіть клітинку Python, яка повернула зображення.",
         "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
             "xl() потрібне посилання, записане в коді як текст, наприклад xl(\"A1:B5\")."
         }
