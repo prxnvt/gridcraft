@@ -1149,6 +1149,22 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Editor" => "Επεξεργαστής",
         "Initialization code isn't available yet" => "Ο κώδικας αρχικοποίησης δεν είναι ακόμη διαθέσιμος",
         "Initialization" => "Αρχικοποίηση",
+        "The code that runs before this workbook's Python cells" => "Ο κώδικας που εκτελείται πριν από τα κελιά Python αυτού του βιβλίου εργασίας",
+        "Open Initialization" => "Άνοιγμα αρχικοποίησης",
+        "The initialization code has unsaved changes." => "Ο κώδικας αρχικοποίησης έχει μη αποθηκευμένες αλλαγές.",
+        "The initialization code of {workbook} has unsaved changes." => "Ο κώδικας αρχικοποίησης του {workbook} έχει μη αποθηκευμένες αλλαγές.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Ο κώδικας δεν μπορεί να γίνει μεγαλύτερος: ο κώδικας αρχικοποίησης χωρά {max} χαρακτήρες."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Ο κώδικας αρχικοποίησης άλλαξε ενώ ήταν ανοιχτός στον επεξεργαστή. Αντιγράψτε τον κώδικά σας ή κλείστε τον επεξεργαστή και ανοίξτε τον ξανά."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Ο κώδικας αρχικοποίησης άλλαξε ενώ ήταν ανοιχτός στον επεξεργαστή, οπότε ο κώδικάς σας δεν εφαρμόστηκε. Αντιγράψτε τον ή κλείστε τον επεξεργαστή και ανοίξτε τον ξανά."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Ο κώδικας αρχικοποίησης χρησιμοποιεί ένα πακέτο που δεν έχει αυτή η Python. Το GridCraft παρέλειψε τις γραμμές που το χρειάζονται και εκτέλεσε τις υπόλοιπες."
+        }
         "Select a Python cell first." => "Επιλέξτε πρώτα ένα κελί Python.",
         "Output As" => "Έξοδος ως",
         "Run\nCell" => "Εκτέλεση\nκελιού",

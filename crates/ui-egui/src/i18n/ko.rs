@@ -622,6 +622,22 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Editor" => "편집기",
         "Initialization code isn't available yet" => "초기화 코드는 아직 사용할 수 없습니다",
         "Initialization" => "초기화",
+        "The code that runs before this workbook's Python cells" => "이 통합 문서의 Python 셀보다 먼저 실행되는 코드",
+        "Open Initialization" => "초기화 열기",
+        "The initialization code has unsaved changes." => "초기화 코드에 저장되지 않은 변경 내용이 있습니다.",
+        "The initialization code of {workbook} has unsaved changes." => "{workbook}의 초기화 코드에 저장되지 않은 변경 내용이 있습니다.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "코드를 더 길게 할 수 없습니다. 초기화 코드는 {max}자까지 가능합니다."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "편집기에서 열려 있는 동안 초기화 코드가 변경되었습니다. 코드를 복사하거나 편집기를 닫고 다시 여세요."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "편집기에서 열려 있는 동안 초기화 코드가 변경되어 코드가 적용되지 않았습니다. 코드를 복사하거나 편집기를 닫고 다시 여세요."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "초기화 코드가 이 Python에 없는 패키지를 사용합니다. GridCraft는 해당 패키지가 필요한 줄을 건너뛰고 나머지를 실행했습니다."
+        }
         "Select a Python cell first." => "먼저 Python 셀을 선택하세요.",
         "Output As" => "출력 형식",
         "Run\nCell" => "셀\n실행",

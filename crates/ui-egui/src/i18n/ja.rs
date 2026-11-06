@@ -596,6 +596,23 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Editor", "エディター"),
     ("Initialization code isn't available yet", "初期化コードはまだ利用できません"),
     ("Initialization", "初期化"),
+    ("The code that runs before this workbook's Python cells", "このブックの Python セルの前に実行されるコード"),
+    ("Open Initialization", "初期化を開く"),
+    ("The initialization code has unsaved changes.", "初期化コードに未保存の変更があります。"),
+    ("The initialization code of {workbook} has unsaved changes.", "{workbook} の初期化コードに未保存の変更があります。"),
+    ("The code can't be longer: initialization code holds {max} characters.", "これ以上長くできません: 初期化コードの上限は {max} 文字です。"),
+    (
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again.",
+        "エディターで開いている間に初期化コードが変更されました。コードをコピーするか、エディターを閉じて開き直してください。",
+    ),
+    (
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again.",
+        "エディターで開いている間に初期化コードが変更されたため、コードは適用されませんでした。コピーするか、エディターを閉じて開き直してください。",
+    ),
+    (
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest.",
+        "初期化コードは、この Python にないパッケージを使用しています。GridCraft はそれを必要とする行をスキップし、残りを実行しました。",
+    ),
     ("Select a Python cell first.", "先に Python セルを選択してください。"),
     ("Output As", "出力形式"),
     ("Run\nCell", "実行\nセル"),

@@ -610,6 +610,20 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Editor" => "编辑器",
         "Initialization code isn't available yet" => "初始化代码暂不可用",
         "Initialization" => "初始化",
+        "The code that runs before this workbook's Python cells" => "在此工作簿的 Python 单元格之前运行的代码",
+        "Open Initialization" => "打开初始化",
+        "The initialization code has unsaved changes." => "初始化代码有未保存的更改。",
+        "The initialization code of {workbook} has unsaved changes." => "{workbook} 的初始化代码有未保存的更改。",
+        "The code can't be longer: initialization code holds {max} characters." => "代码不能再长了：初始化代码最多容纳 {max} 个字符。",
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "初始化代码在编辑器中打开时已更改。请复制您的代码，或关闭编辑器后重新打开。"
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "初始化代码在编辑器中打开时已更改，因此未应用您的代码。请复制代码，或关闭编辑器后重新打开。"
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "初始化代码使用了此 Python 没有的包。GridCraft 跳过了需要它的行，并运行了其余部分。"
+        }
         "Select a Python cell first." => "请先选择一个 Python 单元格。",
         "Output As" => "输出为",
         "Run\nCell" => "运行\n单元格",

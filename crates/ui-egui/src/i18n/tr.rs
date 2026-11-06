@@ -585,6 +585,22 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Editor" => "Düzenleyici",
         "Initialization code isn't available yet" => "Başlatma kodu henüz kullanılamıyor",
         "Initialization" => "Başlatma",
+        "The code that runs before this workbook's Python cells" => "Bu çalışma kitabının Python hücrelerinden önce çalışan kod",
+        "Open Initialization" => "Başlatmayı Aç",
+        "The initialization code has unsaved changes." => "Başlatma kodunda kaydedilmemiş değişiklikler var.",
+        "The initialization code of {workbook} has unsaved changes." => "{workbook} başlatma kodunda kaydedilmemiş değişiklikler var.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Kod daha uzun olamaz: başlatma kodu en fazla {max} karakter alır."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Başlatma kodu düzenleyicide açıkken değişti. Kodunuzu kopyalayın ya da düzenleyiciyi kapatıp yeniden açın."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Başlatma kodu düzenleyicide açıkken değiştiği için kodunuz uygulanmadı. Kodu kopyalayın ya da düzenleyiciyi kapatıp yeniden açın."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Başlatma kodu, bu Python'da olmayan bir paketi kullanıyor. GridCraft ona ihtiyaç duyan satırları atladı ve kalanını çalıştırdı."
+        }
         "Select a Python cell first." => "Önce bir Python hücresi seçin.",
         "Output As" => "Çıktı Biçimi",
         "Run\nCell" => "Hücreyi\nÇalıştır",

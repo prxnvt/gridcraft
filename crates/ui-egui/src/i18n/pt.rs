@@ -1159,6 +1159,22 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Editor" => "Editor",
         "Initialization code isn't available yet" => "O código de inicialização ainda não está disponível",
         "Initialization" => "Inicialização",
+        "The code that runs before this workbook's Python cells" => "O código executado antes das células Python desta pasta de trabalho",
+        "Open Initialization" => "Abrir inicialização",
+        "The initialization code has unsaved changes." => "O código de inicialização tem alterações não salvas.",
+        "The initialization code of {workbook} has unsaved changes." => "O código de inicialização de {workbook} tem alterações não salvas.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "O código não pode ser mais longo: o código de inicialização comporta {max} caracteres."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "O código de inicialização mudou enquanto estava aberto no editor. Copie seu código ou feche o editor e abra-o novamente."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "O código de inicialização mudou enquanto estava aberto no editor, por isso seu código não foi aplicado. Copie-o ou feche o editor e abra-o novamente."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "O código de inicialização usa um pacote que este Python não tem. O GridCraft ignorou as linhas que precisam dele e executou o restante."
+        }
         "Select a Python cell first." => "Selecione primeiro uma célula Python.",
         "Output As" => "Exibir saída como",
         "Run\nCell" => "Executar\ncélula",

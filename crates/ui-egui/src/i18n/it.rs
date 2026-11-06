@@ -1153,6 +1153,22 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Editor" => "Editor",
         "Initialization code isn't available yet" => "Il codice di inizializzazione non è ancora disponibile",
         "Initialization" => "Inizializzazione",
+        "The code that runs before this workbook's Python cells" => "Il codice eseguito prima delle celle Python di questa cartella di lavoro",
+        "Open Initialization" => "Apri inizializzazione",
+        "The initialization code has unsaved changes." => "Il codice di inizializzazione contiene modifiche non salvate.",
+        "The initialization code of {workbook} has unsaved changes." => "Il codice di inizializzazione di {workbook} contiene modifiche non salvate.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Il codice non può essere più lungo: il codice di inizializzazione contiene al massimo {max} caratteri."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Il codice di inizializzazione è cambiato mentre era aperto nell'editor. Copia il tuo codice, oppure chiudi l'editor e riaprilo."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Il codice di inizializzazione è cambiato mentre era aperto nell'editor, quindi il tuo codice non è stato applicato. Copialo, oppure chiudi l'editor e riaprilo."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Il codice di inizializzazione usa un pacchetto che questo Python non ha. GridCraft ha saltato le righe che ne hanno bisogno e ha eseguito il resto."
+        }
         "Select a Python cell first." => "Seleziona prima una cella Python.",
         "Output As" => "Mostra output come",
         "Run\nCell" => "Esegui\ncella",

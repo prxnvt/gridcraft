@@ -1143,6 +1143,22 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Editor" => "Редактор",
         "Initialization code isn't available yet" => "Код ініціалізації поки недоступний",
         "Initialization" => "Ініціалізація",
+        "The code that runs before this workbook's Python cells" => "Код, який виконується перед клітинками Python цієї книги",
+        "Open Initialization" => "Відкрити ініціалізацію",
+        "The initialization code has unsaved changes." => "У коді ініціалізації є незбережені зміни.",
+        "The initialization code of {workbook} has unsaved changes." => "У коді ініціалізації книги {workbook} є незбережені зміни.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Код не може бути довшим: код ініціалізації вміщує {max} символів."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Код ініціалізації змінився, поки був відкритий у редакторі. Скопіюйте свій код або закрийте редактор і відкрийте його знову."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Код ініціалізації змінився, поки був відкритий у редакторі, тому ваш код не застосовано. Скопіюйте його або закрийте редактор і відкрийте його знову."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Код ініціалізації використовує пакет, якого немає в цьому Python. GridCraft пропустив рядки, яким він потрібен, і виконав решту."
+        }
         "Select a Python cell first." => "Спочатку виберіть клітинку Python.",
         "Output As" => "Вивід як",
         "Run\nCell" => "Виконати\nклітинку",

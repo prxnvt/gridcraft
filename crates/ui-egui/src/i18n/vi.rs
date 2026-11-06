@@ -583,6 +583,20 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Editor" => "Trình soạn thảo",
         "Initialization code isn't available yet" => "Mã khởi tạo chưa khả dụng",
         "Initialization" => "Khởi tạo",
+        "The code that runs before this workbook's Python cells" => "Mã chạy trước các ô Python của sổ làm việc này",
+        "Open Initialization" => "Mở khởi tạo",
+        "The initialization code has unsaved changes." => "Mã khởi tạo có thay đổi chưa lưu.",
+        "The initialization code of {workbook} has unsaved changes." => "Mã khởi tạo của {workbook} có thay đổi chưa lưu.",
+        "The code can't be longer: initialization code holds {max} characters." => "Mã không thể dài hơn: mã khởi tạo chứa tối đa {max} ký tự.",
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Mã khởi tạo đã thay đổi khi đang mở trong trình soạn thảo. Hãy sao chép mã của bạn, hoặc đóng trình soạn thảo và mở lại."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Mã khởi tạo đã thay đổi khi đang mở trong trình soạn thảo, nên mã của bạn chưa được áp dụng. Hãy sao chép mã, hoặc đóng trình soạn thảo và mở lại."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Mã khởi tạo dùng một gói mà Python này không có. GridCraft đã bỏ qua các dòng cần gói đó và chạy phần còn lại."
+        }
         "Select a Python cell first." => "Hãy chọn một ô Python trước.",
         "Output As" => "Xuất dạng",
         "Run\nCell" => "Chạy\nô",
