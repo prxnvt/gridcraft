@@ -943,7 +943,7 @@ fn fake_answer(code: &str, inputs: &BTreeMap<String, Input>) -> Result<Output, P
     }
     if code.chars().filter(|c| *c == '\n').count() == 3 {
         let table = Table { rows: 1, cols: 1, data: vec![Value::Number(1.0)], total_rows: 9, total_cols: 1, ..Table::default() };
-        return Ok(Output::Object { type_name: "DataFrame".into(), preview: "df".into(), size: vec![9, 1], table: Some(table) });
+        return Ok(Output::Object { type_name: "DataFrame".into(), preview: "df".into(), size: vec![9, 1], table: Some(table), picture: None });
     }
     let spelled: usize = gridcraft_engine::model::python::xl_calls(code).iter().filter_map(|c| c.span.as_ref()).map(|s| s.len()).sum();
     Ok(Output::Value(Value::Number((code.len().saturating_sub(spelled) + inputs.len()) as f64)))
