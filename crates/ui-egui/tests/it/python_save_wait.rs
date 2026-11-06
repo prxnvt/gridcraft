@@ -1,10 +1,11 @@
 //! A save that waits for a workbook's Python cells: the bar, Save Now and Cancel, what ends a wait,
-//! closing and quitting during one, and which workbook is active after. A fake worker stands in for
-//! Python.
+//! closing and quitting during one, which workbook is active after, and the control channel. A fake
+//! worker stands in for Python.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 use egui::vec2;
@@ -14,7 +15,7 @@ use gridcraft_engine::python::{Interpreter, InterpreterKind, MAX_WAIT, Version};
 use gridcraft_engine::{PythonEnvironment, PythonState, Session};
 use gridcraft_python::fake::{FakeHandle, FakeTransport};
 use gridcraft_python::protocol::{Output, Request};
-use gridcraft_ui_egui::control;
+use gridcraft_ui_egui::control::{self, ControlRequest};
 use gridcraft_ui_egui::save_wait::{SAVE_NOW, WAITING};
 use gridcraft_ui_egui::{SaveAnswer, Services, SheetApp};
 use serde_json::{Value as Json, json};
@@ -77,6 +78,7 @@ struct Bench {
     h: Harness,
     gate: Arc<AtomicBool>,
     _handle: FakeHandle,
+    control: Sender<ControlRequest>,
 }
 
 fn bench_with(services: Services, size: egui::Vec2) -> Bench {
@@ -90,9 +92,11 @@ fn bench_with(services: Services, size: egui::Vec2) -> Bench {
     app.python.set_sandbox(Ok("a test sandbox".into()));
     app.python.report = Some(report());
     app.python.transport = Some(Arc::new(move || Box::new(t.sharing())));
+    let (control, rx) = channel();
+    app.control_rx = Some(rx);
     let mut h = crate::common::harness_with(crate::common::builder().with_size(size), app, 3);
     h.run_steps(2);
-    Bench { h, gate, _handle: handle }
+    Bench { h, gate, _handle: handle, control }
 }
 
 fn bench() -> Bench {
@@ -215,6 +219,14 @@ impl Bench {
         self.h.step();
     }
 
+    /// A control request: its reply comes through the receiver, on a frame.
+    fn ask(&mut self, method: &str, params: Json) -> Receiver<Json> {
+        let (req, rx) = ControlRequest::new(method, params);
+        self.control.send(req).unwrap();
+        self.h.step();
+        rx
+    }
+
     fn inspect(&self) -> Json {
         control::inspect(self.app(), &self.h.ctx)
     }
@@ -233,6 +245,17 @@ impl Bench {
         self.app_mut().enter_window(window);
         self.h.step();
     }
+}
+
+fn answered(reply: &Receiver<Json>, b: &mut Bench) -> Json {
+    for _ in 0..2_000 {
+        if let Ok(v) = reply.try_recv() {
+            return v;
+        }
+        b.h.step();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("no reply came");
 }
 
 // ---------------------------------------------------------------- the wait
@@ -979,6 +1002,7 @@ fn a_workbook_closed_while_waiting_cancels_the_wait_and_nothing_is_written() {
     b.py("A1", "wait 7");
     b.frames(2);
     b.save_to(&path);
+    let reply = b.ask("file.save", json!({"path": temp("closed-2"), "wait": true}));
     let doc = b.doc();
     b.app_mut().run("file.new", json!({})).unwrap();
     let other = b.doc();
@@ -990,6 +1014,9 @@ fn a_workbook_closed_while_waiting_cancels_the_wait_and_nothing_is_written() {
     b.open_gate();
     b.frames(3);
     assert!(!path.exists(), "never saved into a closed document");
+    let answer = answered(&reply, &mut b);
+    assert_eq!(answer["ok"], false, "{answer}");
+    assert!(answer["error"].as_str().unwrap().contains("closed"), "{answer}");
 }
 
 // ---------------------------------------------------------------- other workbooks
@@ -1019,6 +1046,354 @@ fn other_workbooks_keep_working_and_each_has_its_own_wait() {
     assert_eq!(in_file(&first, "A1"), SEVEN);
     let _ = std::fs::remove_file(&first);
     let _ = std::fs::remove_file(&second);
+}
+
+// ---------------------------------------------------------------- the control channel
+
+#[test]
+fn a_save_with_no_file_is_an_error_and_never_a_dialog() {
+    let asked = Arc::new(AtomicBool::new(false));
+    let counted = asked.clone();
+    let services = Services {
+        pick_save: Some(Box::new(move |_| {
+            counted.store(true, Ordering::SeqCst);
+            None
+        })),
+        ..Services::default()
+    };
+    let mut b = bench_with(services, vec2(1300.0, 800.0));
+    for (method, params) in [
+        ("engine.execute", json!({"command": "file.save", "params": {}})),
+        ("engine.execute", json!({"command": "file.saveAs", "params": {}})),
+        ("engine.execute", json!({"command": "file.save", "params": {"wait": true}})),
+        ("file.save", json!({})),
+        ("file.saveAs", json!({})),
+        ("app.save", json!({})),
+        ("app.save", json!({"wait": true})),
+    ] {
+        let reply = b.ask(method, params.clone());
+        let answer = reply.try_recv().unwrap_or_else(|_| panic!("{method} {params} holds its reply"));
+        assert_eq!(answer["ok"], false, "{method} {params}: {answer}");
+        assert!(answer["error"].as_str().unwrap().contains("never open dialogs"), "{answer}");
+        assert_eq!(b.dialog(), None, "{method} {params}");
+    }
+    assert!(!asked.load(Ordering::SeqCst), "no file picker");
+    // A workbook with a file saves there, Save As still wants the new name.
+    let path = temp("control-file");
+    b.with_file(&path);
+    let answer = b.ask("file.saveAs", json!({})).try_recv().unwrap();
+    assert_eq!(answer["ok"], false, "{answer}");
+    assert_eq!(b.ask("file.save", json!({})).try_recv().unwrap()["ok"], true);
+    assert!(!asked.load(Ordering::SeqCst));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn without_wait_a_save_happens_at_once_and_says_what_was_not_finished() {
+    let mut b = bench();
+    let path = temp("control-now");
+    b.py("A1", "wait 7");
+    b.frames(2);
+    let answer = b.ask("engine.execute", json!({"command": "file.save", "params": {"path": path}})).try_recv().unwrap();
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert!(path.exists());
+    assert_eq!(answer["result"]["unfinished"], json!(["Sheet1!A1"]), "{answer}");
+    assert!(!b.app().save_waits.any());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn with_wait_the_reply_holds_until_the_save_and_no_bar_shows() {
+    let mut b = bench();
+    let path = temp("control-wait");
+    b.py("A1", "wait 7");
+    b.frames(2);
+    let reply = b.ask("engine.execute", json!({"command": "file.save", "params": {"path": path, "wait": true}}));
+    b.frames(3);
+    assert!(reply.try_recv().is_err(), "the reply waits for the save");
+    assert!(!path.exists());
+    assert!(!b.shows_bar(), "a programmatic call shows nothing");
+    assert_eq!(b.dialog(), None);
+    let seen = b.inspect();
+    assert_eq!(seen["python"]["busy"], true, "{seen}");
+    assert_eq!(seen["python"]["unfinished"], json!(["Sheet1!A1"]), "{seen}");
+    assert_eq!(seen["saveWaits"][0]["prompt"], false, "{seen}");
+    assert_eq!(seen["saveWaits"][0]["unfinished"], json!(["Sheet1!A1"]), "{seen}");
+    b.open_gate();
+    let answer = answered(&reply, &mut b);
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["unfinished"], json!([]), "{answer}");
+    assert_eq!(answer["result"]["path"], json!(path), "{answer}");
+    assert_eq!(in_file(&path, "A1"), SEVEN);
+    assert_eq!(b.inspect()["saveWaits"], json!([]));
+    assert_eq!(b.inspect()["python"]["busy"], false);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `wait` may be in the request or in the save's params; `app.save` and the command called by its id
+/// take it too; with nothing running the reply comes at once.
+#[test]
+fn every_way_of_asking_for_a_save_takes_wait() {
+    let mut b = bench();
+    let path = temp("control-ways");
+    b.py("A1", "ret 1");
+    b.settle();
+    for (method, params) in [
+        ("engine.execute", json!({"command": "file.save", "wait": true, "params": {"path": path}})),
+        ("engine.execute", json!({"command": "file.saveAs", "params": {"path": path, "waitSeconds": 5}})),
+        ("file.save", json!({"path": path, "wait": true})),
+        ("file.saveAs", json!({"path": path, "wait": true})),
+        ("app.save", json!({"path": path, "wait": true})),
+    ] {
+        let _ = std::fs::remove_file(&path);
+        let answer = b.ask(method, params.clone()).try_recv().unwrap_or_else(|_| panic!("{method} {params} held its reply"));
+        assert_eq!(answer["ok"], true, "{method} {params}: {answer}");
+        assert_eq!(answer["result"]["unfinished"], json!([]), "{method} {params}: {answer}");
+        assert!(path.exists(), "{method} {params}");
+    }
+    // And each holds while something runs.
+    for (cell, method, params) in [
+        ("B1", "engine.execute", json!({"command": "file.save", "wait": true, "params": {}})),
+        ("B2", "file.save", json!({"waitSeconds": 60})),
+        ("B3", "app.save", json!({"wait": true})),
+    ] {
+        b.gate.store(false, Ordering::SeqCst);
+        b.py(cell, "wait 7");
+        b.frames(1);
+        let reply = b.ask(method, params.clone());
+        assert!(reply.try_recv().is_err(), "{method} {params}");
+        b.open_gate();
+        let answer = answered(&reply, &mut b);
+        assert_eq!(answer["ok"], true, "{method} {params}: {answer}");
+        assert_eq!(in_file(&path, cell), SEVEN);
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn wait_seconds_bounds_the_hold_and_the_reply_names_the_cells() {
+    let mut b = bench();
+    let path = temp("control-bound");
+    b.py("A1", "hang");
+    b.frames(2);
+    let reply = b.ask("file.save", json!({"path": path, "waitSeconds": 0.05}));
+    let answer = answered(&reply, &mut b);
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["unfinished"], json!(["Sheet1!A1"]), "{answer}");
+    assert_eq!(answer["result"]["unfinishedCount"], 1, "{answer}");
+    assert!(path.exists());
+    assert_eq!(b.message(), None, "the reply says it; nothing shows");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_bad_wait_is_refused_and_nothing_is_saved() {
+    let mut b = bench();
+    let path = temp("control-bad");
+    b.py("A1", "hang");
+    b.frames(2);
+    for params in [
+        json!({"command": "file.save", "params": {"path": path, "waitSeconds": -1}}),
+        json!({"command": "file.save", "params": {"path": path, "waitSeconds": "soon"}}),
+        json!({"command": "file.save", "params": {"path": path, "wait": "yes"}}),
+        json!({"command": "file.save", "waitSeconds": -1, "params": {"path": path}}),
+        json!({"command": "python.runAll", "wait": 1, "params": {}}),
+    ] {
+        let answer = b.ask("engine.execute", params.clone()).try_recv().unwrap();
+        assert_eq!(answer["ok"], false, "{params}: {answer}");
+    }
+    assert!(!path.exists());
+    assert!(!b.app().save_waits.any());
+}
+
+/// A second request joins the wait: both replies come, one file is written twice at most, and a
+/// shorter bound still holds.
+#[test]
+fn a_second_request_joins_the_wait_and_its_own_bound_holds() {
+    let mut b = bench();
+    let (one, two) = (temp("join-1"), temp("join-2"));
+    b.py("A1", "hang");
+    b.frames(2);
+    let first = b.ask("file.save", json!({"path": one, "wait": true}));
+    let second = b.ask("file.save", json!({"path": two, "waitSeconds": 0.05}));
+    assert_eq!(b.inspect()["saveWaits"].as_array().unwrap().len(), 1);
+    let (a, c) = (answered(&second, &mut b), answered(&first, &mut b));
+    assert_eq!(a["ok"], true, "{a}");
+    assert_eq!(c["ok"], true, "{c}");
+    assert!(one.exists() && two.exists());
+    assert_eq!(a["result"]["unfinished"], json!(["Sheet1!A1"]));
+    let _ = std::fs::remove_file(&one);
+    let _ = std::fs::remove_file(&two);
+}
+
+/// A programmatic save that fails says so in its reply, and shows nothing: no message box either.
+#[test]
+fn a_failed_programmatic_save_replies_and_shows_nothing() {
+    let mut b = bench();
+    let blocker = temp("control-blocker");
+    std::fs::write(&blocker, "a file").unwrap();
+    b.py("A1", "wait 7");
+    b.frames(2);
+    let reply = b.ask("file.save", json!({"path": blocker.join("book.xlsx"), "wait": true}));
+    b.open_gate();
+    let answer = answered(&reply, &mut b);
+    assert_eq!(answer["ok"], false, "{answer}");
+    assert_eq!(b.message(), None);
+    assert!(b.app().session.active().unwrap().is_dirty(), "the work is kept");
+    let _ = std::fs::remove_file(&blocker);
+}
+
+/// Each connection holds one reply at a time, so this only stops many connections piling up: the one
+/// too many is told so, and nothing else changes.
+#[test]
+fn too_many_held_replies_are_refused() {
+    let mut b = bench();
+    let path = temp("too-many");
+    b.py("A1", "hang");
+    b.frames(2);
+    let held: Vec<_> = (0..64).map(|_| b.ask("file.save", json!({"path": path, "wait": true}))).collect();
+    assert!(held.iter().all(|r| r.try_recv().is_err()));
+    let answer = b.ask("file.save", json!({"path": path, "wait": true})).try_recv().unwrap();
+    assert_eq!(answer["ok"], false, "{answer}");
+    assert!(answer["error"].as_str().unwrap().contains("too many"), "{answer}");
+    // A command that has run says so, and what isn't finished yet.
+    let answer = b.ask("engine.execute", json!({"command": "cell.set", "wait": true, "params": {"cell": "C1", "input": "1"}})).try_recv().unwrap();
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["unfinished"], json!(["Sheet1!A1"]), "{answer}");
+    b.app_mut().run("ui.saveWait", json!({"action": "saveNow"})).unwrap();
+    b.h.step();
+    for reply in &held {
+        assert_eq!(reply.try_recv().unwrap()["ok"], true);
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A programmatic save into a person's wait: the person's Cancel tells whoever waits.
+#[test]
+fn cancel_answers_the_replies_it_holds() {
+    let mut b = bench();
+    let path = temp("control-cancel");
+    b.py("A1", "hang");
+    b.frames(2);
+    let reply = b.ask("file.save", json!({"path": path, "wait": true}));
+    assert!(!b.shows_bar());
+    b.save_to(&path);
+    b.frames(1);
+    assert!(b.shows_bar(), "now a person is waiting too");
+    let state = b.ask("engine.execute", json!({"command": "ui.saveWait", "params": {}})).try_recv().unwrap();
+    assert_eq!(state["result"]["waiting"], true, "{state}");
+    assert_eq!(state["result"]["prompt"], true, "{state}");
+    let done = b.ask("engine.execute", json!({"command": "ui.saveWait", "params": {"action": "cancel"}})).try_recv().unwrap();
+    assert_eq!(done["result"]["waiting"], false, "{done}");
+    let answer = answered(&reply, &mut b);
+    assert_eq!(answer["ok"], false, "{answer}");
+    assert!(answer["error"].as_str().unwrap().contains("cancelled"), "{answer}");
+    assert!(!path.exists());
+}
+
+#[test]
+fn save_now_and_unknown_actions_through_the_control_channel() {
+    let mut b = bench();
+    let path = temp("control-now-action");
+    b.py("A1", "hang");
+    b.frames(2);
+    let reply = b.ask("file.save", json!({"path": path, "wait": true}));
+    let answer = b.ask("engine.execute", json!({"command": "ui.saveWait", "params": {"action": "later"}})).try_recv().unwrap();
+    assert_eq!(answer["ok"], false, "{answer}");
+    b.ask("engine.execute", json!({"command": "ui.saveWait", "params": {"action": "saveNow"}})).try_recv().unwrap();
+    let answer = answered(&reply, &mut b);
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["unfinished"], json!(["Sheet1!A1"]), "{answer}");
+    assert!(path.exists());
+    // With nothing waiting they change nothing.
+    for action in ["saveNow", "cancel"] {
+        let answer = b.ask("engine.execute", json!({"command": "ui.saveWait", "params": {"action": action}})).try_recv().unwrap();
+        assert_eq!(answer["result"]["waiting"], false, "{answer}");
+    }
+    let listed = b.ask("engine.commands", json!({"search": "ui.saveWait"})).try_recv().unwrap();
+    assert_eq!(listed["result"].as_array().unwrap().len(), 1, "{listed}");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `wait` on `engine.execute` for any command: the reply holds until Python is idle, and says what
+/// the cell holds now.
+#[test]
+fn engine_execute_with_wait_holds_until_python_is_idle() {
+    let mut b = bench();
+    let reply = b.ask("engine.execute", json!({"command": "python.set", "wait": true, "params": {"cell": "A1", "code": "wait 7"}}));
+    b.frames(2);
+    assert!(reply.try_recv().is_err(), "the cell runs");
+    assert_eq!(b.inspect()["python"]["busy"], true);
+    b.open_gate();
+    let answer = answered(&reply, &mut b);
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["value"], json!(7.0), "{answer}");
+    assert_eq!(answer["result"]["unfinished"], json!([]), "{answer}");
+
+    // Bounded, with what wasn't finished.
+    let answer = {
+        let reply = b.ask("engine.execute", json!({"command": "python.set", "waitSeconds": 0.05, "params": {"cell": "A2", "code": "hang"}}));
+        answered(&reply, &mut b)
+    };
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["unfinished"], json!(["Sheet1!A2"]), "{answer}");
+
+    // A command that fails answers at once, with its error.
+    let answer = b.ask("engine.execute", json!({"command": "no.such", "wait": true, "params": {}})).try_recv().unwrap();
+    assert_eq!(answer["ok"], false, "{answer}");
+
+    // A workbook closed during the hold: the reply says so.
+    let reply = b.ask("engine.execute", json!({"command": "python.runAll", "wait": true, "params": {}}));
+    let closing = b.doc();
+    b.app_mut().run("file.new", json!({})).unwrap();
+    b.app_mut().run("window.close", json!({"doc": closing, "force": true})).unwrap();
+    let answer = answered(&reply, &mut b);
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["workbookClosed"], true, "{answer}");
+}
+
+/// The control server waits for a held reply as long as it may be held, and no longer for others.
+#[test]
+fn a_held_reply_gets_the_time_it_may_take() {
+    let plain = control::reply_timeout(&json!({"command": "cell.set", "params": {}}));
+    let held = control::reply_timeout(&json!({"command": "file.save", "params": {"wait": true}}));
+    assert_eq!(plain, Duration::from_secs(60));
+    assert_eq!(held, plain + MAX_WAIT);
+    assert_eq!(control::reply_timeout(&json!({"wait": true})), held);
+    assert_eq!(control::reply_timeout(&json!({"waitSeconds": 5})), held);
+}
+
+/// `app.quit` asks nothing, so a save waiting makes it refuse rather than lose the save.
+#[test]
+fn app_quit_is_refused_while_a_save_waits() {
+    let mut b = bench();
+    let path = temp("control-quit");
+    b.py("A1", "hang");
+    b.frames(2);
+    let _reply = b.ask("file.save", json!({"path": path, "wait": true}));
+    let answer = b.ask("app.quit", json!({})).try_recv().unwrap();
+    assert_eq!(answer["ok"], false, "{answer}");
+    assert!(!b.app().allow_close);
+    b.app_mut().run("ui.saveWait", json!({"action": "cancel"})).unwrap();
+    b.frames(1);
+    assert_eq!(b.ask("app.quit", json!({})).try_recv().unwrap()["ok"], true);
+    assert!(b.app().allow_close);
+}
+
+/// `app.run` has nothing to hold a reply with: `wait` doesn't reach the engine, whose call would
+/// block the frame.
+#[test]
+#[allow(clippy::disallowed_methods)] // a native test that times a call
+fn a_save_through_run_with_wait_does_not_block() {
+    let mut b = bench();
+    let path = temp("run-no-block");
+    b.py("A1", "hang");
+    b.frames(2);
+    let started = std::time::Instant::now();
+    let r = b.app_mut().run("file.save", json!({"path": path, "wait": true})).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(r["unfinished"], json!(["Sheet1!A1"]), "{r}");
+    let _ = std::fs::remove_file(&path);
 }
 
 // ---------------------------------------------------------------- how it looks

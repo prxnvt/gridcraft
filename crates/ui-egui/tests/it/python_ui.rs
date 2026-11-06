@@ -1234,7 +1234,7 @@ fn control_request(h: &mut Harness, method: &str, params: Json) -> Option<Json> 
     pump(h);
     match out {
         Outcome::Done(v) => Some(v),
-        Outcome::Screenshot { .. } => None,
+        Outcome::Screenshot { .. } | Outcome::Hold(_) => None,
     }
 }
 

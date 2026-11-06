@@ -564,7 +564,7 @@ fn control(h: &mut Harness, method: &str, p: serde_json::Value) -> serde_json::V
     let ctx = h.ctx.clone();
     match gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, method, &p) {
         gridcraft_ui_egui::control::Outcome::Done(v) => v,
-        gridcraft_ui_egui::control::Outcome::Screenshot { .. } => json!(null),
+        gridcraft_ui_egui::control::Outcome::Screenshot { .. } | gridcraft_ui_egui::control::Outcome::Hold(_) => json!(null),
     }
 }
 

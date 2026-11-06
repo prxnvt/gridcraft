@@ -649,6 +649,8 @@ pub fn inspect(app: &SheetApp) -> Json {
         "enableBar": bar_shows(app),
         "calculation": app.session.python_calculation(),
         "interpreter": report.interpreter.as_ref().map(|i| i.path.display().to_string()),
+        "busy": app.session.python_busy(),
+        "unfinished": app.session.active().map_or_else(Vec::new, |d| app.session.python_unfinished(d.uid)),
         "running": running,
         "initialization": initialization,
         "findings": {"formulaBar": findings(bar_shown, &app.python.bar_checks), "editor": findings(window_shown, &app.python.window_checks)},

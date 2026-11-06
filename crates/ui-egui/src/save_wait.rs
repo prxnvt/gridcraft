@@ -1,16 +1,19 @@
 //! Saves that wait for a workbook's Python cells, so the file gets their results.
 //!
-//! A person's save that starts while the workbook's cells run becomes a [`SaveWait`], which [`poll`]
-//! checks every frame from `SheetApp::logic`. Nothing blocks.
+//! A person's save, or a control request with `wait`, that starts while the workbook's cells run
+//! becomes a [`SaveWait`], which [`poll`] checks every frame from `SheetApp::logic`. Nothing blocks.
 //! The wait ends when the cells have finished, at the cap ([`gridcraft_engine::python::PythonWait`]),
 //! or at Save Now; then the saves it holds run, in the workbook's window, without counting as an
 //! activation, so what the person is looking at and the order they came from stay as they were. A
 //! workbook that closes takes its wait with it. Save Changes' Save leaves the close for the wait to do.
 
+use std::sync::mpsc::Sender;
+
 use gridcraft_engine::Session;
-use gridcraft_engine::python::{PythonWait, WaitBound, WaitState, note_unfinished};
+use gridcraft_engine::python::{PythonWait, WaitBound, WaitState, note_unfinished, wait_asked};
 use serde_json::{Value as Json, json};
 
+use crate::control::{ControlResponse, Outcome};
 use crate::{NoticeKind, SheetApp, clean_error};
 
 /// What the bar says while a save waits.
@@ -25,10 +28,15 @@ pub const AND_MORE: &str = "{cells} and {count} more";
 
 /// How many cells the message names; the rest are counted.
 const NAMED_CELLS: usize = 10;
-/// The waits of the open workbooks.
+/// How many control replies may be held at once. Each client has one at a time, so this only stops
+/// many connections from piling up.
+const MAX_HELD: usize = 64;
+
+/// The waits of the open workbooks, and the control replies held until Python is idle.
 #[derive(Default)]
 pub struct SaveWaits {
     waits: Vec<SaveWait>,
+    idle: Vec<IdleHold>,
 }
 
 /// The saves waiting for one workbook's cells.
@@ -49,12 +57,30 @@ struct Save {
     params: Json,
     /// The file, as far as it is known when asked: the save's own path, else the workbook's.
     target: Option<String>,
+    replies: Vec<Sender<ControlResponse>>,
 }
 
 /// What follows a save that worked (Save Changes' Save).
 #[derive(Clone, Copy)]
 struct CloseAfter {
     quitting: bool,
+}
+
+/// A control reply held until the workbook's Python is idle.
+struct IdleHold {
+    wait: PythonWait,
+    result: Json,
+    /// The command's `cell` and `sheet`, for what its reply says the cell holds.
+    cell: Option<Json>,
+    reply: Sender<ControlResponse>,
+}
+
+/// A control request that holds its reply: what [`hold`] needs once the request's sender is known.
+pub struct Hold(Held);
+
+enum Held {
+    Save { doc: u64, id: String, params: Json, target: Option<String>, bound: WaitBound },
+    Idle { wait: PythonWait, result: Json, cell: Option<Json> },
 }
 
 impl SaveWaits {
@@ -76,9 +102,9 @@ impl SaveWaits {
         self.of(doc).map_or(0, |w| w.saves.len())
     }
 
-    /// Whether any save is waiting.
+    /// Whether any save is waiting, or any reply held.
     pub fn any(&self) -> bool {
-        !self.waits.is_empty()
+        !self.waits.is_empty() || !self.idle.is_empty()
     }
 
     /// Makes a waiting save close its workbook once it has worked. False when none is waiting.
@@ -100,6 +126,11 @@ impl SaveWaits {
     /// Whether a save in an open workbook will carry the quit on once it is done.
     pub(crate) fn quit_waits(&self, session: &Session) -> bool {
         self.waits.iter().any(|w| session.document_index(w.wait.doc()).is_some() && w.close_after.is_some_and(|c| c.quitting))
+    }
+
+    fn held(&self) -> usize {
+        let saves = self.waits.iter().flat_map(|w| &w.saves).map(|s| s.replies.len()).fold(0, usize::saturating_add);
+        saves.saturating_add(self.idle.len())
     }
 
     /// A shorter cap for a workbook's wait, so a test doesn't sit through the real one.
@@ -124,14 +155,21 @@ impl SaveWait {
             None => (!self.saves.is_empty()).then_some(0),
         };
         let at = found.unwrap_or_else(|| {
-            self.saves.push(Save { id: id.to_string(), params: without_wait(params.clone()), target });
+            self.saves.push(Save { id: id.to_string(), params: without_wait(params.clone()), target, replies: Vec::new() });
             self.saves.len().saturating_sub(1)
         });
         self.saves.get_mut(at)
     }
+
+    /// Every reply it holds, for an end without a save.
+    fn answer_all(self, error: &str) {
+        for reply in self.saves.into_iter().flat_map(|s| s.replies) {
+            let _ = reply.send(json!({"ok": false, "error": error}));
+        }
+    }
 }
 
-/// `wait` and `waitSeconds` would make the engine block.
+/// `wait` and `waitSeconds` are for whoever holds the reply: the engine would block on them.
 pub(crate) fn without_wait(mut params: Json) -> Json {
     if let Some(o) = params.as_object_mut() {
         o.remove("wait");
@@ -227,11 +265,106 @@ impl SheetApp {
     }
 }
 
-/// Every frame: ends the waits that are over.
+/// `file.save` and `file.saveAs` from the control channel, in the target window. Never a dialog: a
+/// workbook with nowhere to save is an error. Without `wait` it saves at once, as a command does.
+pub(crate) fn control_save(app: &mut SheetApp, id: &str, params: Json, bound: Option<WaitBound>) -> Outcome {
+    let params = without_wait(params);
+    let Some(d) = app.session.active() else { return Outcome::Done(error("no document")) };
+    let doc = d.uid;
+    let path = params.get("path").and_then(Json::as_str).map(str::to_string);
+    if path.is_none() && (id == "file.saveAs" || d.path.is_none()) {
+        return Outcome::Done(error("missing `path`: programmatic calls never open dialogs"));
+    }
+    let target = path.or_else(|| d.path.clone());
+    let Some(bound) = bound else { return Outcome::Done(reply_of(app.run(id, params))) };
+    // The cell being edited is part of the save, and may make cells due.
+    if let Err(e) = app.settle_drafts() {
+        return Outcome::Done(error(&e));
+    }
+    if !app.save_waits.waiting(doc) && !app.session.python_workbook_busy(doc) {
+        return Outcome::Done(save_at_once(app, id, params));
+    }
+    Outcome::Hold(Hold(Held::Save { doc, id: id.to_string(), params, target, bound }))
+}
+
+/// A save that asked to wait, with nothing to wait for.
+fn save_at_once(app: &mut SheetApp, id: &str, params: Json) -> ControlResponse {
+    let mut r = app.run(id, params);
+    if let Ok(v) = &mut r {
+        note_unfinished(v, true, &[]);
+    }
+    reply_of(r)
+}
+
+/// `engine.execute` with `wait`: the command has run, and its reply holds until the workbook's Python
+/// is idle, or the cap comes.
+pub(crate) fn hold_until_idle(app: &SheetApp, doc: u64, result: Json, params: &Json, bound: WaitBound) -> Outcome {
+    let Some(wait) = app.session.python_wait_begin(doc, bound, true) else {
+        let mut result = result;
+        note_unfinished(&mut result, true, &[]);
+        return Outcome::Done(json!({"ok": true, "result": result}));
+    };
+    let cell = params.get("cell").filter(|_| result.get("cell").is_some() && result.get("value").is_some()).map(|cell| {
+        let mut q = json!({"cell": cell});
+        if let (Some(o), Some(sheet)) = (q.as_object_mut(), params.get("sheet")) {
+            o.insert("sheet".into(), sheet.clone());
+        }
+        q
+    });
+    Outcome::Hold(Hold(Held::Idle { wait, result, cell }))
+}
+
+fn error(e: &str) -> ControlResponse {
+    json!({"ok": false, "error": e})
+}
+
+fn reply_of(r: Result<Json, String>) -> ControlResponse {
+    match r {
+        Ok(v) => json!({"ok": true, "result": v}),
+        Err(e) => json!({"ok": false, "error": e}),
+    }
+}
+
+/// Takes on a control request's reply: it goes out when the save has happened or Python is idle.
+pub(crate) fn hold(app: &mut SheetApp, ctx: &egui::Context, held: Hold, reply: Sender<ControlResponse>) {
+    let full = app.save_waits.held() >= MAX_HELD;
+    match held.0 {
+        Held::Save { .. } if full => {
+            let _ = reply.send(error("too many requests are waiting for Python already"));
+        }
+        // The command has run: the reply says so, and what isn't finished yet.
+        Held::Idle { wait, mut result, .. } if full => {
+            note_unfinished(&mut result, true, &app.session.python_unfinished(wait.doc()));
+            let _ = reply.send(json!({"ok": true, "result": result}));
+        }
+        Held::Save { doc, id, params, target, bound } => {
+            if !app.save_waits.waiting(doc) {
+                let Some(wait) = app.session.python_wait_begin(doc, bound, false) else {
+                    let _ = reply.send(save_at_once(app, &id, params));
+                    return;
+                };
+                app.save_waits.waits.push(SaveWait::new(wait, false));
+            }
+            let Some(w) = app.save_waits.of_mut(doc) else { return };
+            // A second request joins the wait and doesn't start it over; its own bound still holds.
+            if let WaitBound::At(limit) = bound {
+                w.wait.limit_to(limit);
+            }
+            if let Some(save) = w.add(&id, &params, target) {
+                save.replies.push(reply);
+            }
+        }
+        Held::Idle { wait, result, cell } => app.save_waits.idle.push(IdleHold { wait, result, cell, reply }),
+    }
+    ctx.request_repaint();
+}
+
+/// Every frame: ends the waits that are over, answers the replies that are due.
 pub(crate) fn poll(app: &mut SheetApp, ctx: &egui::Context) {
     if !app.save_waits.any() {
         return;
     }
+    poll_idle(app);
     let mut i = 0;
     while let Some(w) = app.save_waits.waits.get_mut(i) {
         let closed = app.session.document_index(w.wait.doc()).is_none();
@@ -241,13 +374,49 @@ pub(crate) fn poll(app: &mut SheetApp, ctx: &egui::Context) {
             continue;
         }
         let w = app.save_waits.waits.remove(i);
-        if !closed {
+        if closed {
+            w.answer_all("The workbook was closed before it was saved.");
+        } else {
             finish(app, ctx, w);
         }
     }
     if app.save_waits.any() {
         ctx.request_repaint_after(crate::python_ui::BUSY_REPAINT);
     }
+}
+
+/// Answers the replies held for Python to be idle, whose wait is over.
+fn poll_idle(app: &mut SheetApp) {
+    let mut i = 0;
+    while let Some(h) = app.save_waits.idle.get_mut(i) {
+        if app.session.python_wait_poll(&mut h.wait) == WaitState::Waiting {
+            i = i.saturating_add(1);
+            continue;
+        }
+        let mut h = app.save_waits.idle.remove(i);
+        let value = h.cell.take().and_then(|q| current_value(app, h.wait.doc(), q));
+        if let (Some(value), Some(result)) = (value, h.result.as_object_mut()) {
+            result.insert("value".into(), value);
+        }
+        note_unfinished(&mut h.result, true, &app.session.python_wait_unfinished(&h.wait));
+        // A closed workbook's cells can't be told any more.
+        if let Some(o) = h.result.as_object_mut().filter(|_| app.session.document_index(h.wait.doc()).is_none()) {
+            o.insert("workbookClosed".into(), json!(true));
+        }
+        let _ = h.reply.send(json!({"ok": true, "result": h.result}));
+    }
+}
+
+/// What a cell holds now, read in its workbook without activating it.
+fn current_value(app: &mut SheetApp, doc: u64, query: Json) -> Option<Json> {
+    let window = app.session.doc_window(doc)?;
+    let back = app.session.active_window();
+    app.session.show_window(window);
+    let value = app.session.run("cell.get", query).ok().and_then(|v| v.get("value").cloned());
+    if let Some(back) = back {
+        app.session.show_window(back);
+    }
+    value
 }
 
 /// The wait is over: its saves run in the workbook's window, then the close it was asked for.
@@ -263,12 +432,18 @@ fn finish(app: &mut SheetApp, ctx: &egui::Context, w: SaveWait) {
     for save in w.saves {
         // Not `run`: a draft begun during the wait stays a draft, and goes in with the next save.
         app.store_view_state();
-        if let Err(e) = app.session.run(&save.id, save.params) {
-            failed.push(clean_error(&e));
-        }
+        let mut r = app.session.run(&save.id, save.params);
         app.after_engine();
+        match &mut r {
+            Ok(v) => note_unfinished(v, true, &unfinished),
+            Err(e) => failed.push(clean_error(e)),
+        }
+        for reply in save.replies {
+            let _ = reply.send(reply_of(r.clone()));
+        }
     }
     // A person who pressed Save Now knows, and one who then closes the workbook doesn't need telling.
+    // A programmatic save shows nothing: its reply says.
     let closing = w.close_after.is_some() && w.now;
     if w.person && !failed.is_empty() {
         app.say(failed.join("\n"));
@@ -316,7 +491,9 @@ pub(crate) fn command(app: &mut SheetApp, p: &Json) -> Result<Json, String> {
             }
         }
         Some("cancel") => {
-            app.save_waits.waits.retain(|w| w.wait.doc() != doc);
+            if let Some(i) = app.save_waits.waits.iter().position(|w| w.wait.doc() == doc) {
+                app.save_waits.waits.remove(i).answer_all("The save was cancelled in the window.");
+            }
         }
         Some(other) => return Err(format!("unknown action {other:?} (use saveNow or cancel)")),
     }
@@ -362,4 +539,14 @@ pub fn bar(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     app.run_or_alert("ui.saveWait", json!({"action": action}));
     ui.ctx().request_repaint();
+}
+
+/// What `wait` and `waitSeconds` ask for in a save's params or, failing that, in the request around
+/// them.
+pub(crate) fn asked_of(params: &Json, envelope: &Json) -> Result<Option<WaitBound>, String> {
+    match wait_asked(params)? {
+        Some(bound) => Ok(Some(bound)),
+        None if params.get("wait").is_some() => Ok(None),
+        None => wait_asked(envelope),
+    }
 }
