@@ -413,10 +413,9 @@ pub enum SelfTest {
     Failed(String),
 }
 
-/// Worker to parent.
-// One reply per request, read and taken apart at once: there is nothing to gain from boxing it.
-#[allow(clippy::large_enum_variant)]
+/// Worker to parent. Nearly every reply is the large variant, so boxing it would save nothing.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Reply {
     /// The worker started.
     Ready { self_test: SelfTest },

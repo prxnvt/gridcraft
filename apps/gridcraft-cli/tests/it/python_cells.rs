@@ -853,6 +853,30 @@ fn picture(s: &mut Session, cell: &str) -> (u64, u64, u64) {
     (r["width"].as_u64().unwrap(), r["height"].as_u64().unwrap(), r["density"].as_u64().unwrap())
 }
 
+#[test]
+fn a_real_plot_comes_back_from_its_file_for_either_return_type() {
+    let Some(mut s) = plots_session() else { return };
+    py(&mut s, "A1", "import matplotlib.pyplot as plt\nplt.figure(figsize=(2, 1))\nplt.plot([1, 2])\nplt.title('<one>')");
+    s.execute(
+        "python.set",
+        json!({"cell": "A2", "code": "import matplotlib.pyplot as plt\nplt.figure(figsize=(1, 2))\nplt.plot([2, 1])", "output": "value"}),
+    )
+    .unwrap();
+    settle(&mut s);
+    let image = |s: &mut Session, cell: &str| s.execute("python.image", json!({"cell": cell})).unwrap();
+    let (object, value) = (image(&mut s, "A1"), image(&mut s, "A2"));
+    assert!(object["base64"] != value["base64"]);
+    let path = std::env::temp_dir().join(format!("gridcraft-python-cells-plots-{}.xlsx", std::process::id()));
+    s.execute("file.saveAs", json!({"path": path})).unwrap();
+    let mut back = opened(&path);
+    assert_eq!(image(&mut back, "A1"), object, "what a run gave, with no run");
+    assert_eq!(image(&mut back, "A2"), value);
+    let sheet = back.doc().unwrap().wb.sheet(0).unwrap().clone();
+    assert!(sheet.images.is_empty() && sheet.cell_pictures.is_empty());
+    assert!(sheet.picture_at(CellRef::parse("A1").unwrap()).is_none() && sheet.picture_at(CellRef::parse("A2").unwrap()).is_some());
+    std::fs::remove_file(&path).ok();
+}
+
 const IRIS: &str = "import numpy as _np\n\
     _rng = _np.random.default_rng(1)\n\
     iris = pd.DataFrame(_rng.normal(size=(150, 4)), columns=['sepal_length', 'sepal_width', 'petal_length', 'petal_width'])\n";
