@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (the indicators: `python_card::tag_state`, `python_ui::checks`, `engine::python::packages`; earlier: the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (initialization code: `model::PyEnvironment`, `engine::python::initialization`, `python_window`'s second subject; earlier: the indicators: `python_card::tag_state`, `python_ui::checks`, `engine::python::packages`; earlier: the app turns Python on: `ui_egui::python_ui`; earlier: the engine runs Python cells: `engine::python`; earlier: `python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -180,7 +180,7 @@ Calc treats a Python cell as a graph node that reads nothing: a pass takes its k
 of evaluating it, so an array result spills, is blocked and unblocked, and reaches its dependents
 through the same code as a formula's. The xlsx reader and writer map Python cells to and from
 `_xlfn._xlws.PY(index,n)` formulas with cached values and the workbook's Python part, which holds
-the code (`xlsx::python_part`, [MS-XLSX] 2.3.10); `io::adopt_python` and `io::enforce_python_limits`
+the code and the environment (`xlsx::python_part`, [MS-XLSX] 2.3.10); `io::adopt_python` and `io::enforce_python_limits`
 bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
 size). `python.set` stores code; where Python doesn't run (see Running Python cells below) new or
 changed code shows `#BLOCKED!`. `python.output` switches a cell's return type; as with a new return type through `python.set`,
@@ -305,6 +305,28 @@ one `Client`, made when first needed and dropped with the workbook, which stops 
   turn comes, and until then reads as what it last gave, so a formula over a later cell gives the
   earlier one its result rather than `#BUSY!`. A worker that doesn't start is tried three more
   times, as a thread starting another process can leak a descriptor that makes the launcher refuse.
+- **Initialization** (`python/initialization.rs`). `Workbook::python_env`, an `Arc` so an undo step
+  doesn't copy it, holds `model::PyEnvironment`: the code, `user_modified`, the GUID and, opaque to all
+  but the xlsx crate, the raw XML around them. `python.initialization` sets it through `edit`, so it is
+  one undo step. `DocRun::init` is its run state. `step` runs it before the next cell in any worker that
+  hasn't (`init.in_worker`, which `worker_gone` clears), as a `Request::Run` with `init`, through the
+  same `send` as a cell, so the deadline and the replay limit hold. `plan` compares the code and whose
+  it is (`same_run`) along with the cells: a change, undo included, stops the worker and makes every cell
+  due. A failure is the `init.failed` diagnostic kept in `DocRun::init`, a state of the workbook:
+  `python_diagnostic` returns it for every cell without a copy per cell, `show_failure` writes `#PYTHON!`
+  to all of them in one commit, and it holds until the code changes, someone asks cells to run, or a new
+  package list arrives. The worker that failed goes with what it had done. `python.stop` sets
+  `init.stopped`, which counts as manual calculation, so code that never ends doesn't start again with the
+  next edit. Code past `MAX_INIT_CHARS` fails without a worker.
+  **Whose code it is** (`protocol::Init`) decides what a failing line means, in the worker
+  (`initialize` in `shim.py`), which runs code that isn't a person's a statement at a time. It leaves
+  out imports of what it provides lazily (`np`, `pd`, `sm`) and of plotting modules. It skips an import
+  that fails, a statement that hits a name such a line would have bound, and a top-level call on a module
+  that fails; its reply's value lists the packages it went without, as rows of `module, line`, which
+  become `init.skipped`. Anything else is the code's failure. A person's code is one `exec`, unless it
+  imports `excel`, in which case only that module gets those rules. The static check of packages reads
+  a person's code; other code is reported from what it actually lacked. The run log has a
+  row for each run with `PythonRun::initialization`.
 - **What is said.** `Session::python_diagnostic` gives one diagnostic per cell, from the catalog in
   `gridcraft_python::diagnostics`; `python.diagnostics` lists them. Each workbook keeps its last 200
   runs (`python.runLog`), with printed output cut to 64 KiB.
@@ -313,6 +335,12 @@ one `Client`, made when first needed and dropped with the workbook, which stops 
   thread of its own; `python_poll` picks up the answer, and it runs again when the capability changes
   and on `python.refreshEnvironment`. While it is out, due cells wait showing `#BUSY!`. On the web and
   on systems without a sandbox the answer, `blocked.platform`, is there at once.
+
+The Python editor window also edits the initialization code (`python_window::Target::initialization`,
+`PyWindow::initialization`), so the code, its checks, its questions and how it follows its workbook are
+one path: Apply runs `python.initialization`, and there is no sheet to follow, so `stale` compares the
+workbook's code with what the window loaded. `python_ui::checks::update_initialization` gives its problems
+strip the failure. A cell's editor leaves the failure's line out, since it counts in the other code.
 
 ## Sandbox
 
@@ -390,6 +418,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Initialization code: `model::PyEnvironment`, `engine::python::initialization`, `protocol::Init` and the worker's `initialize`, the Python part's `environmentDefinition`, and the editor window's second subject |
 | 2026-11-05 | minor | The engine runs Python cells: `engine::python`, `PythonCapability`, `python_poll` and the commands that run and report; `PyCode::busy`; `calc::evaluate_reference`. The app doesn't turn it on yet |
 | 2026-11-02 | minor | `python.clear` (Convert to Normal Cell) and `cmd::python::clear_refusal` |
 | 2026-11-02 | minor | Python cells in the interface: `python_card.rs` (PY tags, the card, the return-type items) and `python.output` |

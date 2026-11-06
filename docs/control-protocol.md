@@ -68,6 +68,7 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs; `confirm` runs the dialog's command with the same parameters as its OK button. `confirm` applies to a dialog whose OK runs a command (Solver, Data Analysis, the form dialogs); a dialog that presses its own OK, such as Goal Seek, answers `this dialog has no OK command; drive it with its own commands` and is driven with that command (`data.goalSeek`). That command does not go back to the dialog's sheet: after another sheet was shown, read the fields (`ui.inspect` reports the dialog's `values`), `cancel` the dialog (which shows its sheet again), then run `data.goalSeek` with those values, so references without a sheet name mean the dialog's sheet. Once the dialog's own sheet is deleted, `cancel` leaves the sheet shown as it is and replies `{"sheetDeleted": true}` (the sheet is found by identity, so a new sheet given its name does not count); the script then stops instead of running `data.goalSeek`, whose references without a sheet name would mean the sheet shown. A dialog with reference boxes (RefEdit) goes back to its own sheet, the one shown when it was opened (a sheet shown later, before any pick, does not take its place): `cancel` puts the selection from before picking back; `confirm` puts it back before the command runs (so references without a sheet name mean the dialog's sheet). Both fail, with the dialog left open, when a text-box draft on the picked sheet cannot be saved (its worksheet is no longer the active one), and `confirm` also once the dialog's sheet was deleted; the window's own Cancel closes the dialog in that case and shows the reason. |
 | `ui.pythonMode` (via `engine.execute`) | `{on?}` | Python mode on the active cell, in the formula bar (an edit in progress keeps its text); `on: false` turns it off; without `on` it switches. A start that is refused (a locked cell on a protected sheet, a cell or draft inside another cell's spill, code hidden on a protected sheet) is an error with the reason. Opens no dialog |
 | `ui.pythonEditor` (via `engine.execute`) | `{on?, cell?, force?}` | Open the Python editor window on `cell` (`A1` or `Sheet2!B3`; default: the active cell; a cell inside a Python cell's spill opens its Python cell), or close it with `on: false`; without `on` it opens or closes. Opens no dialog and never asks: with unsaved code in the window it refuses to close it or open it on another cell, unless `force: true` discards the code. Refused on a Hidden cell of a protected sheet, whose code stays out of view. Replies with the window's state. `file.close`, and `window.close` on the workbook's last window, are refused while the window has unsaved code for the workbook; `app.quit` is refused while it has unsaved code |
+| `ui.pythonInitialization` (via `engine.execute`) | `{on?, force?}` | Open the Python editor window on the workbook's initialization code, or close it with `on: false`; without `on` it opens or closes. Opens no dialog and never asks, as `ui.pythonEditor`. Replies with the window's state, with `initialization: true` and no `sheet` or `cell` |
 | `ui.pythonCard` (via `engine.execute`) | `{on?}` | Open the card of the active cell's Python cell (its cached result's type and preview), or close it with `on: false`. Opening it is an error when the active cell isn't a Python cell, or while a cell is being edited; closing it always succeeds |
 | `ui.pythonEnvironment`, `ui.pythonPackages`, `ui.pythonProblems`, `ui.pythonRunLog`, `ui.pythonPermissions` (via `engine.execute`) | `{on?}` | Open or close a Python pane, in place of any other pane; without `on` it switches. Replies `{open}`; `ui.inspect` reports them. Opening a pane is safe from any caller: none of them turns Python on |
 | `ui.backstage` (via `engine.execute`) | `{page?: home\|new\|open\|info\|saveAs\|print\|export\|options\|account\|close, section?: general\|python}` | `section` picks File › Options' page. Open the File tab's Backstage view on a page, or close it (`ui.inspect` reports the open page as `backstage`) |
@@ -166,8 +167,9 @@ GridCraft accepts the existing `file.print` sheet/pagination params on `ui.print
 ## Python cells
 
 `engine.execute` reaches the `python.*` commands: `python.set`, `python.run`, `python.runAll`,
-`python.stop`, `python.reset`, `python.calculation`, `python.diagnostics`, `python.runLog`,
-`python.clearRunLog`, `python.environment` and `python.refreshEnvironment`. None opens a dialog.
+`python.stop`, `python.reset`, `python.initialization`, `python.calculation`, `python.diagnostics`,
+`python.runLog`, `python.clearRunLog`, `python.environment` and `python.refreshEnvironment`. None opens
+a dialog.
 
 Python runs only after a person turned it on in File › Options › Python, and a workbook from a file
 only after a person enabled it. Nothing here can do either, or choose the interpreter or the limits:
@@ -176,8 +178,26 @@ they aren't commands, `ui.set` has no such field, and those widgets refuse the i
 why Python doesn't run. That doesn't cover someone who can edit the preferences file on disk, or who
 operates the real mouse and keyboard or the system's accessibility interface.
 
+`python.initialization {code?}` is the workbook's initialization code, which runs before its cells in
+a fresh worker. With `code` it sets it, as one undo step, and every cell runs again from the top; it is
+refused while the workbook's structure is protected, and over 65,536 characters. Without `code` it only
+reports. It replies `{code, userModified, fits, diagnostic?}`. `userModified` is false for what the
+application that wrote a file put there, where what can't be imported is skipped and reported as
+`init.skipped` rather than stopping the cells. `fits` is false for a file's code cut at the limit, which
+doesn't run. `diagnostic` is the `init.failed` every cell shows when it failed, with Python's message as
+`detail` and its `line`. `python.environment` has that diagnostic too, as `initialization`, and
+`python.diagnostics` lists it, and `init.skipped` with the module as `detail` and the name to install as
+`install`, once each with `initialization: true` and no `cell`. In `python.runLog` a run of it has
+`initialization: true` and no `sheet` or `cell`.
+
+`ui.pythonInitialization {on?, force?}` opens the Python editor window on that code, and closes it; it
+replies as `ui.pythonEditor` does, with `initialization: true`, `title: "Initialization"` and no `sheet`
+or `cell`, and never asks: with unsaved code it refuses, unless `force` discards them. `ui.inspect`
+reports the same state as `pythonEditor`.
+
 `ui.inspect` reports `python`: `{state: off|notSetUp|ready|running|blocked, reason?, enabled,
-workbookEnabled, hasCells, enableBar, calculation, interpreter?, running? {sheet, cell, ms},
+workbookEnabled, hasCells, enableBar, calculation, interpreter?, running? {sheet, cell, ms} or
+{initialization: true, ms}, initialization? {userModified, fits, chars, failed? {detail, line}, skipped},
 findings: {formulaBar, editor}, optionsPage, panes: {environment, packages, problems, runLog, permissions}}`. `state` is what the
 Python tab's button shows; `reason` is a diagnostic's id from `python.diagnostics`' vocabulary.
 `findings` lists what the checks found in the code being edited in the formula bar's Python mode and

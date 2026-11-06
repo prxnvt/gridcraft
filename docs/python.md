@@ -1,6 +1,6 @@
 # Python in cells
 
-> **Last updated:** 2026-11-05 · **Change:** minor (what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
+> **Last updated:** 2026-11-05 · **Change:** minor (initialization code; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
 
 A Python cell runs code you write, in your own Python, on your computer. GridCraft never downloads
 Python and never installs packages. It finds the Python you have, and it runs your code in a sandbox
@@ -79,6 +79,49 @@ Cells run in row order, sheet by sheet in tab order, as in Excel, and share one 
 read a file outside Python, write a file, open a network connection and start a program, and it
 doesn't run Python unless every one is refused. [sandbox.md](sandbox.md) has the details.
 
+## Initialization code
+
+A workbook can hold code that runs before its Python cells, in the variables they share, as in Excel:
+the imports and settings they all rely on. It belongs to no cell. **Initialization**, on the Python
+tab and under **Formulas › Python**, opens it in the Python editor window, with the same line numbers,
+code checks and problems strip, and the same questions before unsaved code would be lost. Apply is one
+undo step, and it is refused while the workbook's structure is protected.
+
+Whenever Python starts for the workbook, this code runs first: at the first cell, after **Reset**,
+and after a limit or a crash restarted Python. Changing it, or undoing a change, runs every cell again
+from the top in a new Python, so nothing the old code left stays. With no Python cells nothing runs. It
+counts toward the limits below as a cell does, and the Run Log lists each run as Initialization.
+
+**When it fails**, every Python cell shows `#PYTHON!` with Python's message and line, and its card
+offers **Open Initialization** and **Reset**. Problems lists it once. Nothing runs again until it is
+fixed: until the code changes, or you ask with Run Cell, Run All or Reset, or Check Again finds a new
+list of packages. **Stop** while it runs isn't a failure: the cells keep what they show, marked stale,
+until you ask them to run.
+
+**Code from a file** that a person didn't change (the file doesn't mark it `userModified`) is what
+Excel puts in every workbook: imports and settings. A package this Python doesn't have doesn't stop the
+cells:
+
+- `import numpy as np`, `import pandas as pd` and `import statsmodels as sm` wait until the name is
+  used, as they do without this code. So a workbook doesn't pay for what it doesn't use.
+- `matplotlib` and `seaborn` aren't imported, since cells don't draw plots. `plt` and `sns` say so when
+  used.
+- Any other import that fails is skipped, with the lines that use what it would have given, and a
+  setting on a module that fails is skipped as well. Excel's own `excel` module, which no other Python
+  has, is one of these.
+- Problems lists each package it went on without, as `init.skipped`, with the line and the install
+  command. A cell that uses such a package fails with its own error.
+- Anything else that goes wrong, such as a syntax error or an error in a line that isn't an import or
+  a setting, is a failure as above.
+
+Code you change or type here is yours: any error in it is a failure, including a failing import. The
+one exception is a line that imports `excel` or uses it, which is skipped and reported, so that a
+workbook whose code you changed in Excel still runs.
+
+`xl()` doesn't work in initialization code: there is no cell for it to read for. It holds at most
+65,536 characters. A file's code past that is cut with a warning, doesn't run, and is written back cut
+by a save; you can shorten it in the editor.
+
 ## Limits
 
 - **Time:** 30 seconds per cell by default, from 1 second to 1 hour, plus 10 seconds for the first
@@ -100,11 +143,10 @@ tab, or press Alt, Y, to show it. When you leave the cell the tab goes, and if i
 ribbon returns to Home. A pane you opened from it stays open.
 
 **Formulas › Python** is the way in from anywhere: Insert Python starts Python mode, which brings the
-tab up, and Reset and Diagnostics are there too. File › Options › Python and the status bar item work
+tab up, and Reset, Initialization and Diagnostics are there too. File › Options › Python and the status bar item work
 anywhere, and each pane has its own command.
 
-- **Code:** Insert Python, Editor, Output As (Python Object or Excel Value). Initialization is
-  disabled: GridCraft has no initialization code yet.
+- **Code:** Insert Python, Editor, Initialization, Output As (Python Object or Excel Value).
 - **Run:** Run Cell, Run All, Stop, Reset, and Python Calculation (Automatic or Manual; under Manual,
   cells whose inputs changed wait for Run Cell, Run All or F9, and are marked stale).
 - **Environment:** a button that shows the state (Off, Not Set Up, Ready, Running, Blocked) and opens
@@ -128,8 +170,8 @@ cell runs, the cell and how long it has run. A click on it opens the Environment
 - grey, with a lock: Python can't run here.
 
 **The card** opens from the tag, or with Ctrl+Shift+F5. It says what happened in one sentence, then
-Python's own message with its line, and has one button for what to do: Open Settings, Choose
-Interpreter, Copy Install Command, Enable, Run Again, Reset or Go To Cell. A failed run that printed
+Python's own message with its line, and has a button for what to do: Open Settings, Choose
+Interpreter, Copy Install Command, Enable, Run Again, Open Initialization with Reset, or Go To Cell. A failed run that printed
 something has Show Printed Output. A result keeps its type and preview. Copy Install Command gives
 the uv command; pip is behind **Other package managers**.
 
@@ -153,5 +195,6 @@ ranges come back as lists of rows.
 ## For agents
 
 Agents can read all of this and run cells, once a person has turned Python on: `python.environment`,
-`python.diagnostics`, `python.runLog`, `python.run`, `python.runAll`, `ui.inspect`. See
+`python.diagnostics`, `python.runLog`, `python.run`, `python.runAll`, `python.initialization`,
+`ui.pythonInitialization`, `ui.inspect`. See
 [control-protocol.md](control-protocol.md).
