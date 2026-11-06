@@ -30,7 +30,7 @@ fn worker(gate: Arc<AtomicBool>) -> FakeTransport {
         while let Some(req) = w.next_request() {
             let (id, code) = match req {
                 Request::Run { id, code, .. } => (id, code),
-                Request::Reset { id } => (id, String::new()),
+                Request::Render { id, .. } | Request::Reset { id } => (id, String::new()),
             };
             let words: Vec<&str> = code.split_whitespace().collect();
             let number = || Output::Value(Value::Number(words.get(1).and_then(|n| n.parse().ok()).unwrap_or(0.0)));

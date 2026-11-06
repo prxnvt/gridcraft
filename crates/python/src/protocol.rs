@@ -10,6 +10,8 @@
 //!   the workbook's initialization code ([`Init`]), and `value` in its reply lists what it skipped.
 //!   `"at":[S,R,C]` is the cell's place in the run order (sheet, row and column), which says whose
 //!   figures are whose: a cell runs after closing the figures it and later cells made.
+//! - `{"type":"render","id":N,"at":[S,R,C],"width":W,"height":H}` draws that cell's figure again at
+//!   that size, in the units of an image's `size`, without running the cell.
 //! - `{"type":"reset","id":N}` clears the shared globals.
 //!
 //! The worker writes [`Reply`] lines to its standard output:
@@ -29,8 +31,9 @@
 //! `R × C` scalars in row order, or, only as a result, `{"object":{"typeName":"…","preview":"…",
 //! "size":[6,4],"table":{…},"image":{…}}}`, with `size` and `table` there when the cell's return type
 //! is a Python object and the object has them. An `image` is `{"mime":"image/png","base64":"…",
-//! "density":2}`, a picture the cell gave ([`Picture`]), whatever the return type; its `size` is its
-//! pixels divided by its density. A table is `{"columns":["a"],"rows":R,"cols":C,"data":[…],
+//! "density":2,"floor":[320,240]}`, a picture the cell gave ([`Picture`]), whatever the return type;
+//! its `size` is its pixels divided by its density. `floor` is there for a figure that can be drawn
+//! again at another size: the smallest size that works. A table is `{"columns":["a"],"rows":R,"cols":C,"data":[…],
 //! "rowLabels":true,"totalRows":N,"totalCols":M,"textCut":true}`, a bounded look at the object
 //! ([`Table`]). Dates carry no serial numbers, as only GridCraft knows the workbook's date system
 //! ([`Stamp`]).
@@ -149,6 +152,8 @@ pub enum Request {
     /// `module, line` for each package it skipped.
     /// `at` is the cell's place in the run order, as sheet, row and column.
     Run { id: u64, code: String, inputs: BTreeMap<String, Input>, object: bool, init: Option<Init>, at: Option<[u32; 3]> },
+    /// Draw the figure of the cell at `at` again, at this size, without running the cell.
+    Render { id: u64, at: [u32; 3], width: u32, height: u32 },
     /// Clear the shared globals.
     Reset { id: u64 },
 }
@@ -156,7 +161,7 @@ pub enum Request {
 impl Request {
     pub fn id(&self) -> u64 {
         match self {
-            Request::Run { id, .. } | Request::Reset { id } => *id,
+            Request::Run { id, .. } | Request::Render { id, .. } | Request::Reset { id } => *id,
         }
     }
 
@@ -182,6 +187,10 @@ impl Request {
                 let init = raw.init.as_deref().and_then(Init::parse);
                 Ok(Request::Run { id: raw.id, code: raw.code.unwrap_or_default(), inputs, object: raw.output.as_deref() == Some("object"), init, at: raw.at })
             }
+            RequestKind::Render => {
+                let at = raw.at.ok_or("render without at")?;
+                Ok(Request::Render { id: raw.id, at, width: raw.width.unwrap_or(0), height: raw.height.unwrap_or(0) })
+            }
             RequestKind::Reset => Ok(Request::Reset { id: raw.id }),
         }
     }
@@ -206,7 +215,7 @@ pub enum Output {
         /// A bounded look at it, when it is like a table.
         table: Option<Table>,
         /// The picture it is, when it is one.
-        picture: Option<Picture>,
+        picture: Option<Box<Picture>>,
     },
 }
 
@@ -219,7 +228,7 @@ impl Output {
     /// A picture, with `density` of its pixels for one of its size.
     pub fn picture(picture: Picture) -> Output {
         let size = vec![u64::from(picture.width / picture.density.max(1)).max(1), u64::from(picture.height / picture.density.max(1)).max(1)];
-        Output::Object { type_name: "Image".into(), preview: "Image".into(), size, table: None, picture: Some(picture) }
+        Output::Object { type_name: "Image".into(), preview: "Image".into(), size, table: None, picture: Some(Box::new(picture)) }
     }
 }
 
@@ -236,6 +245,8 @@ pub struct Picture {
     pub height: u32,
     /// How many of its pixels stand for one of the size it reports: 1 or 2.
     pub density: u32,
+    /// For a figure that can be drawn again at another size: the smallest size that works.
+    pub floor: Option<[u32; 2]>,
 }
 
 impl fmt::Debug for Picture {
@@ -259,7 +270,7 @@ impl Picture {
         if width == 0 || height == 0 || width > MAX_PICTURE_SIDE || height > MAX_PICTURE_SIDE || u64::from(width) * u64::from(height) > MAX_PICTURE_PIXELS {
             return Err(format!("a picture of {width} x {height} pixels"));
         }
-        Ok(Picture { mime, bytes, width, height, density })
+        Ok(Picture { mime, bytes, width, height, density, floor: None })
     }
 }
 
@@ -311,7 +322,7 @@ const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 /// Standard base64, padded. `None` for anything else.
 fn from_base64(text: &str) -> Option<Vec<u8>> {
     let bytes = text.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
@@ -323,8 +334,9 @@ fn from_base64(text: &str) -> Option<Vec<u8>> {
         b'/' => Some(63),
         _ => None,
     };
-    let count = bytes.len() / 4;
-    for (index, group) in bytes.chunks_exact(4).enumerate() {
+    let (groups, _) = bytes.as_chunks::<4>();
+    let count = groups.len();
+    for (index, group) in groups.iter().enumerate() {
         let padding = if index + 1 == count { group.iter().rev().take_while(|b| **b == b'=').count() } else { 0 };
         if padding > 2 {
             return None;
@@ -402,6 +414,8 @@ pub enum SelfTest {
 }
 
 /// Worker to parent.
+// One reply per request, read and taken apart at once: there is nothing to gain from boxing it.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reply {
     /// The worker started.
@@ -539,6 +553,7 @@ struct RawSelfTest {
 #[serde(rename_all = "camelCase")]
 enum RequestKind {
     Run,
+    Render,
     Reset,
 }
 
@@ -553,6 +568,8 @@ struct RawRequest {
     output: Option<String>,
     init: Option<String>,
     at: Option<[u32; 3]>,
+    width: Option<u32>,
+    height: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -596,7 +613,7 @@ enum Parsed {
         preview: String,
         size: Vec<u64>,
         table: Option<Table>,
-        picture: Option<Picture>,
+        picture: Option<Box<Picture>>,
     },
 }
 
@@ -712,7 +729,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
                 }
                 let table = o.table.map(RawTable::validate).transpose().map_err(de::Error::custom)?;
                 let size = o.size.map_or_else(Vec::new, |s| s.0);
-                let picture = o.image.map(|image| image.validate(&size)).transpose().map_err(de::Error::custom)?;
+                let picture = o.image.map(|image| image.validate(&size).map(Box::new)).transpose().map_err(de::Error::custom)?;
                 Parsed::Object { type_name: o.type_name.0, preview: o.preview.0, size, table, picture }
             }
             ValueKey::Array => return Err(de::Error::custom("an array inside an array")),
@@ -742,6 +759,7 @@ struct RawImage {
     mime: Capped<32>,
     base64: String,
     density: Option<u32>,
+    floor: Option<[u32; 2]>,
 }
 
 impl RawImage {
@@ -750,7 +768,13 @@ impl RawImage {
             return Err(format!("a picture of more than {MAX_PICTURE_BYTES} bytes"));
         }
         let bytes = from_base64(&self.base64).ok_or("a picture that isn't base64")?;
-        let picture = Picture::from_bytes(bytes, self.density.unwrap_or(1))?;
+        let mut picture = Picture::from_bytes(bytes, self.density.unwrap_or(1))?;
+        if let Some(floor) = self.floor {
+            if floor.iter().any(|n| *n == 0 || *n > MAX_PICTURE_SIDE) {
+                return Err(format!("a picture's floor of {floor:?}"));
+            }
+            picture.floor = Some(floor);
+        }
         if picture.mime.mime() != self.mime.0 {
             return Err(format!("a picture that calls itself {} and is {}", self.mime.0, picture.mime.mime()));
         }
@@ -1166,6 +1190,13 @@ impl Serialize for WireRequest<'_> {
                     m.serialize_entry("at", at)?;
                 }
             }
+            Request::Render { id, at, width, height } => {
+                m.serialize_entry("type", "render")?;
+                m.serialize_entry("id", id)?;
+                m.serialize_entry("at", at)?;
+                m.serialize_entry("width", width)?;
+                m.serialize_entry("height", height)?;
+            }
             Request::Reset { id } => {
                 m.serialize_entry("type", "reset")?;
                 m.serialize_entry("id", id)?;
@@ -1222,7 +1253,7 @@ impl Serialize for WireOutput<'_> {
             Output::Dated(d) => WireDated { value: &d.value, stamps: &d.stamps }.serialize(s),
             Output::Object { type_name, preview, size, table, picture } => {
                 let mut m = s.serialize_map(Some(1))?;
-                m.serialize_entry("object", &WireObject { type_name, preview, size, table: table.as_ref(), picture: picture.as_ref() })?;
+                m.serialize_entry("object", &WireObject { type_name, preview, size, table: table.as_ref(), picture: picture.as_deref() })?;
                 m.end()
             }
         }
@@ -1264,6 +1295,9 @@ impl Serialize for WireImage<'_> {
         m.serialize_entry("base64", &to_base64(&self.0.bytes))?;
         if self.0.density != 1 {
             m.serialize_entry("density", &self.0.density)?;
+        }
+        if let Some(floor) = &self.0.floor {
+            m.serialize_entry("floor", floor)?;
         }
         m.end()
     }

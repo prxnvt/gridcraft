@@ -450,3 +450,174 @@ fn deleting_the_picture_leaves_the_cell() {
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(images(&s, 0), 1);
 }
+
+// ---- Figures whose size is up to GridCraft
+
+fn resize(s: &mut Session, width: f64, height: f64) {
+    let id = s.doc().unwrap().wb.sheets[0].images[0].id;
+    s.execute("object.move", json!({"kind": "image", "id": id, "width": width, "height": height})).unwrap();
+    settle(s);
+}
+
+fn figure_with_picture(code: &str) -> (Session, gridcraft_python::fake::FakeHandle) {
+    let (mut s, h) = session();
+    py(&mut s, "A1", code);
+    settle(&mut s);
+    s.execute("python.displayOverCells", json!({"cell": "A1", "at": "D1"})).unwrap();
+    settle(&mut s);
+    (s, h)
+}
+
+fn shown(s: &Session) -> (u32, u32) {
+    let o = &s.doc().unwrap().wb.sheets[0].images[0];
+    let i = image::load_from_memory(&o.data).unwrap();
+    (i.width(), i.height())
+}
+
+#[test]
+fn resizing_a_free_figure_draws_it_again_without_running_the_cell() {
+    let (mut s, h) = figure_with_picture("figure 400 300");
+    assert_eq!(shown(&s), (400, 300), "at its natural size there is nothing to do");
+    let ran = runs(&h).len();
+    let steps = s.doc().unwrap().undo.len();
+    resize(&mut s, 800.0, 200.0);
+    assert_eq!(shown(&s), (800, 200));
+    assert_eq!(runs(&h).len(), ran, "no cell ran");
+    assert_eq!(s.doc().unwrap().undo.len(), steps + 1, "the resize is the one step");
+    // Undo brings the old size and the old drawing back, with nothing to draw.
+    s.execute("edit.undo", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(shown(&s), (400, 300));
+    s.execute("edit.redo", json!({})).unwrap();
+    settle(&mut s);
+    assert_eq!(shown(&s), (800, 200));
+}
+
+#[test]
+fn a_figure_stops_at_its_floor_and_the_picture_is_scaled_below_it() {
+    let (mut s, _h) = figure_with_picture("figure 400 300");
+    resize(&mut s, 100.0, 100.0);
+    assert_eq!(shown(&s), (200, 150), "half its natural size");
+    let o = s.doc().unwrap().wb.sheets[0].images[0].clone();
+    assert_eq!((o.anchor.width, o.anchor.height), (100.0, 100.0), "it shows at the size it was given");
+    resize(&mut s, 100.0, 400.0);
+    assert_eq!(shown(&s), (200, 400), "each side on its own");
+}
+
+#[test]
+fn a_figure_placed_smaller_than_natural_keeps_its_text_the_same_size_when_resized() {
+    let (mut s, _h) = figure_with_picture("figure 1280 960");
+    let o = s.doc().unwrap().wb.sheets[0].images[0].clone();
+    assert_eq!(o.anchor.width, 640.0, "placed at most 640 wide");
+    assert_eq!(shown(&s), (1280, 960));
+    resize(&mut s, 800.0, 480.0);
+    assert_eq!(shown(&s), (1600, 960), "one unit of the picture still stands for two of the figure");
+}
+
+#[test]
+fn copies_at_different_sizes_each_get_their_own_drawing() {
+    let (mut s, _h) = figure_with_picture("figure 400 300");
+    let id = s.doc().unwrap().wb.sheets[0].images[0].id;
+    s.execute("python.createReference", json!({"id": id})).unwrap();
+    let second = s.doc().unwrap().wb.sheets[0].images[1].id;
+    s.execute("object.move", json!({"kind": "image", "id": id, "width": 800.0, "height": 300.0})).unwrap();
+    s.execute("object.move", json!({"kind": "image", "id": second, "width": 400.0, "height": 600.0})).unwrap();
+    settle(&mut s);
+    let sizes: Vec<(u32, u32)> = s.doc().unwrap().wb.sheets[0]
+        .images
+        .iter()
+        .map(|o| {
+            let i = image::load_from_memory(&o.data).unwrap();
+            (i.width(), i.height())
+        })
+        .collect();
+    assert_eq!(sizes, [(800, 300), (400, 600)]);
+}
+
+#[test]
+fn a_new_result_keeps_the_shape_of_a_free_figures_picture_and_redraws_it() {
+    let (mut s, _h) = figure_with_picture("figure 400 300");
+    resize(&mut s, 800.0, 200.0);
+    py(&mut s, "A1", "figure 402 300");
+    settle(&mut s);
+    let o = s.doc().unwrap().wb.sheets[0].images[0].clone();
+    assert_eq!((o.anchor.width, o.anchor.height), (800.0, 200.0));
+    assert_eq!(shown(&s), (800, 200));
+}
+
+#[test]
+fn a_figure_of_fixed_size_or_another_picture_just_scales() {
+    let (mut s, h) = figure_with_picture("picture 400 300");
+    resize(&mut s, 800.0, 200.0);
+    assert_eq!(shown(&s), (400, 300), "the same bytes, stretched");
+    assert!(h.requests().iter().all(|r| !matches!(r, gridcraft_python::protocol::Request::Render { .. })));
+}
+
+#[test]
+fn a_figure_that_cant_be_drawn_again_stays_as_it_is() {
+    let (mut s, _h) = session();
+    py(&mut s, "A1", "set no_render 1");
+    py(&mut s, "A2", "figure 400 300");
+    settle(&mut s);
+    s.execute("python.displayOverCells", json!({"cell": "A2", "at": "D1"})).unwrap();
+    resize(&mut s, 800.0, 200.0);
+    assert_eq!(shown(&s), (400, 300));
+    assert_eq!(value(&s, "A2"), Value::text("Image"), "no error on the cell");
+    assert_eq!(s.python_diagnostic(0, c("A2")).map(|d| d.kind.id), None);
+    // It isn't tried again and again.
+    assert!(!s.python_busy());
+}
+
+#[test]
+fn a_worker_lost_while_it_draws_makes_no_cell_error() {
+    let (mut s, h) = session();
+    py(&mut s, "A1", "set die_on_render 1");
+    py(&mut s, "A2", "figure 400 300");
+    settle(&mut s);
+    s.execute("python.displayOverCells", json!({"cell": "A2", "at": "D1"})).unwrap();
+    settle(&mut s);
+    let started = h.starts();
+    resize(&mut s, 800.0, 200.0);
+    assert_eq!(shown(&s), (400, 300), "it stays as it was");
+    assert_eq!(value(&s, "A2"), Value::text("Image"));
+    assert_eq!(s.python_diagnostic(0, c("A2")).map(|d| d.kind.id), None);
+    assert_eq!(h.starts(), started, "nothing starts a worker for this");
+    assert!(!s.python_busy(), "and it isn't tried again and again");
+    // The next cell to run finds a fresh worker, and the cells before it run again in it.
+    py(&mut s, "A3", "ret 3");
+    settle(&mut s);
+    assert_eq!(value(&s, "A3"), Value::Number(3.0));
+    assert!(h.starts() > started);
+}
+
+#[test]
+fn with_no_worker_the_picture_stretches_and_nothing_starts_one() {
+    let (mut s, h) = figure_with_picture("figure 400 300");
+    s.set_python_workbook_enabled(false);
+    settle(&mut s);
+    let started = h.starts();
+    resize(&mut s, 800.0, 200.0);
+    assert_eq!(shown(&s), (400, 300));
+    assert_eq!(h.starts(), started);
+    assert!(!s.python_busy());
+}
+
+#[test]
+fn excel_value_fills_its_cell_at_or_above_the_floor() {
+    let (mut s, _h) = session();
+    s.execute("python.set", json!({"cell": "A1", "code": "figure 400 300", "output": "value"})).unwrap();
+    settle(&mut s);
+    let drawn = |s: &Session| {
+        let wb = &s.doc().unwrap().wb;
+        let i = image::load_from_memory(&wb.sheets[0].picture_at(c("A1")).unwrap().data).unwrap();
+        (i.width(), i.height())
+    };
+    assert_eq!(drawn(&s), (400, 300), "below the floor it stays the natural picture");
+    s.execute("home.columnWidth", json!({"cols": "A:A", "width": 500})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "1:1", "height": 200})).unwrap();
+    settle(&mut s);
+    let wb = &s.doc().unwrap().wb;
+    let (w, h) = (wb.sheets[0].col_width(0).round() as u32, wb.sheets[0].row_height(0).round() as u32);
+    assert_eq!(drawn(&s), (w, h), "the cell's own size");
+    assert_eq!(python(&s, "A1").image().unwrap().width, 400, "the result itself is unchanged");
+}

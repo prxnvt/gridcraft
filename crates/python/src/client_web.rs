@@ -35,6 +35,10 @@ impl Client {
     pub fn alive(&self) -> bool {
         false
     }
+    pub fn submit_render(&mut self, _at: [u32; 3], _width: u32, _height: u32) -> Option<u64> {
+        None
+    }
+
     pub fn take_touched(&mut self) -> Option<[u32; 3]> {
         None
     }

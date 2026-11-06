@@ -76,7 +76,7 @@ impl FakeTransport {
             while let Some(req) = w.next_request() {
                 let result = match &req {
                     Request::Run { code, inputs, .. } => answer(code, inputs),
-                    Request::Reset { .. } => Ok(Output::Value(Value::Empty)),
+                    Request::Render { .. } | Request::Reset { .. } => Ok(Output::Value(Value::Empty)),
                 };
                 if !w.done(req.id(), result) {
                     return;

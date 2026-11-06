@@ -1047,3 +1047,124 @@ fn text_in_other_scripts_draws_without_choosing_a_font() {
     assert_eq!(v(&s, "A2"), Value::Bool(true));
     assert_eq!(kind(&s, "A3"), Some("python.exception"));
 }
+
+/// The pixels of the first floating picture, by its PNG header.
+fn drawn(s: &Session) -> (u32, u32) {
+    let wb = &s.doc().unwrap().wb;
+    let data = &wb.active().unwrap().images[0].data;
+    let be = |at: usize| u32::from_be_bytes(data[at..at + 4].try_into().unwrap());
+    (be(16), be(20))
+}
+
+fn place(s: &mut Session, cell: &str) -> u32 {
+    let r = s.execute("python.displayOverCells", json!({"cell": cell, "at": "H1"})).unwrap();
+    r["image"].as_u64().unwrap() as u32
+}
+
+fn resize_to(s: &mut Session, id: u32, width: f64, height: f64) {
+    s.execute("object.move", json!({"kind": "image", "id": id, "width": width, "height": height})).unwrap();
+    settle(s);
+}
+
+#[test]
+fn a_free_figure_is_drawn_again_at_the_size_it_is_given() {
+    let Some(mut s) = plots_session() else { return };
+    py(&mut s, "A1", IRIS);
+    py(&mut s, "A2", "plt.plot([1, 2])\nplt.title('A title')\nplt.xlabel('x')");
+    py(&mut s, "A3", "[len(plt.gca().lines), list(plt.gcf().get_size_inches())]");
+    settle(&mut s);
+    let id = place(&mut s, "A2");
+    let log = s.python_run_log().count();
+    resize_to(&mut s, id, 900.0, 300.0);
+    assert_eq!(drawn(&s), (1800, 600), "twice the pixels of the size it is shown at");
+    resize_to(&mut s, id, 500.0, 700.0);
+    assert_eq!(drawn(&s), (1000, 1400));
+    assert_eq!(s.python_run_log().count(), log, "no cell ran");
+    // The next cell finds the figure as it was.
+    py(&mut s, "B1", "list(plt.gcf().get_size_inches()) + [plt.gca().get_position().width > 0.7]");
+    settle(&mut s);
+    assert_eq!((v(&s, "B1"), v(&s, "B2"), v(&s, "B3")), (num(6.4), num(4.8), Value::Bool(true)));
+    // Below the floor the figure is drawn at the floor, and the picture is scaled.
+    resize_to(&mut s, id, 100.0, 100.0);
+    assert_eq!(drawn(&s), (640, 480), "half its natural size, twice over");
+}
+
+#[test]
+fn every_kind_of_plot_can_be_drawn_again() {
+    let Some(mut s) = plots_session() else { return };
+    py(&mut s, "A1", IRIS);
+    settle(&mut s);
+    let kinds = [
+        "plt.figure()\nplt.plot([1, 2])\nplt.title('t')\nplt.xlabel('x')\nplt.ylabel('y')\nplt.legend(['a'])",
+        "f, a = plt.subplots(2, 2)\nf.tight_layout()\nf",
+        "f, a = plt.subplots()\nf.colorbar(a.scatter(iris['sepal_length'], iris['sepal_width'], c=iris['petal_length']))\nf",
+        "iris.plot()",
+        "f, a = plt.subplots(1, 2, layout='constrained')\na[0].set_title('left')\nf",
+        "f, a = plt.subplots()\na.inset_axes([.5, .5, .4, .4]).plot([2, 1])\nf",
+        "f, a = plt.subplots()\na.imshow(np.arange(100).reshape(10, 10))\nf",
+        "sns.pairplot(iris)",
+        "sns.jointplot(iris, x='sepal_length', y='sepal_width')",
+        "sns.relplot(iris, x='sepal_length', y='sepal_width')",
+        "plt.figure()\nsns.boxplot(iris)",
+    ];
+    for code in kinds {
+        py(&mut s, "B1", code);
+        settle(&mut s);
+        assert_eq!(v(&s, "B1"), Value::text("Image"), "{code}: {:?}", kind(&s, "B1"));
+        let id = place(&mut s, "B1");
+        let (w, h, _) = picture(&mut s, "B1");
+        let big = (w.max(640) as f64 * 1.2, h as f64 * 1.3);
+        resize_to(&mut s, id, big.0.min(2000.0), big.1.min(2000.0));
+        assert_eq!(kind(&s, "B1"), None, "{code}");
+        let sized = s.doc().unwrap().wb.active().unwrap().images[0].rendered;
+        assert!(sized.is_some(), "{code}");
+        s.execute("object.delete", json!({"kind": "image", "id": id})).unwrap();
+    }
+}
+
+#[test]
+fn a_figure_whose_size_the_code_chose_isnt_drawn_again() {
+    let Some(mut s) = plots_session() else { return };
+    py(&mut s, "A1", "from seaborn import pairplot as _pp\ndf = pd.DataFrame(np.arange(12.0).reshape(4, 3), columns=list('abc'))\nFIXED = dict(figsize=(3, 3))\ndef helper():\n    return plt.subplots(figsize=(3, 3))[0]\ndef seaborn_helper():\n    return sns.pairplot(df, height=2)");
+    settle(&mut s);
+    assert_eq!(kind(&s, "A1"), None);
+    let fixed = [
+        "plt.figure(figsize=(3, 3))\nplt.plot([1])",
+        "plt.subplots(figsize=(3, 3))[0]",
+        "df.plot(figsize=(3, 3))",
+        "sns.pairplot(df, height=2)",
+        "sns.relplot(df, x='a', y='b', aspect=2)",
+        "plt.figure()\nplt.gcf().set_size_inches(3, 3)\nplt.plot([1])",
+        "plt.figure()\nplt.gcf().set_figwidth(3)\nplt.plot([1])",
+        "plt.figure(**FIXED)\nplt.plot([1])",
+        "helper()",
+        "seaborn_helper()",
+    ];
+    let free = ["plt.figure()\nplt.plot([1])", "plt.subplots()[0]", "df.plot()", "df.hist()", "sns.pairplot(df)", "sns.relplot(df, x='a', y='b')", "plt.figure()\nplt.bar([1, 2], height=[3, 4])"];
+    let can_be_redrawn = |s: &Session, cell: &str| {
+        let wb = &s.doc().unwrap().wb;
+        wb.active().unwrap().cell(CellRef::parse(cell).unwrap()).unwrap().py.as_deref().unwrap().image().unwrap().floor.is_some()
+    };
+    for code in fixed {
+        py(&mut s, "B1", code);
+        settle(&mut s);
+        assert_eq!(v(&s, "B1"), Value::text("Image"), "{code}: {:?}", kind(&s, "B1"));
+        assert!(!can_be_redrawn(&s, "B1"), "{code}");
+    }
+    for code in free {
+        py(&mut s, "B1", code);
+        settle(&mut s);
+        assert_eq!(v(&s, "B1"), Value::text("Image"), "{code}: {:?}", kind(&s, "B1"));
+        assert!(can_be_redrawn(&s, "B1"), "{code}");
+    }
+    // Settings that choose a size count, from then on.
+    py(&mut s, "A2", "plt.rcParams['figure.figsize'] = (3, 3)");
+    py(&mut s, "B2", "plt.figure()\nplt.plot([1])");
+    settle(&mut s);
+    assert!(!can_be_redrawn(&s, "B2"));
+    // A figure saved to a buffer by the code hasn't had its size chosen.
+    py(&mut s, "A2", "plt.rcdefaults()");
+    py(&mut s, "B2", "import io\nplt.figure()\nplt.plot([1])\nplt.gcf().savefig(io.BytesIO(), dpi=200)\nplt.gcf()");
+    settle(&mut s);
+    assert!(can_be_redrawn(&s, "B2"));
+}

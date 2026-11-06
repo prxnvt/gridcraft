@@ -80,7 +80,7 @@ impl PythonRun {
 impl DocRun {
     /// Whether a request is out to the worker: a cell's, or the initialization's.
     pub fn requesting(&self) -> bool {
-        self.inflight.is_some() || self.init.flight.is_some()
+        self.inflight.is_some() || self.init.flight.is_some() || self.render.is_some()
     }
 
     /// What a step does before the next cell can go: `None` once the cells can run. Settles what

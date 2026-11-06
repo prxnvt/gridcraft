@@ -92,6 +92,8 @@ pub(super) struct Entry {
     pub diag: Option<Diagnostic>,
     /// The earlier cell whose figure this one changes, which has to run before it runs again.
     pub run_from: Option<(u64, CellRef)>,
+    /// The place the worker knows this cell by, from the last time it ran there.
+    pub placed: Option<[u32; 3]>,
 }
 
 impl Entry {
@@ -113,6 +115,7 @@ impl Entry {
             shown: (py.busy, py.stale),
             diag: None,
             run_from: None,
+            placed: None,
         }
     }
 
@@ -344,6 +347,10 @@ pub(super) struct DocRun {
     pub entries: Vec<Entry>,
     pub client: Option<Client>,
     pub inflight: Option<Inflight>,
+    /// A figure being drawn again, with nothing else running.
+    pub(super) render: Option<super::links::RenderFlight>,
+    /// A figure isn't drawn at the size it is shown at.
+    pub render_waiting: bool,
     /// Every cell before this one has run in the current worker, or never will.
     pub cursor: usize,
     /// How many cells are queued.

@@ -239,6 +239,15 @@ pub struct PyImage {
     pub height: u32,
     /// How many pixels of `picture` stand for one of that size.
     pub density: u32,
+    /// For a figure whose size the code didn't choose: the smallest size at which the worker can draw
+    /// it again. A state of this session, never saved: only the worker that ran the cell has the
+    /// figure.
+    #[serde(skip)]
+    pub floor: Option<[u32; 2]>,
+    /// The figure drawn again to fill its cell, and the size it was drawn at. A state of this session,
+    /// never saved.
+    #[serde(skip)]
+    pub fitted: Option<(Arc<CellPicture>, [u32; 2])>,
 }
 
 fn picture_out<S: serde::Serializer>(picture: &Arc<CellPicture>, s: S) -> Result<S::Ok, S::Error> {
@@ -267,7 +276,7 @@ impl PyCode {
 
     /// The picture to draw inside the cell: its result's, with Excel Value in effect.
     pub fn image_in_cell(&self) -> Option<&Arc<CellPicture>> {
-        self.image().filter(|_| !self.shows_object()).map(|i| &i.picture)
+        self.image().filter(|_| !self.shows_object()).map(|i| i.fitted.as_ref().map_or(&i.picture, |(picture, _)| picture))
     }
 
     /// What the cell shows for its result: cell values (an array spills from the cell), or, for a

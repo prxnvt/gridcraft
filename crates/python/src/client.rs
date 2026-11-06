@@ -161,6 +161,17 @@ impl Client {
         Ok(id)
     }
 
+    /// Draws the figure of the cell at `at` again at this size, without running the cell. With no
+    /// worker there is no figure: `None`, and nothing starts one.
+    pub fn submit_render(&mut self, at: [u32; 3], width: u32, height: u32) -> Option<u64> {
+        if !self.alive() {
+            return None;
+        }
+        let id = self.take_id().ok()?;
+        self.send(Request::Render { id, at, width, height });
+        Some(id)
+    }
+
     /// Clears the globals. With no worker running there is nothing to clear, and the result is
     /// ready at once.
     pub fn submit_reset(&mut self) -> Result<u64, Busy> {

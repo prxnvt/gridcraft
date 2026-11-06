@@ -92,6 +92,13 @@ fn answer(w: &mut FakeWorker, id: u64, code: &str, inputs: &BTreeMap<String, Inp
                 value(Value::Number(1.0))
             }
         }
+        // A figure whose size is up to GridCraft: width, height and the smallest it can be drawn at.
+        "figure" => {
+            let n = |i: usize| words[i].parse::<u32>().unwrap();
+            let mut picture = gridcraft_python::Picture::from_bytes(picture_bytes(n(1), n(2)), 1).unwrap();
+            picture.floor = Some([n(1) / 2, n(2) / 2]);
+            Ok(Output::picture(picture))
+        }
         // It changed a figure an earlier cell made: sheet, row and column.
         "touch" => {
             let n = |i: usize| words[i].parse().unwrap();
@@ -146,6 +153,17 @@ pub(super) fn worker() -> FakeTransport {
         while let Some(req) = w.next_request() {
             let go = match &req {
                 Request::Run { id, code, inputs, .. } => answer(&mut w, *id, code, inputs, &mut vars),
+                // The figure at the size asked for, unless the code says it can't be drawn.
+                Request::Render { id, width, height, .. } => {
+                    if vars.contains_key("die_on_render") {
+                        return;
+                    }
+                    if vars.contains_key("no_render") {
+                        w.done(*id, Err(PyError { message: "ValueError: no".into(), ..PyError::default() }))
+                    } else {
+                        w.done(*id, Ok(Output::picture(gridcraft_python::Picture::from_bytes(picture_bytes(*width, *height), 1).unwrap())))
+                    }
+                }
                 Request::Reset { id } => w.done(*id, Ok(Output::Value(Value::Empty))),
             };
             if !go {
@@ -207,7 +225,7 @@ pub(super) fn runs(h: &FakeHandle) -> Vec<String> {
         .into_iter()
         .filter_map(|r| match r {
             Request::Run { code, .. } => Some(code),
-            Request::Reset { .. } => None,
+            Request::Render { .. } | Request::Reset { .. } => None,
         })
         .collect()
 }

@@ -121,10 +121,133 @@ fn show(d: &mut DocState, linked: &[(usize, u32)], image: &gridcraft_model::PyIm
             if *o.data != *data {
                 o.data = data.clone();
                 o.mime.clone_from(&image.picture.mime);
-                // The width stays, and the height follows the picture's proportions.
-                if image.width > 0 {
+                o.rendered = None;
+                // A figure that can be drawn again keeps the shape it was given. Any other picture keeps
+                // its width, and its height follows its proportions.
+                if image.floor.is_none() && image.width > 0 {
                     o.anchor.height = o.anchor.width * image.height as f32 / image.width as f32;
                 }
+            }
+        }
+        Ok(())
+    });
+    if let Err(e) = done {
+        log::warn!("Python cells: {e}");
+    }
+    d.revision = d.revision.saturating_add(1);
+    true
+}
+
+/// A figure to draw again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DueRender {
+    pub for_what: RenderFor,
+    /// The cell's place in the worker.
+    pub place: [u32; 3],
+    /// The size to draw it at, in the units of [`gridcraft_model::PyImage::width`].
+    pub size: [u32; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RenderFor {
+    /// A linked picture: its sheet and object id.
+    Picture(usize, u32),
+    /// A cell that draws its picture inside it.
+    Cell(usize, CellRef),
+}
+
+pub(super) struct RenderFlight {
+    pub id: u64,
+    pub due: DueRender,
+}
+
+/// How many of a figure's own pixels one unit of an anchor stands for. A plot placed over the cells is
+/// at most 640 wide ([`new_picture`]), and its text keeps the size that gives it, however it is resized.
+fn anchor_scale(image: &gridcraft_model::PyImage) -> f32 {
+    (image.width as f32 / 640.0).max(1.0)
+}
+
+/// The size a figure should be drawn at to show at `shown` (anchor units, times `scale`): never below
+/// its floor, where the picture is scaled instead, and never past what a picture can be.
+fn draw_size(shown: [f32; 2], scale: f32, floor: [u32; 2]) -> [u32; 2] {
+    let side = |n: f32, least: u32| {
+        let wanted = if n.is_finite() { (n * scale).round() } else { 0.0 };
+        (wanted.clamp(1.0, gridcraft_python::protocol::MAX_PICTURE_SIDE as f32) as u32).max(least)
+    };
+    [side(shown[0], floor[0]), side(shown[1], floor[1])]
+}
+
+fn differs(a: [u32; 2], b: [u32; 2]) -> bool {
+    a[0].abs_diff(b[0]) > 2 || a[1].abs_diff(b[1]) > 2
+}
+
+/// The next figure that isn't drawn at the size it is shown at, if any. `cells` are the Python cells
+/// the worker has run, with the place it knows each by: it has no figure of any other.
+pub(super) fn next_render(wb: &Workbook, cells: &[(usize, CellRef, [u32; 3])]) -> Option<DueRender> {
+    let place = |sheet: usize, at: CellRef| cells.iter().find(|(s, c, _)| *s == sheet && *c == at).map(|(_, _, place)| *place);
+    for (sheet, sh) in wb.sheets.iter().enumerate() {
+        for picture in sh.images.iter().filter(|o| o.python_source.is_some()) {
+            let Some((from, at)) = picture.python_source.as_deref().and_then(|r| source_of(wb, r)) else { continue };
+            let Some(image) = wb.sheet(from).and_then(|s| s.cell(at)).and_then(|c| c.py.as_deref()).and_then(|py| py.image()) else { continue };
+            let Some(floor) = image.floor else { continue };
+            let size = draw_size([picture.anchor.width, picture.anchor.height], anchor_scale(image), floor);
+            if differs(size, picture.rendered.unwrap_or([image.width, image.height]))
+                && let Some(place) = place(from, at)
+            {
+                return Some(DueRender { for_what: RenderFor::Picture(sheet, picture.id), place, size });
+            }
+        }
+    }
+    // A cell that draws its picture inside it fills the cell, at or above the floor.
+    for (sheet, at, place) in cells {
+        let Some(sh) = wb.sheet(*sheet) else { continue };
+        let Some(py) = sh.cell(*at).and_then(|c| c.py.as_deref()) else { continue };
+        let Some(image) = py.image().filter(|_| !py.shows_object()) else { continue };
+        let Some(floor) = image.floor else { continue };
+        let area = sh.merge_at(*at).unwrap_or(gridcraft_core::RangeRef::new(*at, *at));
+        // A merged area a file claims can be huge: the sides stop adding up at what a picture can be.
+        let limit = gridcraft_python::protocol::MAX_PICTURE_SIDE as f32;
+        let width = (area.start.col..=area.end.col).try_fold(0.0f32, |sum, c| (sum < limit).then(|| sum + sh.col_width(c))).unwrap_or(limit);
+        let height = (area.start.row..=area.end.row).try_fold(0.0f32, |sum, r| (sum < limit).then(|| sum + sh.row_height(r))).unwrap_or(limit);
+        let room = [width.min(limit).round() as u32, height.min(limit).round() as u32];
+        // Below the floor it stays the natural picture, fitted to the cell, as Excel does.
+        if room[0] < floor[0] || room[1] < floor[1] {
+            continue;
+        }
+        let drawn = image.fitted.as_ref().map_or([image.width, image.height], |(_, size)| *size);
+        if differs(room, drawn) {
+            return Some(DueRender { for_what: RenderFor::Cell(*sheet, *at), place: *place, size: room });
+        }
+    }
+    None
+}
+
+/// A figure was drawn again, or couldn't be. Either way it counts as done at this size, so a failure
+/// isn't tried over and over: the picture stays as it is until the next run of its cell. No undo step:
+/// what shows is derived from the anchor and the result.
+pub(super) fn after_render(d: &mut DocState, due: &DueRender, outcome: gridcraft_python::Outcome) -> bool {
+    let picture = match outcome {
+        gridcraft_python::Outcome::Ok { output: gridcraft_python::Output::Object { picture: Some(p), .. }, .. } => Some(*p),
+        _ => None,
+    };
+    let done = crate::cmd::commit(d, |cx| {
+        match due.for_what {
+            RenderFor::Picture(sheet, id) => {
+                let Some(o) = cx.sheet_mut(sheet)?.images.iter_mut().find(|o| o.id == id) else { return Ok(()) };
+                if let Some(p) = picture {
+                    o.data = Arc::new(p.bytes);
+                    o.mime = p.mime.mime().to_string();
+                }
+                o.rendered = Some(due.size);
+            }
+            RenderFor::Cell(sheet, at) => {
+                let Some(py) = cx.sheet_mut(sheet)?.cells.get_mut(at).and_then(|c| c.py.as_mut()) else { return Ok(()) };
+                let Some(image) = Arc::make_mut(py).output.as_mut().and_then(|o| o.image.as_mut()) else { return Ok(()) };
+                let fitted = match picture {
+                    Some(p) => Arc::new(gridcraft_model::CellPicture { data: p.bytes, mime: p.mime.mime().to_string(), alt: image.picture.alt.clone() }),
+                    None => image.picture.clone(),
+                };
+                image.fitted = Some((fitted, due.size));
             }
         }
         Ok(())
@@ -155,6 +278,7 @@ pub(crate) fn new_picture(wb: &Workbook, sheet: usize, at: CellRef, image: &grid
         mime: image.picture.mime.clone(),
         alt: format!("Python result of {}", at.a1()),
         python_source: Some(reference(name, at)),
+        rendered: None,
     })
 }
 

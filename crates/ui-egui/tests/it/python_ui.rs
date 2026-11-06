@@ -29,7 +29,7 @@ fn worker() -> FakeTransport {
         while let Some(req) = w.next_request() {
             let (id, code) = match req {
                 Request::Run { id, code, .. } => (id, code),
-                Request::Reset { id } => {
+                Request::Render { id, .. } | Request::Reset { id } => {
                     w.done(id, Ok(Output::Value(gridcraft_engine::core::Value::Empty)));
                     continue;
                 }

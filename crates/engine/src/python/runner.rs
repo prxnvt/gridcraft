@@ -167,10 +167,11 @@ fn kept(output: Output, sys: DateSystem, object: bool) -> Write {
             Write::Result(PyOutput { from_run: true, ..output }, dates)
         }
         Output::Object { type_name, preview, picture: Some(p), .. } => {
+            let p = *p;
             let (width, height) = (p.width / p.density.max(1), p.height / p.density.max(1));
             let alt = format!("{type_name} {width} x {height}");
             let picture = Arc::new(CellPicture { data: p.bytes, mime: p.mime.mime().to_string(), alt });
-            let image = PyImage { picture, width: width.max(1), height: height.max(1), density: p.density };
+            let image = PyImage { picture, width: width.max(1), height: height.max(1), density: p.density, floor: p.floor, fitted: None };
             Write::Result(
                 PyOutput {
                     value: Value::text(object_label(&type_name, &[])),
@@ -340,8 +341,38 @@ impl DocRun {
         if self.due == 0 {
             self.passes = 0;
             self.replays = 0;
+            self.send_next_render(d);
         }
         wrote
+    }
+
+    /// Draws one figure again, if a picture of it isn't the size it is shown at. Nothing starts a
+    /// worker for this: with none, or one that hasn't run the cell, the picture stretches until the
+    /// next run.
+    fn send_next_render(&mut self, d: &DocState) {
+        if self.requesting() {
+            return;
+        }
+        let Some(due) = self.render_due(d) else { return };
+        let Some(client) = self.client.as_mut() else { return };
+        if let Some(id) = client.submit_render(due.place, due.size[0], due.size[1]) {
+            self.render = Some(super::links::RenderFlight { id, due });
+        }
+    }
+
+    /// The next figure to draw again, with nothing else due. Only a worker that is there and has run
+    /// the cell has the figure.
+    fn render_due(&self, d: &DocState) -> Option<super::links::DueRender> {
+        if self.due > 0 || !self.client.as_ref().is_some_and(Client::alive) {
+            return None;
+        }
+        let cells: Vec<_> = self.entries.iter().filter(|e| e.in_worker).filter_map(|e| Some((e.sheet, e.at, e.placed?))).collect();
+        super::links::next_render(&d.wb, &cells)
+    }
+
+    /// Notes whether a figure waits to be drawn again, which keeps the interface polling.
+    pub fn note_render_due(&mut self, d: &DocState) {
+        self.render_waiting = self.render_due(d).is_some();
     }
 
     fn back_to_first_queued(&mut self) {
@@ -391,6 +422,9 @@ impl DocRun {
     /// run first, in a fresh worker, and the send is taken back.
     fn submit(&mut self, index: usize, fp: u64, py: &PyCode, inputs: BTreeMap<String, Input>, starter: &Starter, stats: &mut PythonStats) -> Step {
         let place = self.entries.get(index).map(|e| [u32::try_from(e.sheet).unwrap_or(u32::MAX), e.at.row, e.at.col]);
+        if let Some(e) = self.entries.get_mut(index) {
+            e.placed = place;
+        }
         match self.send(starter, stats, |client| client.submit_cell(&py.code, inputs, py.object, place)) {
             Ok(id) => {
                 self.inflight = Some(Inflight { id, index, fp, started: now(), discard: false });
@@ -535,6 +569,13 @@ impl DocRun {
             return self.finish_initialization(d, result, stats);
         }
         let mut out = Finish::default();
+        if let Some(flight) = self.render.take_if(|f| f.id == result.id) {
+            if result.outcome.lost_worker() {
+                self.worker_gone();
+            }
+            out.wrote = super::links::after_render(d, &flight.due, result.outcome);
+            return out;
+        }
         let Some(flight) = self.inflight.take_if(|f| f.id == result.id) else { return out };
         let outcome = result.outcome;
         if matches!(outcome, Outcome::FailedToStart(_)) && !flight.discard && self.start_tries < START_RETRIES {

@@ -56,7 +56,7 @@ fn sent(h: &FakeHandle) -> BTreeMap<String, Input> {
         .rev()
         .find_map(|r| match r {
             Request::Run { inputs, .. } => Some(inputs),
-            Request::Reset { .. } => None,
+            Request::Render { .. } | Request::Reset { .. } => None,
         })
         .expect("a cell ran")
 }

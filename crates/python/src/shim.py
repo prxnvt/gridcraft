@@ -298,13 +298,81 @@ def _gridcraft_worker():
 
             def exec_module(module):
                 run_module(module)
-                try:
-                    use_non_latin_fonts()
-                except Exception:
-                    pass
+                for step in (use_non_latin_fonts, lambda: watch_sizes(module)):
+                    try:
+                        step()
+                    except Exception:
+                        pass
 
             loader.exec_module = exec_module
         return spec
+
+    # Whether the code chose a figure's size. A figure whose size it didn't choose is drawn again when
+    # its picture is resized. These watch the calls rather than read the code, so helper functions,
+    # **kwargs and earlier cells are all seen. seaborn computes sizes of its own, which aren't a
+    # choice: its functions are compared with their defaults instead.
+    SEABORN_SIZES = {
+        "pairplot": {"height": 2.5, "aspect": 1},
+        "PairGrid": {"height": 2.5, "aspect": 1},
+        "FacetGrid": {"height": 3, "aspect": 1},
+        "catplot": {"height": 5, "aspect": 1},
+        "relplot": {"height": 5, "aspect": 1},
+        "displot": {"height": 5, "aspect": 1},
+        "lmplot": {"height": 5, "aspect": 1},
+        "jointplot": {"height": 6},
+        "JointGrid": {"height": 6},
+        "clustermap": {"figsize": (10, 10)},
+    }
+
+    def in_folder(frame, name):
+        return (os.sep + name + os.sep) in frame.f_code.co_filename
+
+    def seaborn_size_chosen(frame):
+        """Whether the outermost seaborn function on the stack was given a size of its own. None when
+        no seaborn function is on the stack."""
+        outer = None
+        while frame is not None:
+            if in_folder(frame, "seaborn"):
+                outer = frame
+            frame = frame.f_back
+        if outer is None:
+            return None
+        name = outer.f_code.co_name
+        if name == "__init__":
+            name = type(outer.f_locals.get("self")).__name__
+        for key, default in SEABORN_SIZES.get(name, {}).items():
+            value = outer.f_locals.get(key, default)
+            if value is not None and value != default:
+                return True
+        return False
+
+    def watch_sizes(module):
+        functools = importlib.import_module("functools")
+        figure = module.Figure
+        init = figure.__init__
+        set_size = figure.set_size_inches
+
+        @functools.wraps(init)
+        def watched_init(self, *args, **kwargs):
+            chosen = seaborn_size_chosen(sys._getframe(1))
+            if chosen is True or (chosen is None and kwargs.get("figsize", args[0] if args else None) is not None):
+                self._gridcraft_fixed = True
+            init(self, *args, **kwargs)
+
+        @functools.wraps(set_size)
+        def watched_set_size(self, w, h=None, forward=True):
+            before = self.get_size_inches()
+            after = (w, h) if h is not None else tuple(w)
+            if not state.get("drawing") and (float(after[0]), float(after[1])) != (float(before[0]), float(before[1])):
+                frame = sys._getframe(1)
+                while frame is not None and in_folder(frame, "matplotlib"):
+                    frame = frame.f_back
+                if frame is not None and not in_folder(frame, "seaborn"):
+                    self._gridcraft_fixed = True
+            return set_size(self, w, h, forward=forward)
+
+        figure.__init__ = watched_init
+        figure.set_size_inches = watched_set_size
 
     sys.meta_path.insert(0, PlotHook)
 
@@ -796,8 +864,97 @@ def _gridcraft_worker():
     def draw_figure(fig, dpi, tight):
         buffer = io.BytesIO()
         options = {"bbox_inches": "tight"} if tight else {}
-        fig.savefig(buffer, format="png", dpi=dpi, metadata={"Software": None}, **options)
+        state["drawing"] = True
+        try:
+            fig.savefig(buffer, format="png", dpi=dpi, metadata={"Software": None}, **options)
+        finally:
+            state["drawing"] = False
         return buffer.getvalue()
+
+    def is_free(fig):
+        """Whether the figure's size is up to GridCraft: the code didn't choose one in any way."""
+        matplotlib = sys.modules["matplotlib"]
+        default = list(matplotlib.rcParamsDefault["figure.figsize"])
+        return not getattr(fig, "_gridcraft_fixed", False) and list(matplotlib.rcParams["figure.figsize"]) == default
+
+    def own_layout(fig):
+        # A layout engine of the figure's own, which lays it out at any size. tight_layout() leaves a
+        # placeholder that does nothing.
+        engine = fig.get_layout_engine()
+        return engine is not None and type(engine).__name__ != "PlaceHolderLayoutEngine"
+
+    def spans(rects, axis, size):
+        """Along one axis, in inches: where the plot areas are, and how much lies outside them. What
+        lies between plot areas holds labels, which keep their room whatever the size."""
+        ranges = [(getattr(r, axis + "0") * size, getattr(r, axis + "1") * size) for r in rects]
+        edges = sorted({0.0, float(size)} | {e for pair in ranges for e in pair})
+        pieces = [(a, b, any(lo <= (a + b) / 2 <= hi for lo, hi in ranges)) for a, b in zip(edges, edges[1:])]
+        return edges, pieces, sum(b - a for a, b, covered in pieces if not covered)
+
+    def stretched(rects, axis, old, new):
+        """Maps positions along one axis to the new size: plot areas stretch, and the gaps don't. None
+        when the gaps alone don't fit."""
+        edges, pieces, fixed = spans(rects, axis, old)
+        areas = old - fixed
+        if areas <= 0 or new <= fixed:
+            return None
+        scale = (new - fixed) / areas
+        placed = [0.0]
+        for a, b, covered in pieces:
+            placed.append(placed[-1] + (b - a) * (scale if covered else 1.0))
+        return lambda x: float(sys.modules["numpy"].interp(x, edges, placed))
+
+    def free_axes(fig):
+        return [a for a in fig.axes if a.get_axes_locator() is None]
+
+    def figure_floor(fig):
+        """The smallest size, in the pixels of `size`, at which the figure is drawn again: half its
+        natural size, and enough for what lies outside its plot areas. Below it, a text would run past
+        the edge, so the picture is scaled instead. None for a figure that isn't free."""
+        if not is_free(fig):
+            return None
+        dpi = float(fig.get_dpi())
+        width, height = (float(x) for x in fig.get_size_inches())
+        rects = [a.get_position(original=True) for a in free_axes(fig)] if not own_layout(fig) else []
+        gap_x = spans(rects, "x", width)[2] if rects else 0.0
+        gap_y = spans(rects, "y", height)[2] if rects else 0.0
+        return [max(1, math.ceil(max(width / 2, gap_x + 0.4) * dpi)), max(1, math.ceil(max(height / 2, gap_y + 0.4) * dpi))]
+
+    def reflow(fig, width, height):
+        """The figure drawn at exactly `width` x `height`, in the pixels of `size`, and how many pixels
+        stand for one of those. Text keeps its size and the plot areas take the new shape. The figure
+        is left as it was, for the cells after this one."""
+        dpi = float(fig.get_dpi())
+        old_w, old_h = (float(x) for x in fig.get_size_inches())
+        new_w, new_h = width / dpi, height / dpi
+        axes = free_axes(fig)
+        saved = [(a, a.get_position(original=True).frozen(), a.get_position().frozen(), a.get_in_layout()) for a in fig.axes]
+        state["drawing"] = True
+        try:
+            if not own_layout(fig):
+                rects = [a.get_position(original=True) for a in axes]
+                map_x, map_y = stretched(rects, "x", old_w, new_w), stretched(rects, "y", old_h, new_h)
+                if rects and (map_x is None or map_y is None):
+                    raise PictureTooLarge("This picture can't be drawn so small.")
+                for a, r in zip(axes, rects):
+                    x0, x1 = map_x(r.x0 * old_w), map_x(r.x1 * old_w)
+                    y0, y1 = map_y(r.y0 * old_h), map_y(r.y1 * old_h)
+                    a.set_position([x0 / new_w, y0 / new_h, (x1 - x0) / new_w, (y1 - y0) / new_h])
+            fig.set_size_inches(new_w, new_h, forward=False)
+            density = 1 if too_large(width * DENSITY, height * DENSITY) else DENSITY
+            data = draw_figure(fig, dpi * density, False)
+            if len(data) > MAX_PICTURE_BYTES and density > 1:
+                density = 1
+                data = draw_figure(fig, dpi, False)
+            return data, density
+        finally:
+            fig.set_size_inches(old_w, old_h, forward=False)
+            for a, original, active, in_layout in saved:
+                a.set_position(original, which="original")
+                a.set_position(active, which="active")
+                a.set_in_layout(in_layout)
+            state["drawing"] = False
+            fig.stale = False
 
     def picture_of_figure(fig):
         """The figure's bytes, drawn as a picture, and how many pixels stand for one of its own."""
@@ -858,7 +1015,7 @@ def _gridcraft_worker():
                 i += 2 + max(2, int.from_bytes(data[i + 2:i + 4], "big"))
         return None
 
-    def picture_on_wire(data, density):
+    def picture_on_wire(data, density, floor=None):
         found = picture_format(data)
         if found is None:
             return None
@@ -870,6 +1027,8 @@ def _gridcraft_worker():
         image = {"mime": mime, "base64": base64.b64encode(data).decode("ascii")}
         if density != 1:
             image["density"] = density
+        if floor is not None:
+            image["floor"] = floor
         size = [max(1, width // density), max(1, height // density)]
         return {"object": {"typeName": "Image", "preview": "Image", "size": size, "image": image}}
 
@@ -887,7 +1046,24 @@ def _gridcraft_worker():
             return None
         if at is not None:
             kept[at] = fig
-        return picture_on_wire(*picture_of_figure(fig))
+        data, density = picture_of_figure(fig)
+        return picture_on_wire(data, density, unless_it_fails(figure_floor, fig))
+
+    def render(req):
+        # A cell's figure at a new size, without running the cell.
+        rid = req.get("id")
+        at = position(req)
+        width, height = req.get("width"), req.get("height")
+        fig = kept.get(at)
+        try:
+            if fig is None or not isinstance(width, int) or not isinstance(height, int):
+                raise ValueError("No figure to draw")
+            if too_large(width, height):
+                raise PictureTooLarge(too_large_message(width, height))
+            data, density = reflow(fig, width, height)
+            return {"type": "done", "id": rid, "ok": True, "value": picture_on_wire(data, density, figure_floor(fig))}
+        except BaseException as e:  # noqa: BLE001 - the picture stays as it is
+            return done_error(rid, error_message(e), None)
 
     # Which cell made each figure, and the figure each cell gave. A cell runs again from a clean
     # start: the figures it or a later cell made are closed, or lines would pile up on every run.
@@ -1250,6 +1426,8 @@ def _gridcraft_worker():
         kind = req.get("type") if isinstance(req, dict) else None
         if kind == "run":
             send(with_peak(run(req)))
+        elif kind == "render":
+            send(with_peak(render(req)))
         elif kind == "reset":
             fresh()
             try:

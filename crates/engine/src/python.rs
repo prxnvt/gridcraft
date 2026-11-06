@@ -338,7 +338,7 @@ impl Session {
     /// Whether Python is working or about to: a request runs, cells wait for one, or the check of
     /// Python hasn't answered. The interface keeps polling while it is true.
     pub fn python_busy(&self) -> bool {
-        self.python.env.checking() || self.python.docs.values().any(|r| r.requesting() || r.due > 0)
+        self.python.env.checking() || self.python.docs.values().any(|r| r.requesting() || r.due > 0 || r.render_waiting)
     }
 
     /// What is wrong, or worth saying, about a Python cell of the active workbook. `None` for a
@@ -581,6 +581,7 @@ impl Session {
                 r.stay_off(d)
             };
             r.check_packages(&d.wb, env.generation, &env.report.packages, stats);
+            r.note_render_due(d);
         }
         changed
     }
