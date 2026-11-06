@@ -36,6 +36,7 @@ use gridcraft_model::Workbook;
 use serde::Serialize;
 use serde_json::Value as Json;
 
+pub use cmd::object_clipboard::OTHER_WORKBOOK;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_test_command};
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
@@ -229,6 +230,8 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// The link of the picture copied from this workbook.
+    pub(crate) held_link: Option<cmd::object_clipboard::HeldLink>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -335,6 +338,7 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            held_link: None,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -475,6 +479,8 @@ pub struct Session {
     /// Window activation counter (most recently used order).
     activation: u64,
     pub clipboard: Option<Clipboard>,
+    /// The floating object last copied or cut, which only its own workbook can paste.
+    pub object_clipboard: Option<cmd::object_clipboard::ObjectClipboard>,
     pub prefs: Prefs,
     pub mode: Mode,
     /// Commands run so far, without their passwords ([`cmd::journal_params`]).
@@ -543,6 +549,14 @@ pub struct Session {
 impl Session {
     pub fn new() -> Session {
         Session::default()
+    }
+    /// Drops the floating object on the object clipboard: a copy of cells replaces it, and so does
+    /// anything newer on the system clipboard.
+    pub fn forget_object_clipboard(&mut self) {
+        self.object_clipboard = None;
+        for d in &mut self.docs {
+            d.held_link = None;
+        }
     }
     pub fn documents(&self) -> &[DocState] {
         &self.docs

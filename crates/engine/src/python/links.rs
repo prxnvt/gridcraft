@@ -118,14 +118,7 @@ fn show(d: &mut DocState, linked: &[(usize, u32)], image: &gridcraft_model::PyIm
     let done = crate::cmd::commit(d, |cx| {
         for (sheet, id) in linked {
             let Some(o) = cx.sheet_mut(*sheet)?.images.iter_mut().find(|o| o.id == *id) else { continue };
-            if *o.data != *data {
-                o.data = data.clone();
-                o.mime.clone_from(&image.picture.mime);
-                // The width stays, and the height follows the picture's proportions.
-                if image.width > 0 {
-                    o.anchor.height = o.anchor.width * image.height as f32 / image.width as f32;
-                }
-            }
+            take_image(o, image, &data);
         }
         Ok(())
     });
@@ -134,6 +127,43 @@ fn show(d: &mut DocState, linked: &[(usize, u32)], image: &gridcraft_model::PyIm
     }
     d.revision = d.revision.saturating_add(1);
     true
+}
+
+fn take_image(o: &mut Image, image: &gridcraft_model::PyImage, data: &Arc<Vec<u8>>) {
+    if *o.data != **data {
+        o.data = data.clone();
+        o.mime.clone_from(&image.picture.mime);
+        // The width stays, and the height follows the picture's proportions.
+        if image.width > 0 {
+            o.anchor.height = o.anchor.width * image.height as f32 / image.width as f32;
+        }
+    }
+}
+
+/// The code of the Python cell a reference names.
+pub(crate) fn code_at(wb: &Workbook, reference: &str) -> Option<String> {
+    let (sheet, at) = source_of(wb, reference)?;
+    Some(wb.sheet(sheet)?.cell(at)?.py.as_deref()?.code.clone())
+}
+
+/// A picture from the object clipboard as it arrives in `wb`, where `reference` says its cell is now.
+/// While the cell can give it a picture it stays linked and shows what the cell shows now, which may
+/// have changed since the copy; a run under way or one that failed leaves it as it is, as for a
+/// picture on a sheet. With no such cell left there is nothing to link to, and the picture that was
+/// asked for arrives without a link, as one from a file does: the pictures linked to a cell go when
+/// it does, and this one wasn't there to go.
+pub(crate) fn as_pasted(wb: &Workbook, picture: &mut Image, reference: Option<&str>) {
+    let source = reference.and_then(|r| source_of(wb, r)).and_then(|(sheet, at)| wb.sheet(sheet)?.cell(at)?.py.clone());
+    let (Some(py), Some(reference)) = (source, reference) else {
+        picture.python_source = None;
+        return;
+    };
+    picture.python_source = Some(reference.to_string());
+    if let Some(image) = py.image() {
+        take_image(picture, image, &Arc::new(image.picture.data.clone()));
+    } else if py.output.is_some() && py.failed.is_none() {
+        picture.python_source = None;
+    }
 }
 
 /// A new picture over the cells, showing `at`'s image and linked to it.
