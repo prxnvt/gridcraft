@@ -12,6 +12,7 @@
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
+//! gridcraft-cli python-check [--python PATH] [--code CODE]...
 //! gridcraft-cli version | --version
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -31,6 +32,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod python_check;
 mod sandbox_check;
 
 use gridcraft_engine::Session;
@@ -53,6 +55,8 @@ const USAGE: &str = "usage:
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
                      whether this system confines programs (no program: a confined self-test)
+  gridcraft-cli python-check [--python PATH] [--code CODE]...
+                     which Python cells would use here, what it can do, and each CODE run confined
   gridcraft-cli version";
 
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
@@ -89,6 +93,7 @@ fn main() -> ExitCode {
         Some("run") => run(rest),
         Some("check") => return check::main(rest),
         Some("sandbox-check") => return sandbox_check::main(rest),
+        Some("python-check") => return python_check::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
         Some("mcp") => mcp(rest),
