@@ -35,6 +35,9 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Cells of the worksheet being read whose formulas lack dynamic-array metadata (legacy
+    /// formulas, evaluated with implicit intersection), collected per sheet.
+    pub legacy_formulas: Vec<gridcraft_core::CellRef>,
     /// Bytes charged so far for shared formulas expanded into dependent cells (see
     /// [`crate::sheet_read::MAX_SHARED_FORMULA_BYTES`]).
     pub shared_formula_bytes: u64,
@@ -43,6 +46,8 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// Pictures saved for a Python cell that became floating pictures, as no such cell took them.
+    pub python_pictures_without_cell: usize,
 }
 
 impl Ctx<'_> {
@@ -241,7 +246,9 @@ fn selected_workbook_view(workbook: &El) -> Option<&El> {
     views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
 }
 
-pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) -> bool>) -> Result<(Workbook, ReadReport), IoError> {
+pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(Workbook, ReadReport), IoError> {
+    let functions = opts.functions;
+    let known_function = opts.known_function;
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
         pkg,
@@ -258,9 +265,11 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        legacy_formulas: vec![],
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        python_pictures_without_cell: 0,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -278,6 +287,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     cx.python = crate::python_part::read(&mut cx, &wb_rels)?;
     let mut wb = Workbook::new();
     wb.sheets.clear();
+    wb.python_env = cx.python.environment.take().map(Arc::new);
 
     read_workbook_styles(&mut cx, &mut wb, &wb_rels)?;
     read_shared_strings(&mut cx, &wb_rels)?;
@@ -309,6 +319,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
 
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];
+    // Legacy formula cells per model sheet, rewritten once names and tables are known.
+    let mut legacy_formulas: Vec<(usize, Vec<gridcraft_core::CellRef>)> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
     let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
     let mut names = SheetNames::default();
@@ -331,14 +343,17 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             continue;
         }
         let name = names.unique(&name, i);
+        cx.legacy_formulas.clear();
         let (mut sheet, read_controls) = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
             Ok(s) => s,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => {
                 cx.warn(format!("sheet \"{name}\" could not be read: {e}"));
+                cx.legacy_formulas.clear();
                 (Sheet::new(name.clone()), Default::default())
             }
         };
+        legacy_formulas.push((wb.sheets.len(), std::mem::take(&mut cx.legacy_formulas)));
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
             Ok(p) => sheet.pivots = p,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
@@ -359,6 +374,18 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
+    if cx.python_pictures_without_cell > 0 {
+        cx.warn(format!(
+            "{} picture(s) saved for a Python cell don't go with what that cell holds in this file; they are shown as floating pictures",
+            cx.python_pictures_without_cell
+        ));
+    }
+    let unlinked = crate::python_pictures::settle_links(&mut wb);
+    if unlinked > 0 {
+        cx.warn(format!(
+            "{unlinked} picture(s) were linked to a cell that isn't a Python cell in this file, or whose code is too long to run; they kept their images and lost the link"
+        ));
+    }
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];
@@ -458,6 +485,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     }
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
+    // Legacy formulas read as dynamic-array formulas with Excel's implicit `@`.
+    crate::array_formula::apply_legacy(&mut wb, legacy_formulas, functions);
     wb.styles = cx.styles;
     wb.phonetics = cx.phonetics;
     Ok((wb, cx.report))

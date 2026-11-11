@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, PageOrder,
-    Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, Formula, LineInfo, NoteBox, NoteCorner, Orientation,
+    PageOrder, Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -329,8 +329,9 @@ fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::pas
 }
 
 fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, rels: &mut Rels, out: &mut Out) {
-    // Drawing: pictures, charts, shapes.
-    if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
+    let python_images = std::mem::take(&mut out.python_images);
+    // Drawing: pictures, charts, shapes, and the pictures of the Python cells written above.
+    if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() || !python_images.is_empty() {
         out.drawings += 1;
         let dn = out.drawings;
         let mut drels = Rels::default();
@@ -368,6 +369,16 @@ fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, 
         }
         for sh in &sheet.shapes {
             objs.push(Obj::Shape(sh));
+        }
+        for python in &python_images {
+            if python.image.picture.data.is_empty() {
+                continue;
+            }
+            let ext = image_ext(&python.image.picture.mime, &python.image.picture.data);
+            out.default_type(ext, image_content_type(ext));
+            let file = out.image_part(ext, &python.image.picture.data);
+            let rid = drels.add("image", &format!("../media/{file}"));
+            objs.push(Obj::PythonCell(python, rid));
         }
         out.part(&format!("xl/drawings/drawing{dn}.xml"), Some(CT_DRAWING), crate::drawing::write_drawing(sheet, &wb.theme, &objs).into_bytes());
         if !drels.is_empty() {
@@ -643,13 +654,28 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
             continue;
         }
         s.push('>');
-        for &(cell_ref, cell) in cells {
+        for &(cell_ref, mut cell) in cells {
             let ov = overrides.get(&cell_ref);
             let ex = extra.get(&cell_ref);
+            let mut legacy_cell = None;
             let array = dynamic.get(&cell_ref).copied().or_else(|| {
-                let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(workbook, index, cell_ref, f)).then_some(RangeRef::cell(cell_ref))
+                let f = cell?.formula.as_ref().filter(|f| f.array.is_none())?;
+                if f.dynamic {
+                    return Some(RangeRef::cell(cell_ref));
+                }
+                match crate::array_formula::export(workbook, index, cell_ref, f, out.functions, &mut out.names) {
+                    crate::array_formula::Export::Unchanged => None,
+                    crate::array_formula::Export::Dynamic => Some(RangeRef::cell(cell_ref)),
+                    // Every `@` is one Excel implies in a legacy formula: write it without them.
+                    crate::array_formula::Export::Legacy(e) => {
+                        legacy_cell = cell.map(|x| Cell { formula: Some(std::sync::Arc::new(Formula::from_expr(e))), ..x.clone() });
+                        None
+                    }
+                }
             });
+            if legacy_cell.is_some() {
+                cell = legacy_cell.as_ref();
+            }
             write_cell(
                 s,
                 CellWriteInput {
@@ -753,18 +779,31 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     // A Python cell is saved as [MS-XLSX] 2.3.10 specifies, `_xlfn._xlws.PY(index,0|1)` with its
     // code as script `index` of the Python part, and with its cached value; an application without
     // Python shows the value (and #NAME? if it recalculates).
-    let py_text = if ov.is_some() || formula.is_some() {
-        None
-    } else {
-        cell.and_then(|x| x.py.as_ref()).map(|p| {
-            out.python_scripts.push(p.code.clone());
-            crate::python_part::file_formula(out.python_scripts.len().saturating_sub(1), p.object)
-        })
-    };
+    let py = if ov.is_some() || formula.is_some() { None } else { cell.and_then(|x| x.py.as_deref()) };
+    let py_text = py.map(|p| {
+        out.python_scripts.push(p.code.clone());
+        crate::python_part::file_formula(out.python_scripts.len().saturating_sub(1), p.shows_object())
+    });
+    // A picture a Python cell gave goes in the drawing part, for either return type. With Excel Value
+    // the cell also holds the rich value plain cell pictures have, and without room for one it holds
+    // what a Python Object does.
+    let image = py.and_then(gridcraft_model::PyCode::image).filter(|image| out.take_python_image_room(image.picture.data.len()));
+    // The rich value holds the picture itself, not a copy fitted to the cell: a reader takes the
+    // companion, with the density only it holds, by its having the same bytes.
+    let in_cell = image.filter(|_| py.is_some_and(|p| !p.shows_object())).map(|i| &i.picture);
+    let rich_value = in_cell.and_then(|p| out.cell_pictures.python_index(p));
+    if let Some(image) = image {
+        // An Excel Value with no room for a rich value: its text stands in for the picture, and the
+        // companion says so, since that text could also be a result of its own.
+        out.python_images.push(crate::write::PythonImage { at: c, image: image.clone(), stands_in: in_cell.is_some() && rich_value.is_none() });
+    }
     let value: Value = match (ov, extra) {
         (Some(t), _) => Value::text(t.as_str()),
         (None, Some(v)) => v.clone(),
-        _ => cell.map(|x| x.value.scalar()).unwrap_or(Value::Empty),
+        // A Python cell waiting for its new result still has the last one: the file keeps that.
+        _ => {
+            cell.map(|x| x.py.as_ref().filter(|p| p.busy).and_then(|p| p.result_value()).unwrap_or_else(|| x.value.scalar())).unwrap_or(Value::Empty)
+        }
     };
     let value = match value {
         Value::Array(a) => a.get(0, 0).cloned().unwrap_or(Value::Empty),
@@ -774,11 +813,19 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
         // caches them); Excel itself caches them as #VALUE!. The Python errors are the same kind.
-        Value::Error(CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked) => {
-            Value::Error(CellError::Value)
-        }
+        Value::Error(
+            CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked | CellError::Connect,
+        ) => Value::Error(CellError::Value),
         v => v,
     };
+    let value = match (rich_value, image) {
+        (Some(_), _) => Value::Error(CellError::Value),
+        (None, Some(_)) => Value::text(crate::python_pictures::IMAGE),
+        _ => value,
+    };
+    if let Some(vm) = rich_value {
+        let _ = write!(s, " vm=\"{vm}\"");
+    }
     // A formula read with dynamic-array metadata keeps it, even where the shape analysis would
     // not need it: Excel decided the formula is evaluated as an array.
     let own = formula.filter(|f| f.dynamic && f.array.is_none()).map(|_| RangeRef::cell(c));

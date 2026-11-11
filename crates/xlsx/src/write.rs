@@ -9,7 +9,7 @@ use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
-use crate::{IoError, XlsxKind};
+use crate::{FunctionInfo, IoError, XlsxKind};
 
 pub const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 pub const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -132,8 +132,27 @@ pub struct Out {
     pub cell_pictures: crate::richdata::PicturesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
+    /// Decides which formulas need dynamic-array metadata.
+    pub functions: FunctionInfo,
+    /// Defined names analysed for implicit intersection, shared by every formula written.
+    pub(crate) names: crate::array_formula::NameCache,
     /// The code of the Python cells written so far, in order: script `i` of the Python part.
     pub python_scripts: Vec<String>,
+    /// The pictures of the Python cells of the sheet being written, which its drawing part holds.
+    pub python_images: Vec<PythonImage>,
+    /// Bytes of pictures Python cells may still save.
+    python_image_room: usize,
+    /// `xl/media` parts by a hash of their extension and bytes, as places in `parts`. A workbook can
+    /// hold a picture for every Python cell, and each is looked for here.
+    media: HashMap<u64, Vec<usize>>,
+}
+
+fn media_key(ext: &str, data: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    ext.hash(&mut hasher);
+    data.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl Out {
@@ -146,16 +165,40 @@ impl Out {
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
     /// or twice on one, is written once and every drawing points to that part, as in Excel.
     pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
-        let existing = self.parts.iter().find(|(name, bytes)| {
-            name.strip_prefix("xl/media/image").is_some_and(|rest| rest.ends_with(&format!(".{ext}"))) && bytes.as_slice() == data
-        });
-        if let Some((name, _)) = existing {
-            return name.trim_start_matches("xl/media/").to_string();
+        if let Some(file) = self.find_image(ext, data) {
+            return file;
         }
         self.images += 1;
         let file = format!("image{}.{ext}", self.images);
+        self.media.entry(media_key(ext, data)).or_default().push(self.parts.len());
         self.part(&format!("xl/media/{file}"), None, data.to_vec());
         file
+    }
+    /// The `xl/media` file name of the part [`Out::image_part`] wrote with these bytes, if any.
+    pub fn find_image(&self, ext: &str, data: &[u8]) -> Option<String> {
+        let places = self.media.get(&media_key(ext, data))?;
+        let (name, _) = places.iter().filter_map(|i| self.parts.get(*i)).find(|(_, bytes)| bytes.as_slice() == data)?;
+        name.strip_prefix("xl/media/").map(str::to_string)
+    }
+    /// Takes the room for a picture of this many bytes, if there is any.
+    pub fn take_python_image_room(&mut self, bytes: usize) -> bool {
+        match self.python_image_room.checked_sub(bytes) {
+            Some(left) => {
+                self.python_image_room = left;
+                true
+            }
+            None => false,
+        }
+    }
+    /// The bytes of a part written so far.
+    pub fn part_data(&self, name: &str) -> Option<&[u8]> {
+        self.parts.iter().find(|(n, _)| n == name).map(|(_, data)| data.as_slice())
+    }
+    /// New bytes for a part written so far, which keeps its name and content type.
+    pub fn replace_part(&mut self, name: &str, data: Vec<u8>) {
+        if let Some((_, old)) = self.parts.iter_mut().find(|(n, _)| n == name) {
+            *old = data;
+        }
     }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
         self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
@@ -166,6 +209,27 @@ impl Out {
 /// file only needs ids that are unique within it).
 pub fn person_guid(i: usize) -> String {
     format!("{{00000000-0000-4000-8002-{:012X}}}", i as u64 & 0xFFFF_FFFF_FFFF)
+}
+
+/// Most bytes of pictures the Python cells of a file save, counting each cell's, even where they share
+/// a part. Reading charges each to [`crate::package::MAX_TOTAL`], and a file past that doesn't open.
+/// This leaves room for everything else a file holds, and a cell past it has its code and can run again.
+pub(crate) const MAX_PYTHON_IMAGE_BYTES: usize = 512 * 1024 * 1024;
+
+/// The room for Python cells' pictures in the file of `wb`. Floating pictures are charged the same way
+/// when it opens, each one, though many can share a part as the linked copies of a plot do. They come
+/// first: they have nowhere else to be, while a Python cell past the room can run again.
+pub(crate) fn python_image_room(wb: &Workbook) -> usize {
+    let floating = wb.sheets.iter().flat_map(|sh| &sh.images).fold(0usize, |n, image| n.saturating_add(image.data.len()));
+    MAX_PYTHON_IMAGE_BYTES.saturating_sub(floating)
+}
+
+/// A picture a Python cell gave, for the sheet's drawing.
+pub struct PythonImage {
+    pub at: gridcraft_core::CellRef,
+    pub image: gridcraft_model::PyImage,
+    /// The cell has an Excel Value but no rich value, so its text stands in for the picture.
+    pub stands_in: bool,
 }
 
 /// `$A$1:$D$20` (or `$1:$3` / `$A:$C`).
@@ -210,8 +274,8 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
 /// Workbook name written in a PivotChart's link when the file name isn't known.
 const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
 
-pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
-    write_xlsx_named(wb, kind, None)
+pub fn write_xlsx(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named_with(wb, kind, None, functions)
 }
 
 /// The `<workbookView>` attributes beyond `activeTab`: the window's display settings
@@ -238,7 +302,7 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
 
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
-pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -268,9 +332,15 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         needs_calc: false,
         cell_pictures: Default::default(),
         kept: Default::default(),
+        functions,
+        names: Default::default(),
         python_scripts: vec![],
+        python_images: vec![],
+        python_image_room: python_image_room(wb),
+        media: HashMap::new(),
     };
     out.kept.reserve_vml_blocks(wb);
+    out.cell_pictures.keep_room_for_plain_pictures(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
     out.default_type("xml", "application/xml");
 
@@ -355,9 +425,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
-    if !out.python_scripts.is_empty() {
+    if crate::python_part::needs_part(&out.python_scripts, wb.python_env.as_deref()) {
         use crate::python_part as py;
-        let part = py::write(&out.python_scripts);
+        let part = py::write(&out.python_scripts, wb.python_env.as_deref());
         out.part(py::PART, Some(py::CONTENT_TYPE), part.into_bytes());
         wb_rels.add_uri(py::REL, "python.xml");
     }
@@ -442,6 +512,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     root.add("officeDocument", "xl/workbook.xml");
     root.add("core-properties", "docProps/core.xml");
     root.add("extended-properties", "docProps/app.xml");
+    crate::custom_props::write_notices(&mut out);
     crate::passthrough::write_package_rels(&mut root, &mut out);
     out.part("_rels/.rels", None, root.xml().into_bytes());
 
@@ -578,3 +649,7 @@ fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, c
 
 /// Cell metadata declaring dynamic-array formulas (MS-XLSX `XLDAPR`).
 const METADATA: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<metadata xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\"><metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
+/// Writes a workbook with a caller-supplied file name and the default function facts.
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named_with(wb, kind, book_name, FunctionInfo::default())
+}

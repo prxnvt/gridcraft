@@ -230,6 +230,30 @@ pub enum CfRule {
     },
 }
 
+impl CfRule {
+    /// The differential style a matching rule applies; colour scales, data bars and icon sets have none.
+    pub fn style(&self) -> Option<&Style> {
+        match self {
+            CfRule::CellIs { style, .. }
+            | CfRule::Expression { style, .. }
+            | CfRule::ContainsText { style, .. }
+            | CfRule::NotContainsText { style, .. }
+            | CfRule::BeginsWith { style, .. }
+            | CfRule::EndsWith { style, .. }
+            | CfRule::Blanks { style }
+            | CfRule::NoBlanks { style }
+            | CfRule::Errors { style }
+            | CfRule::NoErrors { style }
+            | CfRule::Duplicate { style }
+            | CfRule::Unique { style }
+            | CfRule::Top10 { style, .. }
+            | CfRule::AboveAverage { style, .. }
+            | CfRule::TimePeriod { style, .. } => Some(style),
+            CfRule::ColorScale { .. } | CfRule::DataBar { .. } | CfRule::IconSet { .. } => None,
+        }
+    }
+}
+
 /// Number of icons in an icon set (`3Arrows` → 3, `5Quarters` → 5), always 3 to 5.
 pub fn icon_count(set: &str) -> usize {
     set.chars().next().and_then(|c| c.to_digit(10)).unwrap_or(3).clamp(3, 5) as usize
@@ -627,6 +651,14 @@ pub struct Image {
     pub data: std::sync::Arc<Vec<u8>>,
     pub mime: String,
     pub alt: String,
+    /// The Python cell it shows the picture of, as a sheet-qualified reference (`Sheet1!$G$5`): it
+    /// changes when that cell's result does, and goes when the cell can no longer give one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_source: Option<String>,
+    /// The size a linked picture's figure was last drawn at, when that isn't its natural size. A state
+    /// of this session, never saved: only the worker that ran the cell has the figure.
+    #[serde(skip)]
+    pub rendered: Option<[u32; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
